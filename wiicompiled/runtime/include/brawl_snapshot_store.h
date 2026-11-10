@@ -11,7 +11,7 @@
 
 namespace BrawlRollback {
 // Port of Brawl Online's RollbackManager / DeltaSaveSlot RAM snapshot path:
-// raw 64-byte granules, retained slot buffers, shadow comparison, asynchronous
+// raw 64-byte granules, retained slot buffers, asynchronous
 // eviction into a base image, and backward source lookup on restore. Guest RAM
 // is supplied by the recomp's selected-region reader/writer instead of Dolphin.
 class SnapshotStore {
@@ -19,15 +19,19 @@ public:
     static constexpr size_t BlockSize=64, Capacity=16;
 private:
     struct Delta {
-        std::vector<uint32_t> indices;
-        std::vector<uint8_t> bytes;
-        size_t count=0;
+        std::unique_ptr<uint32_t[]> indices;
+        std::unique_ptr<uint8_t[]> bytes;
+        size_t count=0,capacity=0;
         int frame=0;
         void Reserve(size_t blocks) {
-            if(indices.size()<blocks)indices.resize(blocks);
-            if(bytes.size()<blocks*BlockSize)bytes.resize(blocks*BlockSize);
+            if(capacity>=blocks)return;
+            // Like Dolphin's slot buffers, grow only when needed and overwrite
+            // the new storage directly; old deltas in this slot are discarded.
+            auto newIndices=std::make_unique_for_overwrite<uint32_t[]>(blocks);
+            auto newBytes=std::make_unique_for_overwrite<uint8_t[]>(blocks*BlockSize);
+            indices=std::move(newIndices);bytes=std::move(newBytes);capacity=blocks;
         }
-        size_t ResidentBytes() const {return indices.capacity()*sizeof(uint32_t)+bytes.capacity();}
+        size_t ResidentBytes() const {return capacity*(sizeof(uint32_t)+BlockSize);}
     };
     struct Source {size_t slot,index;};
     struct Core {
@@ -35,7 +39,7 @@ private:
         std::array<Delta,Capacity> slots;
         Delta evicted;
         job::Job* eviction=nullptr;
-        std::vector<uint8_t> base,shadow,scratch,needsSource;
+        std::vector<uint8_t> base,scratch,needsSource;
         std::vector<uint32_t> dirtyKeys,flagged,restoreKeys;
         std::vector<Source> restoreSources;
         size_t next=0,count=0;
@@ -48,11 +52,11 @@ private:
         static void Apply(std::vector<uint8_t>& image,const Delta& delta) {
             for(size_t i=0;i<delta.count;++i) {
                 const size_t offset=size_t(delta.indices[i])*BlockSize;
-                std::memcpy(image.data()+offset,delta.bytes.data()+i*BlockSize,std::min(BlockSize,image.size()-offset));
+                std::memcpy(image.data()+offset,delta.bytes.get()+i*BlockSize,std::min(BlockSize,image.size()-offset));
             }
         }
         size_t ResidentBytes() const {
-            size_t bytes=jobs.ResidentBytes()+base.capacity()+shadow.capacity()+scratch.capacity()+needsSource.capacity();
+            size_t bytes=jobs.ResidentBytes()+base.capacity()+scratch.capacity()+needsSource.capacity();
             bytes+=(dirtyKeys.capacity()+flagged.capacity()+restoreKeys.capacity())*sizeof(uint32_t);
             bytes+=restoreSources.capacity()*sizeof(Source)+evicted.ResidentBytes();
             for(const auto& slot:slots)bytes+=slot.ResidentBytes();
@@ -92,7 +96,6 @@ public:
     }
     const std::vector<uint8_t>& View(int frame) {
         if(!core)throw std::runtime_error("rollback: no snapshot");
-        if(core->slots[(core->next+Capacity-1)%Capacity].frame==frame)return core->shadow;
         core->scratch=Materialize(frame);return core->scratch;
     }
     template<class Reader> void Save(int frame,size_t size,Reader read,
@@ -100,7 +103,7 @@ public:
         lastReadBytes=0;lastIndexNs=lastJobsNs=lastWorkerNs=lastFinishNs=lastEvictWaitNs=0;
         if(!core) {
             core=std::make_unique<Core>();auto& c=*core;
-            c.base.resize(size);read(0,c.base.data(),size);c.shadow=c.base;
+            c.base.resize(size);read(0,c.base.data(),size);
             c.needsSource.resize((size+BlockSize-1)/BlockSize);
             c.slots[0].frame=frame;c.count=1;c.next=1;
             lastReadBytes=lastPayload=size;Measure();return;
@@ -120,51 +123,39 @@ public:
         }
         auto& slot=c.slots[c.next];slot.frame=frame;slot.count=0;
         const auto indexStart=Clock::now();
-        c.dirtyKeys.clear();
-        if(dirty)c.dirtyKeys.assign(dirty->begin(),dirty->end());
-        else for(size_t i=0;i<c.needsSource.size();++i)c.dirtyKeys.push_back(uint32_t(i));
-        if(!std::is_sorted(c.dirtyKeys.begin(),c.dirtyKeys.end()) ||
-           std::adjacent_find(c.dirtyKeys.begin(),c.dirtyKeys.end())!=c.dirtyKeys.end() ||
-           (!c.dirtyKeys.empty() && c.dirtyKeys.back()>=c.needsSource.size()))
+        if(!dirty) {
+            c.dirtyKeys.clear();
+            for(size_t i=0;i<c.needsSource.size();++i)c.dirtyKeys.push_back(uint32_t(i));
+        }
+        const auto& keys=dirty?*dirty:c.dirtyKeys;
+        if(std::adjacent_find(keys.begin(),keys.end(),[](uint32_t a,uint32_t b){return a>=b;})!=keys.end() ||
+           (!keys.empty() && keys.back()>=c.needsSource.size()))
             throw std::runtime_error("rollback: invalid dirty block list");
-        slot.Reserve(c.dirtyKeys.size());
-        std::array<size_t,SnapshotJobs::Chunks> kept{},readBytes{};
-        const size_t split=(c.dirtyKeys.size()+SnapshotJobs::Chunks-1)/SnapshotJobs::Chunks;
+        slot.Reserve(keys.size());
+        std::array<size_t,SnapshotJobs::SaveChunks> readBytes{};
+        const size_t split=(keys.size()+SnapshotJobs::SaveChunks-1)/SnapshotJobs::SaveChunks;
         lastIndexNs=Elapsed(indexStart);
-        std::array<uint64_t,SnapshotJobs::Chunks> workerNs{};
+        std::array<uint64_t,SnapshotJobs::SaveChunks> workerNs{};
         const auto jobsStart=Clock::now();
-        c.jobs.Run([&,read](size_t chunk) mutable {
+        c.jobs.Run<SnapshotJobs::SaveChunks>([&,read](size_t chunk) mutable {
             const auto workerStart=Clock::now();
-            const size_t begin=chunk*split,end=std::min(begin+split,c.dirtyKeys.size());
-            size_t out=begin;
+            const size_t begin=chunk*split,end=std::min(begin+split,keys.size());
+            size_t examined=0;
             for(size_t i=begin;i<end;++i) {
-                const uint32_t key=c.dirtyKeys[i];const size_t offset=size_t(key)*BlockSize;
+                const uint32_t key=keys[i];const size_t offset=size_t(key)*BlockSize;
                 const size_t count=std::min(BlockSize,size-offset);
-                // DeltaSaveSlot's word comparison reads RAM once and avoids
-                // a variable-length memcmp on every 64-byte granule.
-                uint64_t now[BlockSize/8]{},was[BlockSize/8]{};
-                read(offset,reinterpret_cast<uint8_t*>(now),count);readBytes[chunk]+=count;
-                std::memcpy(was,c.shadow.data()+offset,count);
-                uint64_t differ=0;
-                for(size_t word=0;word<BlockSize/8;++word)differ|=now[word]^was[word];
-                if(!differ)continue;
-                std::memcpy(c.shadow.data()+offset,now,count);
-                std::memcpy(slot.bytes.data()+out*BlockSize,now,BlockSize);
-                slot.indices[out++]=key;
+                // Dolphin's gameplay region mode saves every marked granule
+                // directly, without a shadow comparison or chunk compaction.
+                read(offset,slot.bytes.get()+i*BlockSize,count);examined+=count;
+                if(count<BlockSize)std::memset(slot.bytes.get()+i*BlockSize+count,0,BlockSize-count);
+                slot.indices[i]=key;
             }
-            kept[chunk]=out-begin;workerNs[chunk]=Elapsed(workerStart);
+            readBytes[chunk]=examined;workerNs[chunk]=Elapsed(workerStart);
         });
         lastJobsNs=Elapsed(jobsStart);lastWorkerNs=*std::max_element(workerNs.begin(),workerNs.end());
         const auto finishStart=Clock::now();
-        // Same chunk compaction as CompactKeptGranules in DeltaSaveSlot.
-        for(size_t i=0;i<kept.size();++i) {
-            const size_t from=i*split,n=kept[i];
-            if(n && from!=slot.count) {
-                std::memmove(slot.indices.data()+slot.count,slot.indices.data()+from,n*sizeof(uint32_t));
-                std::memmove(slot.bytes.data()+slot.count*BlockSize,slot.bytes.data()+from*BlockSize,n*BlockSize);
-            }
-            slot.count+=n;lastReadBytes+=readBytes[i];
-        }
+        slot.count=keys.size();
+        for(size_t bytes:readBytes)lastReadBytes+=bytes;
         lastPayload=slot.count*(BlockSize+sizeof(uint32_t));
         c.next=(c.next+1)%Capacity;c.count=std::min(c.count+1,Capacity);Measure();lastFinishNs=Elapsed(finishStart);
     }
@@ -213,15 +204,15 @@ public:
             const auto workerStart=Clock::now();
             const size_t begin=c.restoreKeys.size()*chunk/SnapshotJobs::Chunks;
             const size_t end=c.restoreKeys.size()*(chunk+1)/SnapshotJobs::Chunks;
+            size_t examined=0,written=0;
             for(size_t n=begin;n<end;++n) {
                 const size_t offset=size_t(c.restoreKeys[n])*BlockSize,count=std::min(BlockSize,c.base.size()-offset);
                 const auto source=c.restoreSources[n];
-                const uint8_t* saved=source.slot==Capacity?c.base.data()+offset:c.slots[source.slot].bytes.data()+source.index*BlockSize;
-                uint8_t now[BlockSize];read(offset,now,count);reads[chunk]+=count;
-                if(std::memcmp(now,saved,count)){write(offset,saved,count);writes[chunk]+=count;}
-                std::memcpy(c.shadow.data()+offset,saved,count);
+                const uint8_t* saved=source.slot==Capacity?c.base.data()+offset:c.slots[source.slot].bytes.get()+source.index*BlockSize;
+                uint8_t now[BlockSize];read(offset,now,count);examined+=count;
+                if(std::memcmp(now,saved,count)){write(offset,saved,count);written+=count;}
             }
-            workerNs[chunk]=Elapsed(workerStart);
+            reads[chunk]=examined;writes[chunk]=written;workerNs[chunk]=Elapsed(workerStart);
         });
         lastJobsNs=Elapsed(jobsStart);lastWorkerNs=*std::max_element(workerNs.begin(),workerNs.end());
         const auto finishStart=Clock::now();

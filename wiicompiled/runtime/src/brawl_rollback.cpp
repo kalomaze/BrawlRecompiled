@@ -260,9 +260,14 @@ uint32_t GameplayHash() {
 }
 // Each worker owns its range cursor. Most consecutive granules belong to the
 // same allocation; crossing a selected-region boundary resolves the next one.
-template<bool Write> void TransferPacked(size_t& cursor,size_t offset,uint8_t* bytes,size_t count) {
+template<bool Write> MKW_PPC_FORCE_INLINE void TransferPacked(size_t& cursor,size_t offset,uint8_t* bytes,size_t count) {
     if(!count)return;
     const auto& current=session.backing.at(cursor);
+    if(count==64 && offset>=current.offset && offset<current.end && current.end-offset>=64) {
+        auto* guest=current.data+offset-current.offset;
+        if constexpr(Write)std::memcpy(guest,bytes,64);else std::memcpy(bytes,guest,64);
+        return;
+    }
     auto at=session.backing.begin()+cursor;
     if(offset<current.offset || offset>=current.end)
         at=std::lower_bound(session.backing.begin(),session.backing.end(),offset,
@@ -321,7 +326,7 @@ void Save(int frame,CpuContext* ctx) {
             }
         }
     } else for(const auto& snapshot:session.snapshots)resident+=snapshot.bytes.capacity()+sizeof(snapshot);
-    if(session.writeWatch)session.writeWatch->Reset();session.dirtyAnchor=frame;
+    if(session.writeWatch)session.writeWatch->Enable();session.dirtyAnchor=frame;
     ++session.saves;
     const auto ns=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-started).count();
     session.snapshotSaveNs+=ns;
@@ -362,7 +367,7 @@ void Load(int frame,CpuContext* ctx) {
         }
     }
     *ctx=s.cpu;++session.loads;
-    if(session.writeWatch)session.writeWatch->Reset();session.dirtyAnchor=frame;
+    if(session.writeWatch)session.writeWatch->Enable();session.dirtyAnchor=frame;
     const auto ns=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-started).count();
     session.snapshotLoadNs+=ns;
     std::fprintf(session.snapshotMetrics,"load,%d,%zu,%zu,%zu,%zu,%lld,%d,%zu,%zu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",frame,total,written,session.incremental.DeltaBytes(),

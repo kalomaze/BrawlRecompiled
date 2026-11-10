@@ -51,6 +51,26 @@ int main() {
         BrawlDirtyMemory::MarkHost(backing.data()+4000,2);
         assert(watch.Capture(168,jobs).empty());
     }
+    {
+        std::vector<uint8_t> backing(3*65536);
+        WriteWatch watch;
+        watch.Add(backing.data(),backing.size(),0,0x80000003);watch.Enable();
+        BrawlDirtyMemory::Mark(0xc0010000,128);
+        BrawlDirtyMemory::Mark(0xc002ffc0,64);
+        assert((watch.Capture(backing.size(),jobs)==std::vector<uint32_t>{1023,1024,1025,3070,3071}));
+        assert(watch.Capture(backing.size(),jobs).empty());
+    }
+    {
+        std::vector<uint8_t> backing(96*65536);
+        WriteWatch watch;watch.Add(backing.data(),backing.size(),0,0x80000000);watch.Enable();
+        std::vector<uint32_t> expected;
+        for(uint32_t page=0;page<96;++page) {
+            BrawlDirtyMemory::Mark(0xc0000000+page*65536+64,64);
+            expected.push_back(page*1024+1);
+        }
+        assert(watch.Capture(backing.size(),jobs)==expected);
+        assert(watch.Capture(backing.size(),jobs).empty());
+    }
     for(auto* p:BrawlDirtyMemory::pages)assert(p==nullptr);
     std::cout<<"Portable tracker: unaligned packed ranges, aliases, host writes, concurrent marking and lifecycle passed\n";
 }

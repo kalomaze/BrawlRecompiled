@@ -16,7 +16,7 @@ int main(){
         reference[frame]=std::vector<uint8_t>(a,a+bytes);
         while(reference.rbegin()->first-reference.begin()->first>=16)reference.erase(reference.begin());
         for(const auto& [f,v]:reference)assert(store.View(f)==v);
-        watch.Reset();anchor=frame;
+        watch.Enable();anchor=frame;
     };
     save(0);
     for(int f=1;f<80;++f){
@@ -35,7 +35,7 @@ int main(){
                 [&](size_t o,const uint8_t* p,size_t n){std::memcpy(a+o,p,n);});
             assert(std::memcmp(a,reference.at(target).data(),bytes)==0);
             assert(store.lastRestoreWriteBytes<bytes/2);
-            watch.Reset();anchor=target;
+            watch.Enable();anchor=target;
             reference.erase(reference.upper_bound(target),reference.end());
             for(int replay=target+1;replay<=f;++replay){
                 // The new timeline doesn't rewrite every predicted byte. The

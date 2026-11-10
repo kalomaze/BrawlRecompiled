@@ -11,7 +11,7 @@ class SnapshotJobs {
     job::JobTaskThread* dispatch;
     std::vector<std::thread> workers;
 public:
-    static constexpr size_t Chunks=5;
+    static constexpr size_t Chunks=5, SaveChunks=2*Chunks; // Five save chunks for each of Dolphin's two RAM banks.
     SnapshotJobs() {
         context.activate();
         dispatch=context.initialize_worker(0,nullptr);
@@ -38,14 +38,14 @@ public:
     void Wait(job::Job*& work) {
         if(work){job::DrainJobsUntilComplete(dispatch,work);work=nullptr;}
     }
-    template<class Work> void Run(Work work) { RunPrepared([]{},std::move(work)); }
-    template<class Prepare,class Work> void RunPrepared(Prepare prepare,Work work) {
-        std::array<std::exception_ptr,Chunks> errors{};
+    template<size_t Count=Chunks,class Work> void Run(Work work) { RunPrepared<Count>([]{},std::move(work)); }
+    template<size_t Count=Chunks,class Prepare,class Work> void RunPrepared(Prepare prepare,Work work) {
+        std::array<std::exception_ptr,Count> errors{};
         std::exception_ptr preparationError;
         auto* root=job::KickRootJob(dispatch,[&](job::JobTaskThread& thread,job::Job& parent) {
             try {prepare();} catch(...) {preparationError=std::current_exception();return;}
-            std::array<job::Job*,Chunks> jobs{};
-            for(size_t i=0;i<Chunks;++i)
+            std::array<job::Job*,Count> jobs{};
+            for(size_t i=0;i<Count;++i)
                 jobs[i]=thread.create_job_as_child(parent,[work,i,&errors](job::JobTaskThread&,job::Job&) mutable {
                     try {work(i);} catch(...) {errors[i]=std::current_exception();}
                 });

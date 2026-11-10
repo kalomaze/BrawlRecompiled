@@ -18,7 +18,8 @@ class WriteWatch {
     std::vector<Span> spans;
     std::map<uint32_t,std::unique_ptr<BrawlDirtyMemory::Page>> owned;
     std::vector<std::pair<uint32_t,BrawlDirtyMemory::Page*>> scanPages;
-    std::array<std::vector<uint32_t>,SnapshotJobs::Chunks> scanResults;
+    static constexpr size_t PagesPerBatch=4;
+    std::vector<std::vector<uint32_t>> scanResults;
 public:
     size_t metadataBytes=0;
     uint64_t resetNs=0,captureNs=0;
@@ -66,11 +67,22 @@ public:
         }
         scanPages.clear();
         for(const auto& [index,page]:owned)scanPages.emplace_back(index,page.get());
+        scanResults.resize((scanPages.size()+PagesPerBatch-1)/PagesPerBatch);
+    }
+    // Capture consumes all marks. Enable after the initial base image; later
+    // save/restore boundaries need no second walk over clean tracking pages.
+    void Enable(){
+        BrawlDirtyMemory::active.store(true,std::memory_order_relaxed);
+        resetNs=0;
     }
     void Reset(){
         const auto start=std::chrono::steady_clock::now();
-        for(auto& [index,p]:owned)if(p->touched.exchange(0,std::memory_order_relaxed))
+        // Writers are quiescent here. Capture already cleared consumed pages;
+        // an exchange would still issue a locked write for every clean page.
+        for(auto& [index,p]:owned)if(p->touched.load(std::memory_order_relaxed)) {
             for(auto& block:p->blocks)block.store(0,std::memory_order_relaxed);
+            p->touched.store(0,std::memory_order_relaxed);
+        }
         BrawlDirtyMemory::active.store(true,std::memory_order_relaxed);
         resetNs=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-start).count();
     }
@@ -83,19 +95,32 @@ public:
         static_assert(sizeof(std::atomic<uint8_t>)==1,"dirty marks must be byte sized");
         std::array<size_t,SnapshotJobs::Chunks> metadata{};
         jobs.Run([&](size_t chunk) {
-          auto& dirty=scanResults[chunk];dirty.clear();
-          const size_t begin=scanPages.size()*chunk/SnapshotJobs::Chunks;
-          const size_t end=scanPages.size()*(chunk+1)/SnapshotJobs::Chunks;
+          size_t examined=0;
+          // Spread clustered match heaps over all five workers. Each small
+          // batch retains its own sorted output, merged in address order below.
+          for(size_t batch=chunk;batch<scanResults.size();batch+=SnapshotJobs::Chunks) {
+          auto dirty=std::move(scanResults[batch]);dirty.clear();
+          const size_t begin=batch*PagesPerBatch;
+          const size_t end=std::min(begin+PagesPerBatch,scanPages.size());
           auto spanCursor=spans.begin();
           if(begin<end)spanCursor=std::lower_bound(spans.begin(),spans.end(),uint64_t(scanPages[begin].first)<<16,
               [](const Span& span,uint64_t address){return uint64_t(span.guest)+span.size<=address;});
           for(size_t pageNumber=begin;pageNumber<end;++pageNumber) {
             const auto [pageIndex,page]=scanPages[pageNumber];
-            ++metadata[chunk];
+            ++examined;
             if(!page->touched.load(std::memory_order_relaxed))continue;
+            const uint64_t pageStart=uint64_t(pageIndex)<<16;
+            while(spanCursor!=spans.end() && uint64_t(spanCursor->guest)+spanCursor->size<=pageStart)++spanCursor;
+            // Interior pages have one constant physical-to-packed offset.
+            // Resolve it once per page, not once for every marked granule.
+            const bool interior=spanCursor!=spans.end() && spanCursor->guest<=pageStart &&
+                uint64_t(spanCursor->guest)+spanCursor->size>=pageStart+65536;
+            const size_t packedStart=interior?spanCursor->packed+pageStart-spanCursor->guest:0;
+            if(interior && (packedStart+65536+63)/64>(bytes+63)/64)
+                throw std::runtime_error("dirty span outside packed memory");
             for(size_t first=0;first<1024;first+=64) {
                 uint8_t marks[64];uint64_t words[8];
-                std::memcpy(marks,page->blocks+first,sizeof(marks));metadata[chunk]+=sizeof(marks);
+                std::memcpy(marks,page->blocks+first,sizeof(marks));examined+=sizeof(marks);
                 std::memcpy(words,marks,sizeof(words));
                 if(!(words[0]|words[1]|words[2]|words[3]|words[4]|words[5]|words[6]|words[7]))continue;
                 for(size_t wordIndex=0;wordIndex<8;++wordIndex) {
@@ -105,7 +130,13 @@ public:
                     word&=~(uint64_t{0xff}<<(byte*8));
                     const size_t i=wordIndex*8+byte;
                     page->blocks[first+i].store(0,std::memory_order_relaxed);
-                    const uint64_t block=(uint64_t(pageIndex)<<16)+(first+i)*64;
+                    if(interior) {
+                        const uint32_t key=uint32_t(packedStart/64+first+i);
+                        if(dirty.empty() || dirty.back()!=key)dirty.push_back(key);
+                        if(packedStart%64)dirty.push_back(key+1);
+                        continue;
+                    }
+                    const uint64_t block=pageStart+(first+i)*64;
                     while(spanCursor!=spans.end() && uint64_t(spanCursor->guest)+spanCursor->size<=block)++spanCursor;
                     auto at=spanCursor;
                     for(;at!=spans.end() && at->guest<block+64;++at) {
@@ -123,14 +154,17 @@ public:
             }
             page->touched.store(0,std::memory_order_relaxed);
         }
+          scanResults[batch]=std::move(dirty);
+          }
+          metadata[chunk]=examined;
         });
         for(size_t chunk=0;chunk<scanResults.size();++chunk) {
             const auto& part=scanResults[chunk];
             auto begin=part.begin();
             if(begin!=part.end() && !dirty.empty() && dirty.back()==*begin)++begin;
             dirty.insert(dirty.end(),begin,part.end());
-            metadataBytes+=metadata[chunk];
         }
+        for(size_t examined:metadata)metadataBytes+=examined;
         captureNs=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-start).count();
         return dirty;
     }
