@@ -637,12 +637,17 @@ public static partial class TranslatedBuildShardEmitter
             var source = new StringBuilder();
             source.AppendLine("// Translator-owned content-addressed aggregate shard; do not edit.");
             source.AppendLine("#include \"abi_bridge.h\"");
-            if (group.Any(static function => function.Address == 0x809435F0u))
+            var anchorsPads = dependencyTraits.ContainsKey(0x80029438u);
+            if (anchorsPads || group.Any(static function => function.Address == 0x809435F0u))
                 source.AppendLine("#include \"brawl_rollback.h\"");
             // Quoted include resolves the sibling traits header on every toolchain and keeps
             // the shard text free of the emitting machine's absolute paths.
             source.AppendLine($"#include \"{Path.GetFileName(traitsPath)}\"");
-            source.AppendLine("#define MKW_STATIC_TRANSLATED_CALL(Target, Entry, Context) do { ApplyRuntimeCallOptions(Target, Context); Entry(Context); } while (false)");
+            // P+ post-processes pads before updateLow returns. Re-anchor after that
+            // return, matching the interpreter call path and Dolphin's pad-thread hook.
+            source.AppendLine(anchorsPads
+                ? "#define MKW_STATIC_TRANSLATED_CALL(Target, Entry, Context) do { ApplyRuntimeCallOptions(Target, Context); Entry(Context); if constexpr ((Target) == 0x80029438u) BrawlRollback::AnchorPads(); } while (false)"
+                : "#define MKW_STATIC_TRANSLATED_CALL(Target, Entry, Context) do { ApplyRuntimeCallOptions(Target, Context); Entry(Context); } while (false)");
             foreach (var function in group
                          .OrderBy(static function => function.Address)
                          .ThenBy(static function => function.Symbol, StringComparer.Ordinal))

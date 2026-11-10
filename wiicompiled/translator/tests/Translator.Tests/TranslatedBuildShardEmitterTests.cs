@@ -10,6 +10,55 @@ namespace Translator.Tests;
 public sealed class TranslatedBuildShardEmitterTests
 {
     [Fact]
+    public void FreshPadCallerShardsAnchorAfterGuestPadUpdate()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"translator-pad-hook-{Guid.NewGuid():N}");
+        var functions = Path.Combine(root, "functions");
+        var native = Path.Combine(root, "runtime");
+        var output = Path.Combine(root, "out");
+        Directory.CreateDirectory(functions);
+        Directory.CreateDirectory(native);
+        try
+        {
+            const string caller = """
+                extern "C" void func_8002BA60(CpuContext* ctx) {
+                    InvokeDirectCpu<0x80029438u>(ctx);
+                }
+                // RECOMP_REGISTRATION base 0x8002BA60 func_8002BA60 preserves=true fpr_mask=0x00000000
+                """;
+            const string target = """
+                extern "C" void func_80029438(CpuContext*) {}
+                // RECOMP_REGISTRATION base 0x80029438 func_80029438 preserves=true fpr_mask=0x00000000
+                """;
+            Write(Path.Combine(functions, "func_8002BA60.cpp"), caller);
+            Write(Path.Combine(functions, "func_80029438.cpp"), target);
+            var metadata = Path.Combine(root, "base_output.json");
+            BaseTranslationOutputMetadataFile.WriteIfChangedAtomic(metadata,
+                BaseTranslationOutputMetadata.Create([
+                    Metadata("func_8002BA60.cpp", 0x8002BA60u, caller),
+                    Metadata("func_80029438.cpp", 0x80029438u, target)
+                ], TranslationQualityMetadata.Clean, "pad-hook"));
+            var options = new TranslatedBuildShardOptions(metadata, functions, output, native,
+                BaseShardCount: 1, RegistrationShardCount: 1);
+            for (var generation = 0; generation < 2; generation++)
+            {
+                TranslatedBuildShardEmitter.Emit(options);
+                var shard = Directory.GetFiles(Path.Combine(output, "base_common"), "shard_*.cpp")
+                    .Select(File.ReadAllText).Single(text => text.Contains("void func_8002BA60("));
+                Assert.Contains("#include \"brawl_rollback.h\"", shard);
+                Assert.Contains("MKW_STATIC_TRANSLATED_CALL(0x80029438u, func_80029438, ctx)", shard);
+                Assert.Contains("Entry(Context); if constexpr ((Target) == 0x80029438u) BrawlRollback::AnchorPads();", shard);
+                Assert.Equal(1, shard.Split("BrawlRollback::AnchorPads();").Length - 1);
+                Directory.Delete(output, true);
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void FreshStageShardsContainOnlineSetupGateAfterCodeGuard()
     {
         var root = Path.Combine(Path.GetTempPath(), $"translator-stage-gate-{Guid.NewGuid():N}");
