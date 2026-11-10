@@ -38,9 +38,10 @@ def load_spec(path):
         raise ValueError('frames must be positive, or zero for complete matches')
     required_env = {'BRAWL_RECOMP_BUILD', 'PPHARNESS_DOLPHIN', 'PPHARNESS_TEMPLATE',
                     'PPHARNESS_ISO', 'PPHARNESS_INSTANCES', 'BRAWL_SHARED_SD',
-                    'XDG_RUNTIME_DIR', 'WAYLAND_DISPLAY', 'PPHARNESS_DOLPHIN_PRIORITY'}
-    if set(spec['environment']) != required_env:
-        raise ValueError(f'environment must specify exactly {sorted(required_env)}')
+                    'PPHARNESS_DOLPHIN_PRIORITY'}
+    optional_env = {'XDG_RUNTIME_DIR', 'WAYLAND_DISPLAY', 'DISPLAY', 'SDL_VIDEODRIVER', 'EGL_PLATFORM', 'PPHARNESS_VIDEO'}
+    if not required_env <= set(spec['environment']) or set(spec['environment']) - required_env - optional_env:
+        raise ValueError(f'environment requires {sorted(required_env)}; optional: {sorted(optional_env)}')
     if spec['environment']['PPHARNESS_DOLPHIN_PRIORITY'] != 'normal':
         raise ValueError('Paired measurements require normal priority for both clients')
     names = set()
@@ -144,7 +145,7 @@ def execute(config):
             raise RuntimeError(f'{label} failed ({code}); see {log}')
     try:
         # Display and immutable recording prerequisites precede builds or client creation.
-        run('00-wayland', [spec['run']['python'], str(TOOLS/'check_wayland.py')])
+        run('00-display', [spec['run']['python'], str(TOOLS/'host_platform.py')])
         for key in ('PPHARNESS_ISO','BRAWL_SHARED_SD','PPHARNESS_TEMPLATE'):
             if not Path(env[key]).exists():raise FileNotFoundError(env[key])
         fingerprints = {}
@@ -160,7 +161,7 @@ def execute(config):
             label = f'{number:02d}-{stage["name"]}'
             if stage['kind'] == 'command':
                 run(label, stage['argv']);continue
-            binaries = [Path(env['BRAWL_RECOMP_BUILD'])/'WiiCompiled', Path(env['PPHARNESS_DOLPHIN'])]
+            binaries = [Path(env['BRAWL_RECOMP_BUILD'])/('WiiCompiled.exe' if sys.platform == 'win32' else 'WiiCompiled'), Path(env['PPHARNESS_DOLPHIN'])]
             state[label] = {'binary_sha256':{str(p):digest(p) for p in binaries},
                             'schedule':stage['schedule'], 'purpose':stage['purpose'],
                             'verify_snapshots':stage['verify_snapshots']}

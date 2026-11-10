@@ -10,7 +10,7 @@ import time
 
 from harness_paths import WORKSPACE as w
 sys.path[:0] = [str(w/'brawlonline.net/harness'), str(w/'brawlonline.net/harness/tools')]
-from check_wayland import require_wayland
+from host_platform import require_display
 import gameplay_rollback as G
 from ppharness import brawl as B
 p = argparse.ArgumentParser(description=__doc__)
@@ -19,19 +19,17 @@ p.add_argument('--name', required=True)
 p.add_argument('--rollback-benchmark',action='store_true')
 p.add_argument('--frames',type=int,default=600)
 a = p.parse_args()
-defaults = dict(PPHARNESS_DOLPHIN=str(w/'brawlonline.net/dolphin/build-linux/Binaries/dolphin-emu-nogui'),
- PPHARNESS_TEMPLATE=str(w/'artifacts/dolphin-template'), PPHARNESS_ISO=os.environ['PPHARNESS_ISO'],
- PPHARNESS_INSTANCES=str(w/'artifacts/dolphin-instances'), XDG_RUNTIME_DIR='/tmp/brawl-wayland-1000', WAYLAND_DISPLAY='brawl-wayland')
-for key,value in defaults.items():os.environ.setdefault(key,value)
-require_wayland(os.environ)
+for key in ('PPHARNESS_DOLPHIN','PPHARNESS_TEMPLATE','PPHARNESS_ISO','PPHARNESS_INSTANCES','BRAWL_SHARED_SD'):
+ if not os.environ.get(key):raise ValueError(f'{key} must be configured')
+require_display()
 replay = w/'replay-corpus'/f'match-{a.match}'/'game.brep'
 if not replay.is_file(): raise FileNotFoundError(replay)
 out = w/'artifacts'/a.name
 out.mkdir()
-d = G.make_instance('recorded-reference', video='OGL', keep=False,
+d = G.make_instance('recorded-reference', video=os.environ['PPHARNESS_VIDEO'], keep=False,
  dolphin_ini={'General':{'WiiSDCardPath':os.environ.get('BRAWL_SHARED_SD',str(w/'artifacts/online-loop-sd.raw'))},
  'Core':{'WiiSDCardAllowWrites':False,'WiiSDCardEnableFolderSync':False}})
-d.env['EGL_PLATFORM'] = 'surfaceless'
+# The selected display/backend is supplied by the experiment environment.
 if a.rollback_benchmark:d.env['PPR_REPLAY_ROLLBACK_BENCHMARK']='1'
 try:
  d.launch(); d.connect(); c=d.client

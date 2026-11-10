@@ -10,14 +10,18 @@ python = "/path/to/workspace/artifacts/online-loop-venv/bin/python"
 previous_metrics = "/path/to/workspace/artifacts/snapshot-sparse-live-profile-1/trace.match-1.csv.snapshots.csv"
 
 [environment]
-BRAWL_RECOMP_BUILD = "/path/to/workspace/BrawlRecompiled/wiicompiled/build-linux"
-PPHARNESS_DOLPHIN = "/path/to/workspace/brawlonline.net/dolphin/build-linux/Binaries/dolphin-emu-nogui"
+# Select your built binaries; Windows uses WiiCompiled.exe and DolphinNoGUI.exe.
+BRAWL_RECOMP_BUILD = "/path/to/recomp/build"
+PPHARNESS_DOLPHIN = "/path/to/dolphin-emu-nogui"
 PPHARNESS_TEMPLATE = "/path/to/workspace/artifacts/dolphin-template"
 PPHARNESS_ISO = "/path/to/disc/RSBE01.wbfs"
 PPHARNESS_INSTANCES = "/path/to/workspace/artifacts/dolphin-instances"
 BRAWL_SHARED_SD = "/path/to/workspace/artifacts/online-loop-sd.raw"
-XDG_RUNTIME_DIR = "/tmp/brawl-wayland-1000"
-WAYLAND_DISPLAY = "brawl-wayland"
+PPHARNESS_VIDEO = "Vulkan"
+# On Linux, supply your existing Wayland or X11 session when running remotely.
+# XDG_RUNTIME_DIR = "/run/user/1000"
+# WAYLAND_DISPLAY = "wayland-0"
+# SDL_VIDEODRIVER = "wayland"
 PPHARNESS_DOLPHIN_PRIORITY = "normal"
 
 [[stages]]

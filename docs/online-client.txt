@@ -1,0 +1,72 @@
+Playing a Direct match through Brawl Online
+
+The online companion connects BrawlRecompiled to Brawl Online's matchmaking
+server and exchanges gameplay packets with a normal Brawl Online Dolphin client.
+The game supplies character selection, the waiting room, stage selection, and
+rematches. The companion handles authentication with an existing play key,
+matchmaking, and match setup; the recomp runs the game and rollback.
+
+Build BrawlRecompiled using its normal Windows, macOS, or Linux build instructions.
+Build the matchmaking helper from the rollback-dolphin-crossplay branch of
+kalomaze/brawlonline.net:
+
+    cd brawlonline.net/server
+    cargo build -p mmclient
+
+Use Python 3.11 or newer. Install the companion dependencies with:
+
+    python -m pip install -r tools/online/requirements.txt
+ The sibling Brawl Online
+checkout supplies tools/gamecode/ppom.py and its Python harness package; install
+that checkout's harness dependencies into the Python environment used below.
+Use a working Project+ installation containing the Brawl Online PPOnline plugin
+(v10 or newer). Both players must have compatible game/mod content. The recomp
+uses its existing controller, video, audio, and SD-card configuration.
+
+On Windows, select WiiCompiled.exe and mmclient.exe. On macOS, select the game
+executable inside the application bundle, or the standalone built executable.
+The companion preserves the runtime’s normal saved profile and user-data paths.
+
+Copy tools/online/example.toml and set its client, brawl_online, mmclient, account,
+and output paths. The account path must name your normal Brawl Online
+Online/user.json, containing uid, playKey, displayName, and connectCode. Account
+registration and email verification stay with Brawl Online. Treat that file as
+credentials; do not commit or share it.
+
+To launch the client, run:
+
+    python tools/online/run.py /path/to/online.toml
+
+In the game, choose Direct and enter your opponent's connect code. Your opponent
+uses their normal Brawl Online client and enters this account's connect code.
+Choose characters and a stage. Either client can be assigned as host. Matches
+can finish, return to character selection, and start again on the same connection.
+
+The default server is mm.brawlonline.net:43113. Matchmaking uses the configured
+UDP port, then gameplay reuses it so the peer can reach the same NAT mapping.
+Allow inbound/outbound UDP on that port. The next two ports are loopback-only
+links between the companion and the native runtime. LAN IP is detected toward
+the server unless explicitly set in the TOML. The implementation currently uses
+IPv4 peer-to-peer connections, with no relay service. A failed peer connection
+is reported instead of silently changing transports.
+
+Direct is enabled by default. Set network.unranked = true only to enable that
+queue intentionally. Ranked, rooms, teams, and spectators are not implemented.
+The current setup-key path supports GameCube controller layouts and ordinary
+versus rules; unsupported setup is rejected before gameplay.
+
+Each launch writes runtime.log, matchmaking results, setup checks, and rollback
+traces to a new output directory. It launches the configured binary in place;
+it does not clone user directories or SD images. Close the game or interrupt
+the launcher to stop the companion. For a private test server, change
+network.server and use an account issued by that server.
+
+The Brawl Online desktop launcher can pass --account, --output, --plugin, and
+--handoff-dir to this same command. A non-portable installation must set
+paths.sd_root when installing the plugin. The handoff directory is the launcher’s
+Online folder; Direct invitations are delivered through its join-room.json.
+
+Launcher control uses an ephemeral loopback TCP port and a per-launch token.
+It is separate from the public gameplay UDP connection. Missing dependencies,
+invalid setup, and connection failures stop the run instead of selecting a
+second transport. Rendering uses the platform’s normal SDL backend.

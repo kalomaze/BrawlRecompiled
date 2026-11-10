@@ -3,8 +3,16 @@ import collections,ctypes,json,socket,struct,threading,time
 from pathlib import Path
 
 class Memory:
- def __init__(self,path):
-  self.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);self.sock.settimeout(15);self.sock.connect(str(path));self.file=self.sock.makefile('rb')
+ def __init__(self,path,token=None):
+  if token is None:
+   self.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);self.sock.settimeout(15);self.sock.connect(str(path))
+  else:
+   port=int(Path(path).read_text().strip())
+   if not 0<port<=65535:raise ValueError('Invalid control endpoint port')
+   self.sock=socket.create_connection(('127.0.0.1',port),timeout=15)
+   self.sock.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
+  self.file=self.sock.makefile('rb')
+  if token is not None:self.call('auth '+token)
  def call(self,line):
   self.sock.sendall((line+'\n').encode());s=self.file.readline().decode().strip()
   if not s or s.startswith('error'):raise RuntimeError(s or 'recomp IPC closed')

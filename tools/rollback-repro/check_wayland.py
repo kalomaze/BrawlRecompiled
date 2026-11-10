@@ -7,7 +7,9 @@ import subprocess
 import sys
 
 def check():
-    lib = ctypes.CDLL(ctypes.util.find_library('wayland-client') or 'libwayland-client.so.0')
+    library = ctypes.util.find_library('wayland-client')
+    if not library:raise RuntimeError('Wayland client library is missing')
+    lib = ctypes.CDLL(library)
     lib.wl_display_connect.argtypes = [ctypes.c_char_p]
     lib.wl_display_connect.restype = ctypes.c_void_p
     lib.wl_display_roundtrip.argtypes = [ctypes.c_void_p]

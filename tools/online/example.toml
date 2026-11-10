@@ -1,0 +1,17 @@
+# Paths are relative to this TOML file, or absolute.
+[paths]
+client = "/path/to/WiiCompiled"
+brawl_online = "../../../brawlonline.net"
+mmclient = "/path/to/mmclient"
+account = "/path/to/Online/user.json"
+# Each launch gets a fresh directory for its logs; no game assets are copied.
+output = "./sessions/session-1"
+
+[network]
+app_version = "0.1.135"
+server = "mm.brawlonline.net:43113"
+port = 29800
+# Direct only by default. Use your opponent's connect code in the game's UI.
+unranked = false
+# Normally mmclient detects the LAN address toward the server.
+# lan_ip = "192.168.1.10"

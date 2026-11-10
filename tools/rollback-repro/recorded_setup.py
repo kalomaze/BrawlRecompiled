@@ -21,8 +21,8 @@ def countdown_slots(setup):
     return bytes(slots)
 
 class RecordedSetup:
-    def __init__(self, socket, setup, output):
-        self.m=Memory(socket); self.setup=setup; self.out=Path(output)
+    def __init__(self, socket, setup, output, token=None):
+        self.m=Memory(socket,token=token); self.setup=setup; self.out=Path(output)
         self.last_status=None;self.last_boot_press=0;self.block=None;self.published={};self.requested=False;self.in_match=False;self.gates=set()
         self.m.call('seed '+str(setup['seed']))
     def publish(self, address, raw):

@@ -387,6 +387,31 @@ void BeginOnlineMatch(unsigned index,unsigned pad,unsigned mailbox,unsigned mail
     session.current[2*64+0x38]=0xff;
     session.current[3*64+0x38]=0xff;
 }
+unsigned OnlineHold() {
+    const auto* pad = latestLocalPad.data();
+    const bool wii = pad[0x3c] == 0 && pad[0x3d] == 0 && pad[0x3e] == 0 &&
+                     pad[0x3f] >= 1 && pad[0x3f] <= 3;
+    const unsigned type = wii ? unsigned(pad[0x3f]) << 12 : 0;
+    return type | (pad[0x38] ? 0 : ((unsigned(pad[2]) << 8 | pad[3]) & 0xf7fu));
+}
+void SetOnlineCountdown(const std::array<unsigned, 4>& holds) {
+    if (!session.live || session.active)
+        throw std::runtime_error("countdown outside match setup");
+    session.recordedCountdown = {};
+    for (unsigned p = 0; p < 4; ++p) {
+        auto* pad = session.recordedCountdown.data() + 64 * p;
+        if (p >= 2) {
+            pad[0x38] = 0xff;
+            continue;
+        }
+        for (unsigned off : {0u, 4u}) {
+            pad[off + 2] = (holds[p] & 0xf7f) >> 8;
+            pad[off + 3] = holds[p] & 0xff;
+        }
+        pad[0x3f] = (holds[p] & 0x3000) >> 12;
+    }
+    session.hasRecordedCountdown = true;
+}
 void StopOnlineMatch(){session.stopRequested=true;if(!session.active){session.live=false;session.finished=true;}}
 std::string OnlineStatus() {
     return std::string(session.active?"running":session.finished?"ended":session.live?"armed":"idle")+" "+
