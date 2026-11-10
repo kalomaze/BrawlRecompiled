@@ -52,6 +52,11 @@ int main() {
     try {jobs.Run([](size_t i){if(i==2)throw std::runtime_error("worker test");});}
     catch(const std::runtime_error&){workerError=true;}
     assert(workerError);
+    bool preparationError=false;
+    std::atomic<bool> childRan{false};
+    try {jobs.RunPrepared([]{throw std::runtime_error("prepare test");},[&](size_t){childRan.store(true);});}
+    catch(const std::runtime_error&){preparationError=true;}
+    assert(preparationError && !childRan.load());
     jobs.Run([cursor=size_t{0}](size_t) mutable {assert(cursor==0);++cursor;});
     std::cout<<"Raw snapshots: ring eviction, sparse saves, unsaved writes, rollback truncation, corrected resimulation, partial tails and pool lifecycle passed\n";
 }

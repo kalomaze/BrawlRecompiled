@@ -42,7 +42,7 @@ public:
     template<size_t Count=Chunks,class Prepare,class Work> void RunPrepared(Prepare prepare,Work work) {
         std::array<std::exception_ptr,Count> errors{};
         std::exception_ptr preparationError;
-        auto* root=job::KickRootJob(dispatch,[&](job::JobTaskThread& thread,job::Job& parent) {
+        auto* root=dispatch->create_job([&](job::JobTaskThread& thread,job::Job& parent) {
             try {prepare();} catch(...) {preparationError=std::current_exception();return;}
             std::array<job::Job*,Count> jobs{};
             for(size_t i=0;i<Count;++i)
@@ -51,6 +51,10 @@ public:
                 });
             thread.do_work_and_kick_jobs(jobs.data(),static_cast<uint16_t>(jobs.size()));
         });
+        // Dispatch children immediately; scheduling this dispatcher as another
+        // job adds a queue round trip before any scan/copy work can begin.
+        root->is_waiting=true;
+        dispatch->execute(*root);
         job::DrainJobsUntilComplete(dispatch,root);
         if(preparationError)std::rethrow_exception(preparationError);
         for(const auto& error:errors)if(error)std::rethrow_exception(error);

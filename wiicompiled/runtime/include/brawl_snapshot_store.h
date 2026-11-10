@@ -99,7 +99,7 @@ public:
         core->scratch=Materialize(frame);return core->scratch;
     }
     template<class Reader> void Save(int frame,size_t size,Reader read,
-                                    std::vector<uint32_t>* dirty=nullptr,int anchor=0) {
+                                    const std::vector<uint32_t>* dirty=nullptr,int anchor=0) {
         lastReadBytes=0;lastIndexNs=lastJobsNs=lastWorkerNs=lastFinishNs=lastEvictWaitNs=0;
         if(!core) {
             core=std::make_unique<Core>();auto& c=*core;
@@ -159,7 +159,7 @@ public:
         lastPayload=slot.count*(BlockSize+sizeof(uint32_t));
         c.next=(c.next+1)%Capacity;c.count=std::min(c.count+1,Capacity);Measure();lastFinishNs=Elapsed(finishStart);
     }
-    template<class Reader,class Writer> void Restore(int frame,int anchor,std::vector<uint32_t> dirty,Reader read,Writer write) {
+    template<class Reader,class Writer> void Restore(int frame,int anchor,const std::vector<uint32_t>& dirty,Reader read,Writer write) {
         if(!core)throw std::runtime_error("rollback: no snapshot");
         auto& c=*core;const size_t target=c.Find(frame);
         if(anchor!=c.slots[(c.next+Capacity-1)%Capacity].frame)

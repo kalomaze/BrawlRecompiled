@@ -17,7 +17,7 @@ Gameplay and snapshots
   The runtime uses Brawl Online's selected heaps, static regions, and REL data.
   Explicit marks in guest write paths track modified 64-byte blocks. A 16-frame
   sparse snapshot history supports corrected predictions and retained restores.
-  The current store processes snapshot deltas serially.
+  A persistent worker pool scans dirty blocks and copies raw snapshot data.
   crorc complements its second source operand. Strict floating-point compilation
   preserves unordered guest comparisons, including P+ stage timers using NaNs.
 

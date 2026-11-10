@@ -207,7 +207,7 @@ void Configure() {
     session.trace=std::fopen(tracePath.c_str(),"w");
     session.snapshotMetrics=std::fopen((tracePath+".snapshots.csv").c_str(),"w");
     if(!session.snapshotMetrics)throw std::runtime_error("cannot open snapshot metrics");
-    std::fprintf(session.snapshotMetrics,"event,frame,selected_ram_bytes,state_payload_bytes,delta_history_bytes,resident_bytes,duration_ns,verified,ram_bytes_examined,dirty_metadata_bytes,tracking_capture_ns,tracking_reset_ns,index_ns,jobs_ns,max_worker_ns,finish_ns,eviction_wait_ns\n");
+    std::fprintf(session.snapshotMetrics,"event,frame,selected_ram_bytes,state_payload_bytes,delta_history_bytes,resident_bytes,duration_ns,verified,ram_bytes_examined,dirty_metadata_bytes,tracking_capture_ns,tracking_reset_ns,index_ns,jobs_ns,max_worker_ns,finish_ns,eviction_wait_ns,tracking_jobs_ns,tracking_worker_ns,tracking_merge_ns\n");
     if (!session.trace) throw std::runtime_error("rollback: cannot open trace");
     std::fprintf(session.trace,"session_frame,game_frame,rng,rng_other,libc_rng,region_hash,resimulation,gameplay_hash,fighters,input_hash,expected_input_hash,completed_ns,advance_ns,pace_ns\n");
     std::fprintf(stderr,"[rollback] %s input, limit %u\n",path?path:"live controller",count);
@@ -309,8 +309,9 @@ void Save(int frame,CpuContext* ctx) {
     size_t payload=total+sizeof(CpuContext),resident=0;
     if(!session.fullSnapshots) {
         auto read=[cursor=size_t{0}](size_t offset,uint8_t* out,size_t count) mutable {TransferPacked<false>(cursor,offset,out,count);};
-        std::vector<uint32_t> dirty;
-        if(session.writeWatch && !session.incremental.Empty())dirty=session.writeWatch->Capture(total,session.incremental.Jobs());
+        const std::vector<uint32_t> empty;
+        const auto& dirty=session.writeWatch && !session.incremental.Empty()?
+            session.writeWatch->Capture(total,session.incremental.Jobs()):empty;
         session.incremental.Save(frame,total,read,session.writeWatch?&dirty:nullptr,session.dirtyAnchor);
         payload=session.incremental.lastPayload+sizeof(CpuContext);
         resident=session.incremental.ResidentBytes()+sizeof(session.snapshots);
@@ -330,14 +331,17 @@ void Save(int frame,CpuContext* ctx) {
     ++session.saves;
     const auto ns=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-started).count();
     session.snapshotSaveNs+=ns;
-    std::fprintf(session.snapshotMetrics,"save,%d,%zu,%zu,%zu,%zu,%lld,%d,%zu,%zu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",frame,total,payload,
+    std::fprintf(session.snapshotMetrics,"save,%d,%zu,%zu,%zu,%zu,%lld,%d,%zu,%zu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",frame,total,payload,
         session.incremental.DeltaBytes(),resident,(long long)ns,session.verifySnapshots,session.fullSnapshots?total:session.incremental.lastReadBytes,
         session.writeWatch?session.writeWatch->metadataBytes:0,
         (unsigned long long)(session.writeWatch?session.writeWatch->captureNs:0),
         (unsigned long long)(session.writeWatch?session.writeWatch->resetNs:0),
         (unsigned long long)session.incremental.lastIndexNs,(unsigned long long)session.incremental.lastJobsNs,
         (unsigned long long)session.incremental.lastWorkerNs,(unsigned long long)session.incremental.lastFinishNs,
-        (unsigned long long)session.incremental.lastEvictWaitNs);
+        (unsigned long long)session.incremental.lastEvictWaitNs,
+        (unsigned long long)(session.writeWatch?session.writeWatch->captureJobsNs:0),
+        (unsigned long long)(session.writeWatch?session.writeWatch->captureWorkerNs:0),
+        (unsigned long long)(session.writeWatch?session.writeWatch->captureMergeNs:0));
 }
 void Load(int frame,CpuContext* ctx) {
     const auto started=std::chrono::steady_clock::now();
@@ -346,12 +350,12 @@ void Load(int frame,CpuContext* ctx) {
     size_t total=0;for(auto r:session.ranges)total+=r.size;
     size_t examined=total,written=total;
     if(!session.fullSnapshots) {
-        std::vector<uint32_t> dirty;
-        if(session.writeWatch)dirty=session.writeWatch->Capture(total,session.incremental.Jobs());
-        else for(size_t i=0;i<(total+63)/64;++i)dirty.push_back(uint32_t(i));
+        std::vector<uint32_t> all;
+        if(!session.writeWatch)for(size_t i=0;i<(total+63)/64;++i)all.push_back(uint32_t(i));
+        const auto& dirty=session.writeWatch?session.writeWatch->Capture(total,session.incremental.Jobs()):all;
         auto read=[cursor=size_t{0}](size_t offset,uint8_t* out,size_t count) mutable {TransferPacked<false>(cursor,offset,out,count);};
         auto write=[cursor=size_t{0}](size_t offset,const uint8_t* in,size_t count) mutable {TransferPacked<true>(cursor,offset,const_cast<uint8_t*>(in),count);};
-        session.incremental.Restore(frame,session.dirtyAnchor,std::move(dirty),read,write);
+        session.incremental.Restore(frame,session.dirtyAnchor,dirty,read,write);
         examined=session.incremental.lastRestoreReadBytes;written=session.incremental.lastRestoreWriteBytes;
     } else {
         const auto& bytes=session.fullSnapshots?s.bytes:session.incremental.View(frame);
@@ -370,13 +374,16 @@ void Load(int frame,CpuContext* ctx) {
     if(session.writeWatch)session.writeWatch->Enable();session.dirtyAnchor=frame;
     const auto ns=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-started).count();
     session.snapshotLoadNs+=ns;
-    std::fprintf(session.snapshotMetrics,"load,%d,%zu,%zu,%zu,%zu,%lld,%d,%zu,%zu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",frame,total,written,session.incremental.DeltaBytes(),
+    std::fprintf(session.snapshotMetrics,"load,%d,%zu,%zu,%zu,%zu,%lld,%d,%zu,%zu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",frame,total,written,session.incremental.DeltaBytes(),
         session.incremental.ResidentBytes()+sizeof(session.snapshots),(long long)ns,session.verifySnapshots,examined,session.writeWatch?session.writeWatch->metadataBytes:0,
         (unsigned long long)(session.writeWatch?session.writeWatch->captureNs:0),
         (unsigned long long)(session.writeWatch?session.writeWatch->resetNs:0),
         (unsigned long long)session.incremental.lastIndexNs,(unsigned long long)session.incremental.lastJobsNs,
         (unsigned long long)session.incremental.lastWorkerNs,(unsigned long long)session.incremental.lastFinishNs,
-        (unsigned long long)session.incremental.lastEvictWaitNs);
+        (unsigned long long)session.incremental.lastEvictWaitNs,
+        (unsigned long long)(session.writeWatch?session.writeWatch->captureJobsNs:0),
+        (unsigned long long)(session.writeWatch?session.writeWatch->captureWorkerNs:0),
+        (unsigned long long)(session.writeWatch?session.writeWatch->captureMergeNs:0));
 }
 } // namespace
 
