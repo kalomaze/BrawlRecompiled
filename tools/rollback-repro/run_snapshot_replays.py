@@ -35,7 +35,7 @@ for match in a.matches:
         env.update(XDG_RUNTIME_DIR=os.environ.get('XDG_RUNTIME_DIR','/tmp/brawl-wayland-1000'),WAYLAND_DISPLAY=os.environ.get('WAYLAND_DISPLAY','brawl-wayland'),
           SDL_VIDEODRIVER='wayland',SDL_AUDIODRIVER='dummy',NSMBW_DETERMINISTIC='1',
           NSMBW_INPUT_SCRIPT='1000:A:200',BRAWL_ONLINE_IPC=str(ipc),
-          BRAWL_REPLAY_COUNTDOWN=str(countdown),BRAWL_ROLLBACK_START=str(setup['start_frame']-1),
+          BRAWL_REPLAY_COUNTDOWN=str(countdown),BRAWL_REPLAY_MATCH_INDEX=str(setup['match_index']),BRAWL_ROLLBACK_START=str(setup['start_frame']-1),
           BRAWL_ROLLBACK_TRACE=str(out/'trace.csv'),BRAWL_ROLLBACK_DISTANCE=str(distance),
           BRAWL_ROLLBACK_FRAMES=str(frames))
         print('Starting recorded match',name,flush=True)

@@ -182,6 +182,10 @@ void Configure() {
     if (!in || in.peek()!=EOF) throw std::runtime_error("rollback: input length mismatch");
     } else {session.mask=3;count=1000000000;}
     if(const char* countdown=std::getenv("BRAWL_REPLAY_COUNTDOWN")) {
+        // Stage constructors consume this seed before recorded start-state synchronization.
+        const char* index=std::getenv("BRAWL_REPLAY_MATCH_INDEX");
+        if(!index)throw std::runtime_error("rollback: recorded countdown requires its recorded match index");
+        session.matchIndex=static_cast<unsigned>(std::stoul(index));
         std::ifstream in(countdown,std::ios::binary);
         in.read(reinterpret_cast<char*>(session.recordedCountdown.data()),session.recordedCountdown.size());
         if(!in || in.peek()!=EOF)throw std::runtime_error("rollback: recorded countdown must contain exactly four gfPadStatus records");
@@ -418,7 +422,7 @@ void SeedCrossplayStage() {
     const char* seed=std::getenv("BRAWL_PROTOCOL_SEED");
     if(!seed) seed=std::getenv("BRAWL_CROSSPLAY_SEED");if(!seed) return;
     crossplayStageSeen=true;
-    std::seed_seq seq{uint32_t(std::strtoul(seed,nullptr,0)),session.live?session.matchIndex:0u,0x50502b31u};
+    std::seed_seq seq{uint32_t(std::strtoul(seed,nullptr,0)),session.matchIndex,0x50502b31u};
     uint32_t out[3];seq.generate(out,out+3);out[0]&=0x7fffffff;out[1]&=0x7fffffff;
     Memory::Write32(0x805A00BC,out[0]);Memory::Write32(0x805A0424,out[1]);Memory::Write32(0x8059FF58,out[2]);
     Memory::Write32(0x8059C668,0x10000);
