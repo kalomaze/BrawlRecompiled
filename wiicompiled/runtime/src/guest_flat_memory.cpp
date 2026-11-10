@@ -161,30 +161,11 @@ std::vector<GuardedRange>& DeferredRanges() {
     return ranges;
 }
 
-#if !defined(_WIN32)
-// Windows disambiguates a racing "unmapped touch" fault via VirtualQuery (did some other thread
-// already commit this 64 KiB block, and is it actually accessible enough to satisfy this access).
-// mprotect has no query counterpart, so this tracks the same fact ourselves: one bit per 64 KiB
-// block, set the first time this module ever commits it, checked-and-set under StateMutex() so
-// two threads racing on the same never-yet-committed block still report/commit exactly once.
-std::vector<uint8_t>& UnmappedCommittedBlocks() {
-    static std::vector<uint8_t> blocks(1u << 16, 0);  // 2^32 / 64 KiB
-    return blocks;
-}
-#endif
-
 std::atomic<uint32_t> g_countMmio{0};
 std::atomic<uint32_t> g_countEfb{0};
 std::atomic<uint32_t> g_countXGuard{0};
 std::atomic<uint32_t> g_countUnmapped{0};
 std::atomic<uint32_t> g_countUnmappedRegions{0};
-
-// Full register dumps for the first few committed regions. The one-line record
-// below is emitted for every region regardless; the dump is what the historical
-// checked path produced for an unmapped access, and it stays useful only while
-// the log is still readable - a pointer that walks a large stride would
-// otherwise bury the run in 65536 dumps.
-constexpr uint32_t kUnmappedCpuDumpLimit = 16;
 
 uint64_t RoundUp(uint64_t value, uint64_t alignment) {
     return (value + alignment - 1u) & ~(alignment - 1u);
@@ -575,35 +556,6 @@ void ReportFatalGuestFault(const char* category, uint32_t guestAddress, bool isW
     std::abort();
 }
 
-// Logged once per newly committed 64 KiB block since a silent commit would hide a wild guest pointer bug.
-// Called with StateMutex() released so the register dump (which reads guest memory) can't deadlock against it.
-void ReportUnmappedCommit(uint32_t guestAddress, uint64_t blockBase, bool isWrite,
-                          uint32_t regionOrdinal) {
-    RT_LOG(RT_TAG_MEMORY) << "WARNING unmapped guest touch: no mapped region for 0x" << std::hex
-              << std::uppercase << std::setw(8) << std::setfill('0') << guestAddress
-              << std::setfill(' ') << " (" << (isWrite ? "write" : "read")
-              << "); committed zero-filled block 0x" << blockBase << "-0x"
-              << (blockBase + kAllocationGranularity) << " active=0x"
-              << RecompMod::CurrentTranslatedExecutionAddress();
-    if (auto* cpu = TryGetCpuContext()) {
-        std::cerr << " pc=0x" << cpu->pc << " lr=0x" << cpu->lr << " r1=0x" << cpu->gpr[1];
-    }
-    std::cerr << std::dec << std::nouppercase << " region#" << regionOrdinal << std::endl;
-
-    if (regionOrdinal <= kUnmappedCpuDumpLimit) {
-        if (auto* cpu = TryGetCpuContext()) {
-            RT_LOG(RT_TAG_MEMORY) << "===== DUMPING CPU STATE (unmapped touch) =====" << std::endl;
-            SystemBridge::DumpCpuState(cpu);
-        }
-        if (regionOrdinal == kUnmappedCpuDumpLimit) {
-            RT_LOG(RT_TAG_MEMORY) << "further unmapped commits log the one-line record only; the "
-                         "shutdown summary reports the totals."
-                      << std::endl;
-        }
-    }
-    std::cerr.flush();
-}
-
 } // namespace
 
 bool IsActive() {
@@ -814,9 +766,8 @@ void LogFaultSummary() noexcept {
     }
     RT_LOG(RT_TAG_MEMORY) << "WARNING shutdown summary: " << counters.unmapped
               << " unmapped guest touches across " << counters.unmappedRegions
-              << " distinct 64 KiB regions were absorbed by on-demand commits. Each one is a "
-                 "guest pointer that addressed nothing; search the log for "
-                 "'[" RT_TAG_MEMORY "] WARNING unmapped guest touch' for the faulting addresses."
+              << " unmapped fault reports. Unmapped accesses are fatal; no backing RAM "
+                 "was allocated."
               << std::endl;
     RT_LOG(RT_TAG_MEMORY) << "shutdown summary: efb=" << counters.efb
               << " xguard=" << counters.xguard << " mmio=" << counters.mmio << std::endl;
@@ -943,52 +894,14 @@ bool HandleAccessViolation(void* faultAddress, bool isWrite) noexcept {
         return true;
     }
 
-    // 4) Unmapped address: commit the block on demand (reproducing the old zero-fill sparse-map behavior)
-    //    and report it, since a commit here means a wild guest pointer that would otherwise walk over silently.
-    const uint64_t blockBase = static_cast<uint64_t>(guestAddress) & ~(kAllocationGranularity - 1u);
+    // Unknown guest addresses are errors on every host. Do not manufacture RAM
+    // here: that conceals invalid pointers and makes flat and checked builds differ.
     g_countUnmapped.fetch_add(1, std::memory_order_relaxed);
-    bool committed = false;
-    {
-        std::lock_guard<std::mutex> lock(StateMutex());
-#if defined(_WIN32)
-        MEMORY_BASIC_INFORMATION mbi{};
-        if (VirtualQuery(g_base + blockBase, &mbi, sizeof(mbi)) == 0) return false;
-        if (mbi.State == MEM_COMMIT) {
-            // Another thread already committed this block: re-running the
-            // access succeeds. Any other committed-but-inaccessible state is
-            // not ours to fix - resuming would fault forever, so hand the
-            // exception to the crash reporter instead.
-            const bool writable = (mbi.Protect & (PAGE_READWRITE | PAGE_WRITECOPY |
-                                                  PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
-            const bool readable = writable || (mbi.Protect & (PAGE_READONLY | PAGE_EXECUTE_READ |
-                                                              PAGE_EXECUTE)) != 0;
-            return isWrite ? writable : readable;
-        }
-#else
-        // mprotect has no VirtualQuery counterpart to ask "is this block already committed and
-        // how", so this module tracks the same fact itself (UnmappedCommittedBlocks, checked and
-        // set under this same lock): once a block has been committed READ|WRITE by an earlier
-        // call here (this thread's or a racing one's), every subsequent fault on it is a no-op
-        // resume - there is no POSIX equivalent of "committed but insufficiently permissioned"
-        // for a block only this function ever touches.
-        const uint32_t blockIndex = static_cast<uint32_t>(blockBase / kAllocationGranularity);
-        if (UnmappedCommittedBlocks()[blockIndex] != 0) {
-            return true;
-        }
-#endif
-        if (!CommitPlaceholder(g_base + blockBase, kAllocationGranularity, kProtReadWrite)) {
-            return false;
-        }
-#if !defined(_WIN32)
-        UnmappedCommittedBlocks()[blockIndex] = 1;
-#endif
-        committed = true;
-    }
-    if (committed) {
-        const uint32_t ordinal = g_countUnmappedRegions.fetch_add(1, std::memory_order_relaxed) + 1u;
-        ReportUnmappedCommit(guestAddress, blockBase, isWrite, ordinal);
-    }
-    return true;
+    g_countUnmappedRegions.fetch_add(1, std::memory_order_relaxed);
+    ReportFatalGuestFault("Unmapped guest address", guestAddress, isWrite,
+                          "No guest memory region contains this address. Fix the invalid "
+                          "pointer or implement its verified hardware mapping.");
+    return false;
 }
 
 } // namespace GuestFlat
