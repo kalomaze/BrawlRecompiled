@@ -1,0 +1,75 @@
+Brawl Online rollback client integration
+
+This integration drives Brawl's complete gameplay loop through GekkoNet and
+restores selected guest memory plus the PowerPC CPU context during rollback.
+P+ controller samples are anchored to game frames. Setup barriers synchronize
+match settings, countdown inputs, and RNG state with a local client controller.
+
+Build dependency
+  Clone https://github.com/sarahkittyy/brawlonline.net separately and set the
+  CMake cache path BRAWL_ONLINE_SOURCE to that checkout. The default is a sibling
+  directory named brawlonline.net. The runtime builds its vendored GekkoNet with
+  application-provided transport (NO_ASIO_BUILD).
+  Reference revision: 9bb84b5aa56d170ec0293d50d1d1784b7051a602.
+  The Common/Logging shim adapts GekkoNet's Dolphin logging calls.
+
+Gameplay and snapshots
+  The runtime uses Brawl Online's selected heaps, static regions, and REL data.
+  Explicit marks in guest write paths track modified 64-byte blocks. A 16-frame
+  sparse snapshot history supports corrected predictions and retained restores.
+  The current store processes snapshot deltas serially.
+  crorc complements its second source operand. Strict floating-point compilation
+  preserves unordered guest comparisons, including P+ stage timers using NaNs.
+
+Client interface
+  BRAWL_ONLINE_IPC enables a Unix-domain control socket at an explicit path.
+  The controller supplies match setup through memory read/write commands and
+  releases the CSS, stage, synchronization, and start barriers. It can submit
+  controller samples and arm/disarm a live rollback session.
+  The control socket currently supports Linux. UDP transport uses a configured
+  loopback peer. Public authentication/matchmaking requires a separate controller.
+
+Recorded input and diagnostics
+  BRAWL_PROTOCOL_SEED: session seed, also set by the IPC seed command.
+  BRAWL_ROLLBACK_INPUT: BRPAD001 stream, four 64-byte P+ pad records per frame.
+  BRAWL_REPLAY_COUNTDOWN: 256 bytes containing held countdown pad records.
+  BRAWL_ROLLBACK_START / BRAWL_ROLLBACK_FRAMES: start boundary and frame budget.
+  BRAWL_ROLLBACK_DISTANCE: rollback test distance.
+  BRAWL_SNAPSHOT_MODE=delta: sparse snapshots with explicit write tracking.
+  BRAWL_SNAPSHOT_VERIFY=1: compare saves/restores with full reference copies.
+  BRAWL_ROLLBACK_TRACE: gameplay/input checksums and companion .snapshots.csv
+  operation metrics. Use VERIFY=0 when measuring normal save/restore latency.
+
+Validation
+  A replay controller must restore the recording's session settings, seed, setup
+  tasks, synchronization data, and countdown pads before advancing frame zero.
+  Compare final corrected gameplay/input checksums against the original .brep
+  recording. Timing comparisons use the same recording, sequential clients,
+  equal process priorities, and verification disabled.
+
+  Focused C++ tests are in runtime/tests: cr_logical_tests.cpp,
+  cr_float_tests.cpp, brawl_dirty_memory_tests.cpp, brawl_snapshot_store_tests.cpp,
+  and brawl_write_watch_tests.cpp. Compile each with runtime/include, C++17,
+  assertions enabled, and -pthread. Use strict floating point for cr_float_tests.
+  They cover CR truth tables, NaN comparisons, guest aliases, unsaved writes,
+  corrected predictions, sparse restores, retained snapshots, and eviction.
+
+To reproduce a recorded match, edit tools/rollback-repro/example.toml with your
+workspace, client, asset, and recording paths. The workspace contains the two
+checkouts, replay-corpus/match-001/game.brep, and prepared inputs under
+artifacts/replay-inputs/match-001/: inputs.brpad, metadata.json, and setup.json.
+These inputs must describe the same recording. The build directory needs its
+usual runtime assets and a Project+ user directory; the SD image is shared
+read-only. Python 3.11 or later and a running Wayland compositor are required.
+
+You can inspect the configuration before starting the clients:
+  python3 tools/rollback-repro/run_pipeline.py plan tools/rollback-repro/example.toml
+When it is ready, replace "plan" with "run". To keep the experiment in a
+persistent tmux session, use "launch" instead.
+
+The example performs paired 600-frame timing checks, then runs the complete
+recording in recomp. The paired stage requires the instrumented Brawl Online
+Dolphin build exposing PPR_REPLAY_ROLLBACK_BENCHMARK and the snapshot-accounting
+fields used by check_recorded_replay.py. To reproduce only the recomp match,
+remove the timing stage and retain full-recorded-match. The runner saves logs,
+checksums, and measurements under artifacts/<run.name>/.

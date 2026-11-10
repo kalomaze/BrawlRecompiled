@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 #include "hle_stubs.h"
 #include "memory.h"
 #include "hle/controller_status_contract.h"
@@ -90,6 +91,7 @@ void WritePadStatus(uint32_t base, const PADStatus& status) {
         status.err,
     });
     uint8_t* dst = Memory::GetPointer(base, guestStatus.size());
+    BrawlDirtyMemory::Mark(base,guestStatus.size());
     std::memcpy(dst, guestStatus.data(), guestStatus.size());
 }
 

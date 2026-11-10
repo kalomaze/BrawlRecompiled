@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 #include "det_clock.h"
 #include "ppc_runtime.h"
 // ppc_runtime.h re-exports the rest of the ISA package; the CR tier is pulled in
@@ -536,8 +537,10 @@ extern "C" void PPC_WriteSpr(uint32_t spr, uint32_t value)
                 uint8_t* lc = Memory::GetPointer(lcAddr, bytes);
                 if (mem != nullptr && lc != nullptr) {
                     if ((value & 0x10u) != 0) {
+                        BrawlDirtyMemory::Mark(lcAddr,bytes);
                         std::memcpy(lc, mem, bytes);  // LD: memory to locked cache
                     } else {
+                        BrawlDirtyMemory::Mark(memAddr,bytes);
                         std::memcpy(mem, lc, bytes);  // store: locked cache to memory
                         GxNotifyGuestRamDmaWrite(memAddr, bytes);
                     }
@@ -903,6 +906,7 @@ extern "C" int32_t memset_zero_32(int32_t address)
     try {
         // Try fast path: get direct pointer to memory
         uint8_t* ptr = Memory::GetPointer(static_cast<uint32_t>(address), 32);
+        BrawlDirtyMemory::Mark(static_cast<uint32_t>(address),32);
         std::memset(ptr, 0, 32);
     } catch (...) {
         // Fallback or MMIO (rare for dcbz): write using scalar helpers

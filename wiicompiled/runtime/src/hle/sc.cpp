@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 #include "hle_stubs.h"
 
 #include "console_identity.h"
@@ -103,6 +104,7 @@ extern "C" uint32_t SCGetProductCode_HLE()
     if (!Memory::Contains(kProductCodeAddress, size)) {
         return 0;
     }
+    BrawlDirtyMemory::Mark(kProductCodeAddress,size);
     std::memcpy(Memory::GetPointer(kProductCodeAddress, size),
                 productCode.c_str(), size);
     return kProductCodeAddress;

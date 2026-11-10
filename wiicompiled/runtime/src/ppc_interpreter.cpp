@@ -10,6 +10,14 @@
 // one per use, and here each register remembers which form its last write left and is converted at a use of the
 // other form, the same PPC_PsFromScalarInline / PPC_PsToScalarInline conversions translated code makes.
 #include "ppc_interpreter.h"
+#include "brawl_rollback.h"
+
+// Guest comparisons must preserve unordered results. P+ disables Dreamland's
+// wind with infinite timer bounds: their subtraction produces a NaN, which
+// must not compare equal to zero and start the hazard.
+#if defined(__FAST_MATH__) || (defined(__FINITE_MATH_ONLY__) && __FINITE_MATH_ONLY__ > 0)
+#error "The PowerPC interpreter requires strict floating-point semantics"
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -215,7 +223,14 @@ void ForgetVolatileForms(Frame& f) {
 bool Call(Frame& f, uint32_t target, uint32_t returnTo) {
     f.ctx->lr = returnTo;
     if (TranslatedFunctionRegistry::FindByAddressPtr(target) == nullptr && CanRun(target)) return false;
-    InvokeIndirectCpu(target, f.ctx);
+    if (target == 0x80017618u)
+        BrawlRollback::Run(f.ctx, [](CpuContext* ctx) { InvokeIndirectCpu(0x80017618u, ctx); });
+    else if (target == 0x8002A210u)
+        BrawlRollback::UpdateSystem(f.ctx, [](CpuContext* ctx) { InvokeIndirectCpu(0x8002A210u, ctx); });
+    else {
+        InvokeIndirectCpu(target, f.ctx);
+        if (target == 0x80029438u) BrawlRollback::AnchorPads();
+    }
     ForgetVolatileForms(f);
     return true;
 }
@@ -272,8 +287,31 @@ void Run(CpuContext* ctx, uint32_t entry) {
     const uint32_t returnAddress = ctx->lr;
     uint64_t executed = 0;
     const auto& tracePcs = TracePcs();
+    static thread_local unsigned rollbackLoopDepth=0;
+    static const bool rollbackEnabled=std::getenv("BRAWL_ROLLBACK_INPUT")!=nullptr || std::getenv("BRAWL_ONLINE_IPC")!=nullptr;
     for (;;) {
         const uint32_t pc = f.pc;
+        if(pc==0x809435F0u) BrawlRollback::SeedCrossplayStage();
+        // Brawl Online's complete main-loop boundary, including pad bookkeeping,
+        // render-side game writes and the application frame counter.
+        if(rollbackEnabled && pc==0x800171B4u && !rollbackLoopDepth) {
+            BrawlRollback::RunLoop(ctx,[](CpuContext* c) {
+                ++rollbackLoopDepth;Run(c,0x800171B4u);--rollbackLoopDepth;
+            });
+            for(auto& form:f.form) form=Form::Scalar;
+            continue;
+        }
+        if(rollbackLoopDepth && pc==0x80017508u) {
+            for(unsigned i=0;i<32;++i) SetScalar(f,i,Scalar(f,i));
+            g_instructions.fetch_add(executed,std::memory_order_relaxed);return;
+        }
+        if(rollbackLoopDepth && BrawlRollback::DrivesLoop()) {
+            if(pc==0x800172D0u) ctx->gpr[20]=1;
+            if(pc==0x8001730Cu) {
+                ctx->gpr[20]=1;
+                Memory::Write32(ctx->gpr[23]+0xFC,Memory::Read16(ctx->gpr[23]+0xF8));
+            }
+        }
         const uint32_t w = MemoryInline::FlatRead32(pc);
         ctx->pc = pc;
         ++executed;

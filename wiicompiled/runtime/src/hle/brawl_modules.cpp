@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 // Brawl's .rel modules (files/module/*.rel). The translation holds every module pre-linked at its own home address
 // above the game's MEM2 arena (projects/brawl/tools/build_modules.py), because the game itself loads many of them
 // at the same heap address (every stage, every fighter) and translated code needs one address per instruction.
@@ -165,6 +166,8 @@ bool LinkAtHome(uint32_t header, uint32_t gameBss) {
     if (!m->resident) {
         for (const auto& [offset, size] : HomeCodeSections(index)) GuestCodePatch::ClearRedirect(m->image + offset);
     }
+    BrawlDirtyMemory::Mark(m->image+keep,m->fixSize-keep);
+    BrawlDirtyMemory::Mark(m->bss,m->bssSize);
     std::memcpy(Memory::GetPointer(m->image + keep, m->fixSize - keep), pristine.data() + keep, m->fixSize - keep);
     std::memset(Memory::GetPointer(m->bss, m->bssSize ? m->bssSize : 4), 0, m->bssSize);
 

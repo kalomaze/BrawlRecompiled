@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 // Data/instruction/locked cache maintenance HLE.
 
 #include <cstdint>
@@ -115,6 +116,7 @@ void FillScreenPicture(uint32_t addr, uint32_t length)
         return;
     }
     // GX RGBA8: 4x4 tiles in rows, each 32 bytes of A,R then 32 bytes of G,B for its 16 texels.
+    BrawlDirtyMemory::Mark(addr,length);
     uint8_t* out = Memory::GetPointer(addr, length);
     for (uint32_t ty = 0; ty < kHeight / 4; ++ty) {
         for (uint32_t tx = 0; tx < kWidth / 4; ++tx, out += 64) {
@@ -194,6 +196,7 @@ bool CopyGuestRange(uint32_t dstAddr, uint32_t srcAddr, uint32_t len, const char
     try {
         auto* dst = ::Memory::GetPointer(dstAddr, len);
         auto* src = ::Memory::GetPointer(srcAddr, len);
+        BrawlDirtyMemory::Mark(dstAddr,len);
         std::memmove(dst, src, len);
         return true;
     } catch (const ::Memory::AccessViolation& e) {
@@ -217,6 +220,7 @@ extern "C" void DCZeroRange_HLE_801a16e4(CpuContext* ctx)
     const uint32_t alignedLen = AlignUp32((addr - alignedAddr) + len);
     try {
         auto* dst = ::Memory::GetPointer(alignedAddr, alignedLen);
+        BrawlDirtyMemory::Mark(alignedAddr,alignedLen);
         std::memset(dst, 0, alignedLen);
         GxNotifyGuestRamDmaWrite(alignedAddr, alignedLen);
     } catch (const ::Memory::AccessViolation& e) {

@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 #include "network_internal.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
@@ -991,6 +992,7 @@ int32_t HandleSslIoctlv(uint32_t cmd, const std::vector<IoVector>& in, const std
         }
         auto* data = Memory::GetPointer(in[1].address, in[1].size);
         SslSession& readSession = g_sslSessions[sslId];
+        BrawlDirtyMemory::Mark(in[1].address,in[1].size);
         const int32_t result = SslRead(readSession, data, in[1].size);
         if (result < 0 && result != SSL_ERR_RAGAIN && result != readSession.lastLoggedReadError) {
             readSession.lastLoggedReadError = result;

@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 // sdio.cpp - /dev/sdio/slot0, the Wii's SD card slot, over the image in sd_card.cpp.
 //
 // Host-controller ioctls and SD commands follow Dolphin's SDIOSlot0 (Source/Core/Core/IOS/SDIO/SDIOSlot0.cpp),
@@ -151,6 +152,7 @@ int32_t Transfer(const Request& request, bool write) {
     if (!length || !Memory::Contains(buffer, length)) return RET_FAIL;
     uint8_t* data = Memory::GetPointer(buffer, length);
     if (write) return SdCard::Write(offset, data, length) ? RET_OK : RET_FAIL;
+    BrawlDirtyMemory::Mark(buffer,length);
     if (!SdCard::Read(offset, data, length)) {
         RT_LOGF(RT_TAG_NAND, "[sd] read of %u bytes at 0x%llX failed\n", length, static_cast<unsigned long long>(offset));
         return RET_FAIL;
@@ -162,7 +164,7 @@ int32_t Transfer(const Request& request, bool write) {
 int32_t ExecuteCommand(uint32_t in, uint32_t out, uint32_t outLen) {
     Request request{};
     if (!ReadRequest(in, request)) return IPC_EINVAL;
-    if (out && outLen && Memory::Contains(out, outLen)) std::memset(Memory::GetPointer(out, outLen), 0, outLen);
+    if (out && outLen && Memory::Contains(out, outLen)) {BrawlDirtyMemory::Mark(out,outLen);std::memset(Memory::GetPointer(out, outLen), 0, outLen);}
     int32_t result = RET_OK;
     if (Trace()) {
         RT_LOGF(RT_TAG_NAND, "[sd] cmd %u arg 0x%08X blocks %u x %u addr 0x%08X\n", request.command, request.arg,

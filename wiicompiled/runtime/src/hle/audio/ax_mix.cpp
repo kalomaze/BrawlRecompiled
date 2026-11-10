@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 #include "ax_dsp.h"
 
 #include "ax_internal.h"
@@ -756,6 +757,7 @@ private:
                                   size_t byteCount) {
         if (const uint8_t* guest =
                 MixResolveRange(addr + static_cast<uint32_t>(guestOffset), byteCount)) {
+            BrawlDirtyMemory::Mark(addr+static_cast<uint32_t>(guestOffset),byteCount);
             for (size_t i = 0; i < byteCount; i += sizeof(uint16_t)) {
                 uint16_t value = 0;
                 std::memcpy(&value, guest + i, sizeof(value));
@@ -773,6 +775,7 @@ private:
                                   size_t byteCount) {
         if (uint8_t* guest =
                 MixResolveRange(addr + static_cast<uint32_t>(guestOffset), byteCount)) {
+            BrawlDirtyMemory::Mark(addr+static_cast<uint32_t>(guestOffset),byteCount);
             for (size_t i = 0; i < byteCount; i += sizeof(uint16_t)) {
                 BigEndian::Write16(
                     guest + i, *reinterpret_cast<const uint16_t*>(src + structOffset + i));
@@ -1254,6 +1257,7 @@ private:
         // even from the worker: its only reader, PushAudioBlock, runs after Audio_HLE_Tick
         // has joined the worker, so the guest never observes a half-written frame.
         if (uint8_t* host = MixResolveRange(lrAddr, pcm.size() * sizeof(int16_t))) {
+            BrawlDirtyMemory::Mark(lrAddr,pcm.size()*sizeof(int16_t));
             for (size_t i = 0; i < pcm.size(); ++i) {
                 BigEndian::Write16(host + i * sizeof(uint16_t), static_cast<uint16_t>(pcm[i]));
             }

@@ -1,0 +1,35 @@
+workspace = "/path/to/workspace"
+
+# Ordered experiment: preflight -> verification pair -> timing pair -> reports.
+# frames = 0 means the complete recorded match. No synthetic setup is used.
+[run]
+name = "recorded-match-001"
+matches = ["001"]
+frames = 600
+python = "/path/to/workspace/artifacts/online-loop-venv/bin/python"
+previous_metrics = "/path/to/workspace/artifacts/snapshot-sparse-live-profile-1/trace.match-1.csv.snapshots.csv"
+
+[environment]
+BRAWL_RECOMP_BUILD = "/path/to/workspace/BrawlRecompiled/wiicompiled/build-linux"
+PPHARNESS_DOLPHIN = "/path/to/workspace/brawlonline.net/dolphin/build-linux/Binaries/dolphin-emu-nogui"
+PPHARNESS_TEMPLATE = "/path/to/workspace/artifacts/dolphin-template"
+PPHARNESS_ISO = "/path/to/disc/RSBE01.wbfs"
+PPHARNESS_INSTANCES = "/path/to/workspace/artifacts/dolphin-instances"
+BRAWL_SHARED_SD = "/path/to/workspace/artifacts/online-loop-sd.raw"
+XDG_RUNTIME_DIR = "/tmp/brawl-wayland-1000"
+WAYLAND_DISPLAY = "brawl-wayland"
+PPHARNESS_DOLPHIN_PRIORITY = "normal"
+
+[[stages]]
+name = "timing"
+kind = "clients"
+engines = ["recomp", "dolphin"]
+schedule = "sequential"
+verify_snapshots = false
+purpose = "timing"
+
+# Complete the original recording after the paired prefix timing checks.
+[[stages]]
+name = "full-recorded-match"
+kind = "command"
+argv = ["/path/to/workspace/artifacts/online-loop-venv/bin/python", "/path/to/workspace/BrawlRecompiled/tools/rollback-repro/run_snapshot_replays.py", "--name", "recorded-match-001/full-recorded-match", "--matches", "001"]

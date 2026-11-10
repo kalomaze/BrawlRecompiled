@@ -139,6 +139,7 @@ inline double PpcLoadPairPsqFloatFromHostInline(const uint8_t* host)
 // packed FPR double -> host, guard already proven by the caller.
 inline void PpcStorePairPsqFloatToHostInline(uint8_t* host, double value)
 {
+    BrawlDirtyMemory::MarkHost(host,8);
 #if defined(__x86_64__)
     const __m128i lanes = PpcStorePairPsqFloatBitsLanesInline(
         _mm_castps_si128(PpcPsToM128Inline(value)));

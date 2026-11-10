@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 // NAND/ISFS HLE: the synchronous RVL NAND* library.
 //
 // Shared state and helpers live in nand_internal.h.
@@ -292,6 +293,7 @@ extern "C" int32_t NANDRead_HLE(uint32_t fileInfoPtr, uint32_t bufferPtr, uint32
         return NAND_RESULT_INVALID;
     }
 
+    BrawlDirtyMemory::Mark(bufferPtr,length);
     size_t bytesRead = std::fread(buffer, 1, length, handle->file);
     return static_cast<int32_t>(bytesRead);
 }

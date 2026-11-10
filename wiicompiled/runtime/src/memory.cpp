@@ -463,6 +463,7 @@ T ReadScalar(uint32_t address) {
 
 template <typename T>
 void WriteScalar(uint32_t address, T value) {
+    BrawlDirtyMemory::Mark(address,sizeof(T));
     if (RecompMod::HandleExecutableWrite(address, sizeof(T), static_cast<uint64_t>(value))) {
         return;
     }

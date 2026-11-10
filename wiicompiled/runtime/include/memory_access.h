@@ -2,6 +2,7 @@
 
 #include "guest_flat_memory.h"
 #include "memory.h"
+#include "brawl_dirty_memory.h"
 #include "recomp_mod_loader.h"
 
 #include <cstddef>
@@ -317,6 +318,7 @@ template <typename Packed>
 MKW_MEMORY_FORCE_INLINE bool WriteResolvedPairFast(
     uint8_t* host, uint32_t rangeOffset, Packed packed) {
     if (!host) return false;
+    BrawlDirtyMemory::MarkHost(host + rangeOffset,sizeof(Packed));
     const Packed swapped = MaybeByteSwap(packed);
     std::memcpy(host + rangeOffset, &swapped, sizeof(swapped));
     return true;
@@ -335,6 +337,7 @@ MKW_MEMORY_FORCE_INLINE bool WriteResolvedPair32(
 template <typename T>
 MKW_MEMORY_FORCE_INLINE bool WriteResolvedScalar(uint8_t* host, uint32_t rangeOffset, T value) {
     if (!host) return false;
+    BrawlDirtyMemory::MarkHost(host + rangeOffset,sizeof(T));
     if constexpr (sizeof(T) == 1) {
         host[rangeOffset] = static_cast<uint8_t>(value);
     } else {
@@ -396,7 +399,8 @@ MKW_MEMORY_FORCE_INLINE bool TryWriteGuestScalar(uint32_t address, T value) {
     } else if (!TryGetWritablePointerFast(address, sizeof(T), ptr)) [[unlikely]] {
         return false;
     }
-    if constexpr (sizeof(T) == 1) {
+    BrawlDirtyMemory::Mark(address,sizeof(T));
+        if constexpr (sizeof(T) == 1) {
         *ptr = static_cast<uint8_t>(value);
     } else {
         const T swapped = MaybeByteSwap(value);
@@ -409,6 +413,7 @@ template <typename T>
 inline bool WriteStackScalarFast(uint32_t address, T value) {
     uint8_t* ptr = nullptr;
     if (TryGetPointerFast(address, sizeof(T), ptr)) {
+        BrawlDirtyMemory::Mark(address,sizeof(T));
         if constexpr (sizeof(T) == 1) {
             *ptr = static_cast<uint8_t>(value);
         } else {
@@ -554,6 +559,7 @@ MKW_MEMORY_FORCE_INLINE T FlatLoad(uint32_t address) {
 
 template <typename T>
 MKW_MEMORY_FORCE_INLINE void FlatStore(uint32_t address, T value) {
+    BrawlDirtyMemory::Mark(address,sizeof(T));
     const T swapped = MaybeByteSwap(value);
     std::memcpy(MKW_FLAT_GUEST_BASE + address, &swapped, sizeof(T));
 }

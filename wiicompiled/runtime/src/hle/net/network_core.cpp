@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 #include "network_internal.h"
 
 #include "console_identity.h"
@@ -37,6 +38,7 @@ void CopyToGuest(uint32_t addr, const void* data, uint32_t size) {
     }
     uint8_t* out = Memory::GetPointer(addr, size);
     if (out) {
+        BrawlDirtyMemory::Mark(addr,size);
         std::memcpy(out, data, size);
     }
 }

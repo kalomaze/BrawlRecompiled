@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 #pragma once
 
 // AX/DSP HLE internals shared within this directory; ax_dsp.h is the public surface.
@@ -150,6 +151,7 @@ inline uint16_t MixRead16(uint32_t addr) { return MixReadBE<uint16_t>(addr); }
 inline uint32_t MixRead32(uint32_t addr) { return MixReadBE<uint32_t>(addr); }
 
 inline void MixWrite16(uint32_t addr, uint16_t value) {
+    BrawlDirtyMemory::Mark(addr,2);
     if (uint8_t* host = MixResolveRange(addr, sizeof(uint16_t))) {
         BigEndian::Write16(host, value);
         return;

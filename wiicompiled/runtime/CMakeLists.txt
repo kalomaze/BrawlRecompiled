@@ -211,6 +211,7 @@ set(MKW_TRANSLATED_PPC_FP_OPTIONS -fno-fast-math -ffp-contract=off)
 # native float math; network play needs them bit-identical on x86 and ARM, as the translated
 # code is.
 set(MKW_PPC_SEMANTIC_RUNTIME_SOURCES
+    "${CMAKE_CURRENT_LIST_DIR}/src/ppc_interpreter.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/ppc_helpers.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/fpu_helpers.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/ppc_quantized.cpp"

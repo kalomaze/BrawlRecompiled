@@ -75,6 +75,14 @@ function(mkw_configure_translated_target target)
 endfunction()
 
 add_library(mkw_runtime_common OBJECT ${SOURCES})
+set(BRAWL_ONLINE_SOURCE "${MKW_RUNTIME_SOURCE_DIR}/../../../brawlonline.net" CACHE PATH "Separate Brawl Online checkout providing GekkoNet")
+if(NOT EXISTS "${BRAWL_ONLINE_SOURCE}/dolphin/Source/Core/Core/Brawlback/include/gekkonet/GekkoLib/CMakeLists.txt")
+    message(FATAL_ERROR "Brawl Online GekkoNet is required. Clone brawlonline.net separately and set BRAWL_ONLINE_SOURCE to its checkout.")
+endif()
+set(NO_ASIO_BUILD ON CACHE BOOL "Use application transport" FORCE)
+add_subdirectory("${BRAWL_ONLINE_SOURCE}/dolphin/Source/Core/Core/Brawlback/include/gekkonet/GekkoLib" "${CMAKE_CURRENT_BINARY_DIR}/gekkonet")
+target_include_directories(GekkoNet PRIVATE "${MKW_RUNTIME_SOURCE_DIR}/third_party/gekkonet_compat")
+target_link_libraries(mkw_runtime_common PRIVATE GekkoNet)
 mkw_configure_object_target(mkw_runtime_common)
 target_compile_features(mkw_runtime_common PRIVATE cxx_std_20)
 target_compile_definitions(mkw_runtime_common PRIVATE
@@ -191,6 +199,7 @@ if(MKW_HAVE_RETRO_REWIND)
 endif()
 
 function(mkw_configure_product target)
+    target_link_libraries(${target} PRIVATE GekkoNet)
     target_sources(${target} PRIVATE $<TARGET_OBJECTS:mkw_runtime_common>)
     # Startup CPU check. Must stay a separate object library so it keeps the
     # plain baseline ISA while everything around it is built for x86-64-v3.

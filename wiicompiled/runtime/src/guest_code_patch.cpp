@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 // guest_code_patch.cpp - routes translated functions whose guest code a mod changed at run time to the interpreter.
 // See include/guest_code_patch.h.
 
@@ -266,6 +267,7 @@ void Reapply(uint32_t start, uint32_t end) {
         }    }
     if (writes.empty()) return;
     for (const auto& [address, value] : writes) {  // through the write trap, as the code handler's own stores go
+        BrawlDirtyMemory::Mark(address,4);
         std::memcpy(Memory::GetPointer(address, 4), &value, 4);
         NoteWrite(address);
     }
