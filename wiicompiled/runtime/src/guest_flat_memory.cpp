@@ -730,17 +730,35 @@ void RegisterExecutableRange(uint32_t start, uint32_t end) {
     ApplyExecutableProtectionLocked();
 }
 
-void ReprotectExecutablePage(uint32_t address) {
-    if (RequiresCheckedAccess() || g_base == nullptr) return;
+void ReprotectExecutablePages(const uint32_t* addresses, size_t count) {
+    if (RequiresCheckedAccess() || g_base == nullptr || !count) return;
+    if (!std::is_sorted(addresses, addresses + count))
+        throw std::runtime_error("executable protection pages must be sorted");
     std::lock_guard<std::mutex> lock(StateMutex());
-    const uint64_t page = static_cast<uint64_t>(address) & ~(kHostPageSize - 1u);
-    const bool inside = std::any_of(ExecutableRanges().begin(), ExecutableRanges().end(), [&](const GuardedRange& range) {
-        return page < range.end && page + kHostPageSize > range.start;
-    });
-    const uint32_t pageIndex = static_cast<uint32_t>(page >> 12);
-    if (inside && ExecutableProtectedPages()[pageIndex] == 0 && ProtectRange(g_base + page, kHostPageSize, kProtRead)) {
-        ExecutableProtectedPages()[pageIndex] = 1;
+    uint64_t first = 0, end = 0;
+    auto flush = [&] {
+        if (first == end) return;
+        if (!ProtectRange(g_base + first, end - first, kProtRead))
+            throw std::runtime_error("could not restore executable page protection");
+        for (uint64_t page = first; page < end; page += kHostPageSize)
+            ExecutableProtectedPages()[page >> 12] = 1;
+        first = end = 0;
+    };
+    for (size_t i = 0; i < count; ++i) {
+        const uint64_t page = static_cast<uint64_t>(addresses[i]) & ~(kHostPageSize - 1u);
+        const bool inside = std::any_of(ExecutableRanges().begin(), ExecutableRanges().end(), [&](const GuardedRange& range) {
+            return page < range.end && page + kHostPageSize > range.start;
+        });
+        if (!inside || ExecutableProtectedPages()[page >> 12] != 0) continue;
+        if (first != end && page != end) flush();
+        if (first == end) first = page;
+        end = page + kHostPageSize;
     }
+    flush();
+}
+
+void ReprotectExecutablePage(uint32_t address) {
+    ReprotectExecutablePages(&address, 1);
 }
 
 FaultCounters Counters() {

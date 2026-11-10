@@ -4,34 +4,54 @@
 #include <random>
 #include <iostream>
 using BrawlRollback::SnapshotStore;
-int main(){
-    SnapshotStore store;std::map<int,std::vector<uint8_t>> reference;
-    std::vector<uint8_t> ram(131072+13);std::mt19937 random(713);
-    auto save=[&](int frame){
-        store.Save(frame,ram.size(),[&](size_t offset,uint8_t* out,size_t count){std::memcpy(out,ram.data()+offset,count);});
-        reference[frame]=ram;
-        while(reference.rbegin()->first-reference.begin()->first>=16)reference.erase(reference.begin());
-        assert(store.states.size()==reference.size());
-        for(const auto& [f,bytes]:reference){assert(store.Materialize(f)==bytes);assert(store.View(f)==bytes);}
+int main() {
+    SnapshotStore store;
+    std::map<int,std::vector<uint8_t>> reference;
+    std::vector<uint8_t> ram(1024*1024+13);
+    std::mt19937 random(713);
+    auto read=[&](size_t o,uint8_t* out,size_t n){std::memcpy(out,ram.data()+o,n);};
+    auto write=[&](size_t o,const uint8_t* in,size_t n){std::memcpy(ram.data()+o,in,n);};
+    int anchor=0;
+    store.Save(0,ram.size(),read);reference[0]=ram;
+    auto save=[&](int frame) {
+        std::vector<uint8_t> dirty((ram.size()+63)/64);
+        for(size_t i=0;i<200;++i){size_t o=random()%ram.size();ram[o]^=1;dirty[o/64]=1;}
+        ram.back()^=7;dirty.back()=1;
+        std::vector<uint32_t> keys;for(size_t i=0;i<dirty.size();++i)if(dirty[i])keys.push_back(uint32_t(i));
+        store.Save(frame,ram.size(),read,&keys,anchor);anchor=frame;reference[frame]=ram;
+        while(reference.size()>16)reference.erase(reference.begin());
+        assert(store.Count()==reference.size());
+        for(const auto& [f,bytes]:reference)assert(store.Materialize(f)==bytes);
     };
-    save(-1);
-    for(int frame=0;frame<300;++frame){
-        for(int i=0;i<7;++i)ram[random()%ram.size()]=uint8_t(random());
+    for(int frame=1;frame<120;++frame) {
         save(frame);
-        if(frame>8 && frame%3==0){
-            int back=frame-int(random()%7)-1;ram=store.Materialize(back);
-            // Correct a prediction, then overwrite already-saved future frames.
-            for(int f=back;f<=frame;++f){
-                for(int i=0;i<3;++i)ram[random()%ram.size()]^=uint8_t(random());
-                save(f);
-            }
+        if(frame>4 && frame%3==0) {
+            const int back=frame-3;
+            std::vector<uint8_t> dirty((ram.size()+63)/64);
+            ram[64]^=9;dirty[1]=1;
+            store.Restore(back,anchor,{1},read,write);anchor=back;
+            assert(ram==reference[back]);
+            reference.erase(reference.upper_bound(back),reference.end());
+            assert(!store.Contains(frame)); // Dolphin discards the predicted future.
+            for(int f=back+1;f<=frame;++f)save(f);
         }
     }
-    SnapshotStore gaps;std::vector<uint8_t> x(129,0);
-    auto put=[&](int f){gaps.Save(f,x.size(),[&](size_t o,uint8_t* p,size_t n){std::memcpy(p,x.data()+o,n);});};
-    put(0);x[128]=9;put(4);x[0]=7;put(2);
-    assert(gaps.Materialize(4)[0]==0 && gaps.Materialize(4)[128]==9);
-    x[128]=5;put(0);assert(gaps.Materialize(2)[128]==9 && gaps.Materialize(4)[0]==0);
-    bool rejected=false;try{gaps.Materialize(99);}catch(const std::runtime_error&){rejected=true;}assert(rejected);
-    std::cout<<"Snapshot eviction, sparse saves, corrected predictions, base replacement, tails and all retained full images passed\n";
+    bool rejected=false;
+    try {store.Materialize(-99);}catch(const std::runtime_error&){rejected=true;}
+    assert(rejected);
+    // Destruction and move/reset must join a pending base eviction.
+    for(int iteration=0;iteration<10;++iteration) {
+        SnapshotStore lifecycle;
+        for(int f=0;f<40;++f){ram[0]=uint8_t(f);lifecycle.Save(f,ram.size(),read);}
+        SnapshotStore moved=std::move(lifecycle);
+        assert(moved.Materialize(39)==ram);
+        moved=SnapshotStore{};
+    }
+    BrawlRollback::SnapshotJobs jobs;
+    bool workerError=false;
+    try {jobs.Run([](size_t i){if(i==2)throw std::runtime_error("worker test");});}
+    catch(const std::runtime_error&){workerError=true;}
+    assert(workerError);
+    jobs.Run([cursor=size_t{0}](size_t) mutable {assert(cursor==0);++cursor;});
+    std::cout<<"Raw snapshots: ring eviction, sparse saves, unsaved writes, rollback truncation, corrected resimulation, partial tails and pool lifecycle passed\n";
 }

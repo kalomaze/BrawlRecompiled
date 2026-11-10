@@ -1,6 +1,7 @@
 // Gameplay rollback prototype. Pad anchoring and region discovery ported from
 // Brawl Online GameplayRollback.cpp / gp-v29 (GPL-2.0-or-later).
 #include "brawl_rollback.h"
+#include "det_clock.h"
 #include "brawl_snapshot_store.h"
 #include "brawl_write_watch.h"
 #include <memory>
@@ -31,6 +32,7 @@
 namespace BrawlRollback {
 namespace {
 struct Range { uint32_t addr, size; };
+struct BackingRange {size_t offset,end;uint8_t* data;};
 #include "brawl_rollback_regions.inc"
 using Pads = std::array<uint8_t, 256>;
 struct Snapshot {
@@ -50,6 +52,7 @@ struct Session {
     Pads current{}, recordedCountdown{};
     bool hasRecordedCountdown=false;
     std::vector<Range> ranges;
+    std::vector<BackingRange> backing;
     std::array<Snapshot, 16> snapshots;
     SnapshotStore incremental;
     std::unique_ptr<WriteWatch> writeWatch;
@@ -134,10 +137,16 @@ void DiscoverRegions() {
         }
     }
     session.ranges=std::move(merged);
+    session.backing.clear();
+    size_t packedOffset=0;
+    for(const auto r:session.ranges) {
+        session.backing.push_back({packedOffset,packedOffset+r.size,Memory::GetPointer(r.addr,r.size)});
+        packedOffset+=r.size;
+    }
     if(session.trackWrites) {
         session.writeWatch=std::make_unique<WriteWatch>(reinterpret_cast<uintptr_t>(MKW_FLAT_GUEST_BASE));size_t packed=0;
-        // Fast inversion for retained HLE pointers; selected-range entries below
-        // remain a fallback for separately owned allocations.
+        // Register the two RAM backing allocations once for retained HLE pointers.
+        // WriteWatch::Add reuses these mappings for their selected subranges.
         BrawlDirtyMemory::hosts.push_back({reinterpret_cast<uintptr_t>(Memory::GetPointer(Memory::kMem1CachedBase,Memory::kMem1Size)),Memory::kMem1Size,Memory::kMem1CachedBase});
         BrawlDirtyMemory::hosts.push_back({reinterpret_cast<uintptr_t>(Memory::GetPointer(Memory::kMem2CachedBase,Memory::kMem2Size)),Memory::kMem2Size,Memory::kMem2CachedBase});
         for(auto r:session.ranges){
@@ -194,9 +203,9 @@ void Configure() {
     session.trace=std::fopen(tracePath.c_str(),"w");
     session.snapshotMetrics=std::fopen((tracePath+".snapshots.csv").c_str(),"w");
     if(!session.snapshotMetrics)throw std::runtime_error("cannot open snapshot metrics");
-    std::fprintf(session.snapshotMetrics,"event,frame,selected_ram_bytes,state_payload_bytes,delta_history_bytes,resident_bytes,duration_ns,verified,ram_bytes_examined,dirty_metadata_bytes,tracking_capture_ns,tracking_reset_ns\n");
+    std::fprintf(session.snapshotMetrics,"event,frame,selected_ram_bytes,state_payload_bytes,delta_history_bytes,resident_bytes,duration_ns,verified,ram_bytes_examined,dirty_metadata_bytes,tracking_capture_ns,tracking_reset_ns,index_ns,jobs_ns,max_worker_ns,finish_ns,eviction_wait_ns\n");
     if (!session.trace) throw std::runtime_error("rollback: cannot open trace");
-    std::fprintf(session.trace,"session_frame,game_frame,rng,rng_other,libc_rng,region_hash,resimulation,gameplay_hash,fighters,input_hash,expected_input_hash\n");
+    std::fprintf(session.trace,"session_frame,game_frame,rng,rng_other,libc_rng,region_hash,resimulation,gameplay_hash,fighters,input_hash,expected_input_hash,completed_ns,advance_ns,pace_ns\n");
     std::fprintf(stderr,"[rollback] %s input, limit %u\n",path?path:"live controller",count);
 }
 uint32_t Hash() {
@@ -245,12 +254,35 @@ uint32_t GameplayHash() {
     const uint32_t words[]={Read(0x901812A4),Read(0x805A00BC),Read(0x805A0424),Read(0x8059FF58),Crc(f.data(),sizeof(f))};
     return Crc(words,sizeof(words));
 }
+// Each worker owns its range cursor. Most consecutive granules belong to the
+// same allocation; crossing a selected-region boundary resolves the next one.
+template<bool Write> void TransferPacked(size_t& cursor,size_t offset,uint8_t* bytes,size_t count) {
+    if(!count)return;
+    const auto& current=session.backing.at(cursor);
+    auto at=session.backing.begin()+cursor;
+    if(offset<current.offset || offset>=current.end)
+        at=std::lower_bound(session.backing.begin(),session.backing.end(),offset,
+            [](const BackingRange& r,size_t o){return r.end<=o;});
+    while(count) {
+        if(at==session.backing.end() || offset<at->offset)throw std::runtime_error("snapshot outside packed memory");
+        const size_t n=std::min(count,at->end-offset);
+        auto* guest=at->data+offset-at->offset;
+        if(n==64) {
+            if constexpr(Write)std::memcpy(guest,bytes,64);else std::memcpy(bytes,guest,64);
+        } else {
+            if constexpr(Write)std::memcpy(guest,bytes,n);else std::memcpy(bytes,guest,n);
+        }
+        bytes+=n;offset+=n;count-=n;
+        if(count)++at;
+    }
+    cursor=size_t(at-session.backing.begin());
+}
 void Save(int frame,CpuContext* ctx) {
     const auto started=std::chrono::steady_clock::now();
     auto& s=session.snapshots[(frame+16)%16];
     size_t total=0;for(auto r:session.ranges)total+=r.size;
-    if(s.frame==frame && !session.udpPort && (session.regionHash || session.verifySnapshots)) {
-        const auto& old=session.fullSnapshots?s.bytes:session.incremental.View(frame);
+    if(s.frame==frame && !session.udpPort && (session.verifySnapshots || (session.regionHash && (session.fullSnapshots || session.incremental.Contains(frame))))) {
+        const auto& old=(session.fullSnapshots || session.verifySnapshots)?s.bytes:session.incremental.View(frame);
         size_t pos=0;unsigned differences=0;
         for(auto r:session.ranges) {
             if(std::memcmp(Memory::GetPointer(r.addr,r.size),old.data()+pos,r.size))++differences;
@@ -267,22 +299,13 @@ void Save(int frame,CpuContext* ctx) {
     }
     size_t payload=total+sizeof(CpuContext),resident=0;
     if(!session.fullSnapshots) {
-        size_t range=0,begin=0;
-        auto read=[&](size_t offset,uint8_t* out,size_t count){
-            while(count) {
-                while(offset>=begin+session.ranges[range].size){begin+=session.ranges[range++].size;}
-                const auto r=session.ranges[range];const size_t length=std::min(count,begin+r.size-offset);
-                std::memcpy(out,Memory::GetPointer(r.addr+offset-begin,length),length);
-                out+=length;offset+=length;count-=length;
-            }
-        };
-        std::vector<uint8_t> dirty;
-        if(session.writeWatch && !session.incremental.states.empty())dirty=session.writeWatch->Capture(total);
-        session.incremental.Save(frame,total,read,dirty.empty()?nullptr:&dirty,session.dirtyAnchor);
-        auto at=std::find_if(session.incremental.states.begin(),session.incremental.states.end(),[&](const auto& state){return state.frame==frame;});
-        payload=(at==session.incremental.states.begin()?total:at->delta.size()*sizeof(SnapshotStore::Block))+sizeof(CpuContext);
+        auto read=[cursor=size_t{0}](size_t offset,uint8_t* out,size_t count) mutable {TransferPacked<false>(cursor,offset,out,count);};
+        std::vector<uint32_t> dirty;
+        if(session.writeWatch && !session.incremental.Empty())dirty=session.writeWatch->Capture(total,session.incremental.Jobs());
+        session.incremental.Save(frame,total,read,session.writeWatch?&dirty:nullptr,session.dirtyAnchor);
+        payload=session.incremental.lastPayload+sizeof(CpuContext);
         resident=session.incremental.ResidentBytes()+sizeof(session.snapshots);
-        if(at!=session.incremental.states.begin()){session.snapshotPayload+=payload;++session.snapshotDeltaSaves;}
+        if(session.incremental.Count()>1){session.snapshotPayload+=payload;++session.snapshotDeltaSaves;}
         if(session.verifySnapshots && session.incremental.View(frame)!=s.bytes) {
             const auto& image=session.incremental.View(frame);size_t packed=0;
             for(auto r:session.ranges) {
@@ -294,15 +317,18 @@ void Save(int frame,CpuContext* ctx) {
             }
         }
     } else for(const auto& snapshot:session.snapshots)resident+=snapshot.bytes.capacity()+sizeof(snapshot);
-    if(session.writeWatch){session.writeWatch->Reset();session.dirtyAnchor=frame;}
+    if(session.writeWatch)session.writeWatch->Reset();session.dirtyAnchor=frame;
     ++session.saves;
     const auto ns=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-started).count();
     session.snapshotSaveNs+=ns;
-    std::fprintf(session.snapshotMetrics,"save,%d,%zu,%zu,%zu,%zu,%lld,%d,%zu,%zu,%llu,%llu\n",frame,total,payload,
+    std::fprintf(session.snapshotMetrics,"save,%d,%zu,%zu,%zu,%zu,%lld,%d,%zu,%zu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",frame,total,payload,
         session.incremental.DeltaBytes(),resident,(long long)ns,session.verifySnapshots,session.fullSnapshots?total:session.incremental.lastReadBytes,
         session.writeWatch?session.writeWatch->metadataBytes:0,
         (unsigned long long)(session.writeWatch?session.writeWatch->captureNs:0),
-        (unsigned long long)(session.writeWatch?session.writeWatch->resetNs:0));
+        (unsigned long long)(session.writeWatch?session.writeWatch->resetNs:0),
+        (unsigned long long)session.incremental.lastIndexNs,(unsigned long long)session.incremental.lastJobsNs,
+        (unsigned long long)session.incremental.lastWorkerNs,(unsigned long long)session.incremental.lastFinishNs,
+        (unsigned long long)session.incremental.lastEvictWaitNs);
 }
 void Load(int frame,CpuContext* ctx) {
     const auto started=std::chrono::steady_clock::now();
@@ -310,23 +336,12 @@ void Load(int frame,CpuContext* ctx) {
     if(s.frame!=frame) throw std::runtime_error("rollback: snapshot outside ring");
     size_t total=0;for(auto r:session.ranges)total+=r.size;
     size_t examined=total,written=total;
-    if(session.writeWatch && !session.fullSnapshots) {
-        auto dirty=session.writeWatch->Capture(total);
-        size_t readRange=0,readBegin=0,writeRange=0,writeBegin=0;
-        auto read=[&](size_t offset,uint8_t* out,size_t count){
-            while(count){
-                while(offset>=readBegin+session.ranges[readRange].size)readBegin+=session.ranges[readRange++].size;
-                auto r=session.ranges[readRange];size_t n=std::min(count,readBegin+r.size-offset);
-                std::memcpy(out,Memory::GetPointer(r.addr+offset-readBegin,n),n);offset+=n;out+=n;count-=n;
-            }
-        };
-        auto write=[&](size_t offset,const uint8_t* in,size_t count){
-            while(count){
-                while(offset>=writeBegin+session.ranges[writeRange].size)writeBegin+=session.ranges[writeRange++].size;
-                auto r=session.ranges[writeRange];size_t n=std::min(count,writeBegin+r.size-offset);
-                std::memcpy(Memory::GetPointer(r.addr+offset-writeBegin,n),in,n);offset+=n;in+=n;count-=n;
-            }
-        };
+    if(!session.fullSnapshots) {
+        std::vector<uint32_t> dirty;
+        if(session.writeWatch)dirty=session.writeWatch->Capture(total,session.incremental.Jobs());
+        else for(size_t i=0;i<(total+63)/64;++i)dirty.push_back(uint32_t(i));
+        auto read=[cursor=size_t{0}](size_t offset,uint8_t* out,size_t count) mutable {TransferPacked<false>(cursor,offset,out,count);};
+        auto write=[cursor=size_t{0}](size_t offset,const uint8_t* in,size_t count) mutable {TransferPacked<true>(cursor,offset,const_cast<uint8_t*>(in),count);};
         session.incremental.Restore(frame,session.dirtyAnchor,std::move(dirty),read,write);
         examined=session.incremental.lastRestoreReadBytes;written=session.incremental.lastRestoreWriteBytes;
     } else {
@@ -343,13 +358,16 @@ void Load(int frame,CpuContext* ctx) {
         }
     }
     *ctx=s.cpu;++session.loads;
-    if(session.writeWatch){session.writeWatch->Reset();session.dirtyAnchor=frame;}
+    if(session.writeWatch)session.writeWatch->Reset();session.dirtyAnchor=frame;
     const auto ns=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-started).count();
     session.snapshotLoadNs+=ns;
-    std::fprintf(session.snapshotMetrics,"load,%d,%zu,%zu,%zu,%zu,%lld,%d,%zu,%zu,%llu,%llu\n",frame,total,written,session.incremental.DeltaBytes(),
+    std::fprintf(session.snapshotMetrics,"load,%d,%zu,%zu,%zu,%zu,%lld,%d,%zu,%zu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",frame,total,written,session.incremental.DeltaBytes(),
         session.incremental.ResidentBytes()+sizeof(session.snapshots),(long long)ns,session.verifySnapshots,examined,session.writeWatch?session.writeWatch->metadataBytes:0,
         (unsigned long long)(session.writeWatch?session.writeWatch->captureNs:0),
-        (unsigned long long)(session.writeWatch?session.writeWatch->resetNs:0));
+        (unsigned long long)(session.writeWatch?session.writeWatch->resetNs:0),
+        (unsigned long long)session.incremental.lastIndexNs,(unsigned long long)session.incremental.lastJobsNs,
+        (unsigned long long)session.incremental.lastWorkerNs,(unsigned long long)session.incremental.lastFinishNs,
+        (unsigned long long)session.incremental.lastEvictWaitNs);
 }
 } // namespace
 
@@ -426,6 +444,35 @@ void CrossplaySetup() {
         synced=true;std::fprintf(stderr,"[crossplay] initial barrier; stage=%u\n",Memory::Read16(Read(gg+8)+0x1A));
     }
 }
+// Brawl Online GameplaySession::ResimHide. Effects must still draw because
+// nw4r::ef frees dead effects during drawing; only model layers and shadows hide.
+class ResimHide {
+    struct Cleared {uint32_t address;uint8_t before,written;};
+    std::array<Cleared,10> cleared{};
+    size_t count=0;
+public:
+    explicit ResimHide(bool hide) {
+        if(!hide)return;
+        const uint32_t root=Read(0x8059FF80);
+        if(!Memory::Contains(root+0x399,0x18*9) || !Memory::Contains(root+0x464))
+            throw std::runtime_error("rollback: scene root unavailable during resimulation");
+        auto clear=[&](uint32_t address,uint8_t bit) {
+            const auto before=Memory::Read8(address);
+            if(!(before&bit))return;
+            const auto written=uint8_t(before&~bit);
+            cleared[count++]={address,before,written};
+            Memory::Write8(address,written);
+        };
+        for(unsigned layer=0;layer<9;++layer)clear(root+0x399+0x18*layer,0x80);
+        clear(root+0x464,0x40);
+    }
+    ~ResimHide() {
+        for(size_t i=0;i<count;++i) {
+            const auto& c=cleared[i];
+            if(Memory::Read8(c.address)==c.written)Memory::Write8(c.address,c.before);
+        }
+    }
+};
 bool DrivesLoop() {return session.active;}
 void Run(CpuContext* ctx,GuestFunction gameProc) {gameProc(ctx);}
 void RunLoop(CpuContext* ctx,GuestFunction gameProc) {
@@ -491,6 +538,8 @@ void RunLoop(CpuContext* ctx,GuestFunction gameProc) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     } while(true);
     bool advanced=false,ended=session.stopRequested;
+    unsigned advanceCount=0,advanceIndex=0;
+    for(int i=0;i<count;++i)if(events[i]->type==GekkoAdvanceEvent)++advanceCount;
     for(int i=0;i<count;++i) {
         auto& e=*events[i];
         if(e.type==GekkoLoadEvent) Load(e.data.load.frame,ctx);
@@ -519,11 +568,24 @@ void RunLoop(CpuContext* ctx,GuestFunction gameProc) {
             }
             BrawlOnline::WaitForGo();
             session.resimulating=e.data.adv.rolling_back;
-            AnchorPads();gameProc(ctx);++session.advances;session.resimulating=false;
+            const auto pacingStart=DetClock::PacingNanoseconds();
+            const auto advanceStart=std::chrono::steady_clock::now();
+            DetClock::SetRollbackResimulating(session.resimulating);
+            {
+                ResimHide hide(session.resimulating && advanceIndex+2<advanceCount);
+                AnchorPads();gameProc(ctx);
+            }
+            ++advanceIndex;++session.advances;
+            DetClock::SetRollbackResimulating(false);
+            session.resimulating=false;
+            const auto advanceEnd=std::chrono::steady_clock::now();
             std::fprintf(session.trace,"%d,%u,%08x,%08x,%08x,%08x,%d,%08x,",e.data.adv.frame,
                 Read(0x901812A4),Read(0x805A00BC),Read(0x805A0424),Read(0x8059FF58),session.regionHash?Hash():0,e.data.adv.rolling_back,GameplayHash());
             for(auto f:FighterState()) for(auto word:f) std::fprintf(session.trace,"%08x",word);
-            std::fprintf(session.trace,",%08x,%08x\n",Crc(session.current.data(),256),session.live?0:Crc(session.input.at(e.data.adv.frame).data(),256));
+            std::fprintf(session.trace,",%08x,%08x,%llu,%llu,%llu\n",Crc(session.current.data(),256),session.live?0:Crc(session.input.at(e.data.adv.frame).data(),256),
+                (unsigned long long)std::chrono::duration_cast<std::chrono::nanoseconds>(advanceEnd.time_since_epoch()).count(),
+                (unsigned long long)std::chrono::duration_cast<std::chrono::nanoseconds>(advanceEnd-advanceStart).count(),
+                (unsigned long long)(DetClock::PacingNanoseconds()-pacingStart));
         }
     }
     auto** status=gekko_session_events(session.gekko,&count);

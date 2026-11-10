@@ -107,6 +107,8 @@ void RegisterExecutableRange(uint32_t start, uint32_t end);
 // Write-protects again the page holding `address` (a guarded code page the trap opened on its first write), so the
 // next write to it is noticed too. Only pages fully inside a registered range.
 void ReprotectExecutablePage(uint32_t address);
+// Sorted guest pages; adjacent pages share one protection operation.
+void ReprotectExecutablePages(const uint32_t* addresses, size_t count);
 
 FaultCounters Counters();
 

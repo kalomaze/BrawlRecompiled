@@ -40,6 +40,7 @@ std::atomic<bool> g_anyDirty{false};                                            
 std::mutex g_mutex;
 std::vector<std::pair<uint32_t, uint32_t>> g_ranges;                              // guarded code, [start, end)
 std::unordered_map<uint32_t, std::unique_ptr<std::array<uint8_t, kPage>>> g_pristine;  // by page address
+std::unordered_map<uint32_t, std::unique_ptr<std::array<uint8_t, kPage>>> g_observed; // last synchronized contents
 std::unordered_set<uint32_t> g_dirty;                                              // page addresses written since Sync
 std::unordered_map<uint32_t, uint32_t> g_sites;  // every word a mod patched, and what it wrote there (guest order)
 std::unordered_set<uint32_t> g_reported;                                           // functions logged as patched
@@ -65,12 +66,6 @@ bool IsGuardedLocked(uint32_t address) {
 bool IsGuardedPageLocked(uint32_t page) {
     return std::any_of(g_ranges.begin(), g_ranges.end(),
                        [&](const auto& range) { return page < range.second && page + kPage > range.first; });
-}
-
-bool IsEdgePageLocked(uint32_t page) {
-    return IsGuardedPageLocked(page) &&
-           std::none_of(g_ranges.begin(), g_ranges.end(),
-                        [&](const auto& range) { return page >= range.first && page + kPage <= range.second; });
 }
 
 // The translated function holding `address`: the last start at or below it.
@@ -100,6 +95,8 @@ void SnapshotLocked(uint32_t start, uint32_t end) {
         auto& slot = g_pristine[page];
         if (!slot) slot = std::make_unique<std::array<uint8_t, kPage>>();
         if (Memory::Contains(page, kPage)) std::memcpy(slot->data(), Memory::GetPointer(page, kPage), kPage);
+        const auto observed = g_observed.find(page);
+        if (observed != g_observed.end()) *observed->second = *slot;
     }
 }
 
@@ -168,8 +165,9 @@ bool NoteWrite(uint32_t address) {
 
 namespace {
 
-// An edge page's data stores would trap again after every Sync (and Sync follows every patched call): it stays open,
-// compared at each Sync, until the frame's SyncFrame guards it again.
+// Keep written code pages open until SyncFrame. Every intervening Sync still
+// checks them, so a later hook's write is detected even without another fault.
+// Rearming after every patched call repeatedly trapped unchanged Gecko stores.
 void SyncPages(bool frame) {
     if (!g_anyDirty.load(std::memory_order_acquire)) return;
     std::vector<uint32_t> pages;
@@ -177,18 +175,20 @@ void SyncPages(bool frame) {
         std::lock_guard<std::mutex> lock(g_mutex);
         if (g_dirty.empty()) return;
         pages.assign(g_dirty.begin(), g_dirty.end());
-        g_dirty.clear();
-        for (const uint32_t page : pages) {
-            if (!frame && IsEdgePageLocked(page)) g_dirty.insert(page);
-        }
+        if (frame) g_dirty.clear();
         g_anyDirty.store(!g_dirty.empty(), std::memory_order_release);
         for (const uint32_t page : pages) {
             const auto found = g_pristine.find(page);
             if (found == g_pristine.end() || !Memory::Contains(page, kPage)) continue;
             const uint8_t* now = Memory::GetPointer(page, kPage);
             const uint8_t* was = found->second->data();
+            auto& previous = g_observed[page];
+            if (!previous) previous = std::make_unique<std::array<uint8_t, kPage>>(*found->second);
+            auto& observed = *previous;
+            if (std::memcmp(now, observed.data(), kPage) == 0) continue;
             for (uint32_t offset = 0; offset < kPage; offset += 4) {
-                if (std::memcmp(now + offset, was + offset, 4) == 0) continue;
+                if (std::memcmp(now + offset, observed.data() + offset, 4) == 0 ||
+                    std::memcmp(now + offset, was + offset, 4) == 0) continue;
                 const uint32_t address = page + offset;
                 if (!IsGuardedLocked(address)) continue;
                 std::memcpy(&g_sites[address], now + offset, 4);
@@ -211,13 +211,12 @@ void SyncPages(bool frame) {
                 }
                 MarkInliningCallers(static_cast<uint32_t>(index));
             }
+            std::memcpy(observed.data(), now, kPage);
         }
-        if (!frame) {
-            pages.erase(std::remove_if(pages.begin(), pages.end(), [](uint32_t page) { return IsEdgePageLocked(page); }),
-                        pages.end());
-        }
+        if (!frame) pages.clear();
     }
-    for (const uint32_t page : pages) GuestFlat::ReprotectExecutablePage(page);
+    std::sort(pages.begin(), pages.end());
+    GuestFlat::ReprotectExecutablePages(pages.data(), pages.size());
 }
 
 } // namespace

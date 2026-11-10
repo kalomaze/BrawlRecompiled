@@ -11,8 +11,8 @@ int main(){
     WriteWatch watch;watch.Add(a,bytes,0,0x80000000);
     SnapshotStore store;std::map<int,std::vector<uint8_t>> reference;int anchor=0;
     auto save=[&](int frame){
-        auto dirty=watch.Capture(bytes);
-        store.Save(frame,bytes,[&](size_t o,uint8_t* p,size_t n){std::memcpy(p,a+o,n);},store.states.empty()?nullptr:&dirty,anchor);
+        auto dirty=store.Empty()?std::vector<uint32_t>{}:watch.Capture(bytes,store.Jobs());
+        store.Save(frame,bytes,[&](size_t o,uint8_t* p,size_t n){std::memcpy(p,a+o,n);},store.Empty()?nullptr:&dirty,anchor);
         reference[frame]=std::vector<uint8_t>(a,a+bytes);
         while(reference.rbegin()->first-reference.begin()->first>=16)reference.erase(reference.begin());
         for(const auto& [f,v]:reference)assert(store.View(f)==v);
@@ -30,15 +30,16 @@ int main(){
             // Include unsaved writes, including bytes absent from history deltas.
             BrawlDirtyMemory::Mark(120001,1);BrawlDirtyMemory::MarkHost(a+65530,19);
             b[120001]^=0x5a;std::memset(a+65530,0xcc,19);
-            store.Restore(target,anchor,watch.Capture(bytes),
+            store.Restore(target,anchor,watch.Capture(bytes,store.Jobs()),
                 [&](size_t o,uint8_t* p,size_t n){std::memcpy(p,a+o,n);},
                 [&](size_t o,const uint8_t* p,size_t n){std::memcpy(a+o,p,n);});
             assert(std::memcmp(a,reference.at(target).data(),bytes)==0);
             assert(store.lastRestoreWriteBytes<bytes/2);
             watch.Reset();anchor=target;
+            reference.erase(reference.upper_bound(target),reference.end());
             for(int replay=target+1;replay<=f;++replay){
                 // The new timeline doesn't rewrite every predicted byte. The
-                // history-edge union must still remove the old prediction.
+                // discarded future must not leak the old prediction.
                 BrawlDirtyMemory::MarkHost(b+90000+replay,1);
                 b[90000+replay]^=uint8_t(replay);save(replay);
             }
