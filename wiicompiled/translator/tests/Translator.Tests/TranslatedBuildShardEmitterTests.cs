@@ -10,6 +10,52 @@ namespace Translator.Tests;
 public sealed class TranslatedBuildShardEmitterTests
 {
     [Fact]
+    public void FreshStageShardsContainOnlineSetupGateAfterCodeGuard()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"translator-stage-gate-{Guid.NewGuid():N}");
+        var functions = Path.Combine(root, "functions");
+        var native = Path.Combine(root, "runtime");
+        var output = Path.Combine(root, "out");
+        Directory.CreateDirectory(functions);
+        Directory.CreateDirectory(native);
+        try
+        {
+            const string stage = """
+                extern "C" void func_809435F0(CpuContext* MKW_RESTRICT ctx) {
+                    ctx->gpr[3] = 7;
+                }
+                // RECOMP_REGISTRATION base 0x809435F0 func_809435F0 preserves=true fpr_mask=0x00000000
+                """;
+            Write(Path.Combine(functions, "func_809435F0.cpp"), stage);
+            var metadata = Path.Combine(root, "base_output.json");
+            BaseTranslationOutputMetadataFile.WriteIfChangedAtomic(metadata,
+                BaseTranslationOutputMetadata.Create([
+                    Metadata("func_809435F0.cpp", 0x809435F0u, stage)
+                ], TranslationQualityMetadata.Clean, "stage-gate"));
+            var options = new TranslatedBuildShardOptions(metadata, functions, output, native,
+                BaseShardCount: 1, RegistrationShardCount: 1);
+            for (var generation = 0; generation < 2; generation++)
+            {
+                TranslatedBuildShardEmitter.Emit(options);
+                var shard = File.ReadAllText(Assert.Single(Directory.GetFiles(
+                    Path.Combine(output, "base_common"), "shard_*.cpp")));
+                Assert.Contains("#include \"brawl_rollback.h\"", shard);
+                const string hook = "BrawlRollback::SeedCrossplayStage();";
+                Assert.Equal(1, shard.Split(hook).Length - 1);
+                Assert.True(shard.IndexOf("MKW_GUEST_CODE_GUARD(", StringComparison.Ordinal) <
+                            shard.IndexOf(hook, StringComparison.Ordinal));
+                Assert.True(shard.IndexOf(hook, StringComparison.Ordinal) <
+                            shard.IndexOf("ctx->gpr[3] = 7", StringComparison.Ordinal));
+                Directory.Delete(output, true);
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void RemainingWeightPartitionDoesNotCreateOversizedTailBin()
     {
         var weights = Enumerable.Repeat(300L, 10).ToArray();

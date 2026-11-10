@@ -637,6 +637,8 @@ public static partial class TranslatedBuildShardEmitter
             var source = new StringBuilder();
             source.AppendLine("// Translator-owned content-addressed aggregate shard; do not edit.");
             source.AppendLine("#include \"abi_bridge.h\"");
+            if (group.Any(static function => function.Address == 0x809435F0u))
+                source.AppendLine("#include \"brawl_rollback.h\"");
             // Quoted include resolves the sibling traits header on every toolchain and keeps
             // the shard text free of the emitting machine's absolute paths.
             source.AppendLine($"#include \"{Path.GetFileName(traitsPath)}\"");
@@ -681,9 +683,15 @@ public static partial class TranslatedBuildShardEmitter
         GuardedEntryRegex().Replace(source, match =>
         {
             var address = ParseHexUInt32(match.Groups["address"].Value);
-            return guardIndex.TryGetValue(address, out var index)
+            var entry = guardIndex.TryGetValue(address, out var index)
                 ? $"{match.Value}\n    MKW_GUEST_CODE_GUARD({index}u, 0x{address:X8}u);"
                 : match.Value;
+            // stMelee's constructor consumes RNG before the first gameplay frame.
+            // Enter the online setup gate before either translated or interpreted
+            // construction; the interpreter handles its own entry after the guard.
+            return address == 0x809435F0u
+                ? entry + "\n    BrawlRollback::SeedCrossplayStage();"
+                : entry;
         });
 
     [GeneratedRegex(@"extern ""C"" void func_(?<address>[0-9A-F]{8})\(CpuContext\* MKW_RESTRICT ctx\)\s*\{", RegexOptions.CultureInvariant)]
@@ -982,6 +990,8 @@ public static partial class TranslatedBuildShardEmitter
             var source = new StringBuilder();
             source.AppendLine("// Translator-owned bulk registration; do not edit.");
             source.AppendLine("#include \"abi_bridge.h\"");
+            if (group.Any(static function => function.Address == 0x809435F0u))
+                source.AppendLine("#include \"brawl_rollback.h\"");
             source.AppendLine("#include <cstddef>");
             foreach (var symbol in group.Select(static record => record.Symbol).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
             {
