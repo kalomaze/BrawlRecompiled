@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -35,7 +36,17 @@ namespace {
 constexpr uint32_t kPage = 4096;
 
 std::atomic<bool> g_active{false};
-std::atomic<bool> g_anyDirty{false};                                            // g_dirty is not empty
+std::atomic<bool> g_anyDirty{false};  // pending write notifications or retained edge pages
+// NoteWrite runs inside memory-fault recovery. Its lookup and notification must
+// neither allocate nor wait for a lock held by the interrupted thread.
+static_assert(std::atomic<uint32_t>::is_always_lock_free);
+static_assert(std::atomic<bool>::is_always_lock_free);
+constexpr uint32_t kPageWords = (1u << 20) / 32;
+std::atomic<uint32_t> g_guardedPages[kPageWords]{};
+std::atomic<uint32_t> g_pendingPages[kPageWords]{};
+std::atomic<uint32_t> g_pendingGroups[kPageWords / 32]{};
+std::atomic<uint32_t> g_pendingRoots[kPageWords / 32 / 32]{};
+
 std::mutex g_mutex;
 std::vector<std::pair<uint32_t, uint32_t>> g_ranges;                              // guarded code, [start, end)
 std::unordered_map<uint32_t, std::unique_ptr<std::array<uint8_t, kPage>>> g_pristine;  // by page address
@@ -70,6 +81,28 @@ bool IsEdgePageLocked(uint32_t page) {
     return IsGuardedPageLocked(page) &&
            std::none_of(g_ranges.begin(), g_ranges.end(),
                         [&](const auto& range) { return page >= range.first && page + kPage <= range.second; });
+}
+
+// Drain notifications under g_mutex at an ordinary execution boundary. The two
+// summary levels avoid scanning the entire guest address space on every Sync.
+void CollectPendingPagesLocked() {
+    for (uint32_t root = 0; root < std::size(g_pendingRoots); ++root) {
+        uint32_t groups = g_pendingRoots[root].exchange(0, std::memory_order_acquire);
+        while (groups) {
+            const uint32_t group = root * 32 + std::countr_zero(groups);
+            groups &= groups - 1;
+            uint32_t words = g_pendingGroups[group].exchange(0, std::memory_order_acquire);
+            while (words) {
+                const uint32_t word = group * 32 + std::countr_zero(words);
+                words &= words - 1;
+                uint32_t pages = g_pendingPages[word].exchange(0, std::memory_order_acquire);
+                while (pages) {
+                    g_dirty.insert((word * 32 + std::countr_zero(pages)) * kPage);
+                    pages &= pages - 1;
+                }
+            }
+        }
+    }
 }
 
 // The translated function holding `address`: the last start at or below it.
@@ -150,6 +183,9 @@ void Protect(uint32_t start, uint32_t end, const char* name) {
         if (std::find(g_ranges.begin(), g_ranges.end(), std::make_pair(start, end)) != g_ranges.end()) return;
         g_ranges.emplace_back(start, end);
         SnapshotLocked(start, end);
+        for (uint64_t page = start / kPage; page * kPage < end; ++page) {
+            g_guardedPages[page / 32].fetch_or(1u << (page % 32), std::memory_order_release);
+        }
         g_active.store(true, std::memory_order_release);
     }
     RecompMod::RegisterExecutableRange(start, end, name);
@@ -158,9 +194,13 @@ void Protect(uint32_t start, uint32_t end, const char* name) {
 bool NoteWrite(uint32_t address) {
     if (!Active()) return false;
     address = Cached(address);
-    std::lock_guard<std::mutex> lock(g_mutex);
-    if (!IsGuardedPageLocked(address & ~(kPage - 1))) return false;
-    g_dirty.insert(address & ~(kPage - 1));
+    const uint32_t page = address / kPage;
+    const uint32_t word = page / 32;
+    const uint32_t bit = 1u << (page % 32);
+    if ((g_guardedPages[word].load(std::memory_order_acquire) & bit) == 0) return false;
+    g_pendingPages[word].fetch_or(bit, std::memory_order_relaxed);
+    g_pendingGroups[word / 32].fetch_or(1u << (word % 32), std::memory_order_release);
+    g_pendingRoots[word / 32 / 32].fetch_or(1u << ((word / 32) % 32), std::memory_order_release);
     g_anyDirty.store(true, std::memory_order_release);
     return true;
 }
@@ -170,17 +210,19 @@ namespace {
 // An edge page's data stores would trap again after every Sync (and Sync follows every patched call): it stays open,
 // compared at each Sync, until the frame's SyncFrame guards it again.
 void SyncPages(bool frame) {
-    if (!g_anyDirty.load(std::memory_order_acquire)) return;
+    if (!g_anyDirty.exchange(false, std::memory_order_acq_rel)) return;
     std::vector<uint32_t> pages;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
+        CollectPendingPagesLocked();
         if (g_dirty.empty()) return;
         pages.assign(g_dirty.begin(), g_dirty.end());
         g_dirty.clear();
         for (const uint32_t page : pages) {
             if (!frame && IsEdgePageLocked(page)) g_dirty.insert(page);
         }
-        g_anyDirty.store(!g_dirty.empty(), std::memory_order_release);
+        // Never clear a notification concurrently published by NoteWrite.
+        if (!g_dirty.empty()) g_anyDirty.store(true, std::memory_order_release);
         for (const uint32_t page : pages) {
             const auto found = g_pristine.find(page);
             if (found == g_pristine.end() || !Memory::Contains(page, kPage)) continue;
@@ -241,7 +283,11 @@ void ResetPristine(uint32_t start, uint32_t end) {
             const uint32_t function = g_mkwGuardedFunctionStarts[index];
             if (function >= start && function < end) g_mkwGuestCodePatched[index] = 1;
         }
-        for (uint32_t page = start & ~(kPage - 1); page < end; page += kPage) g_dirty.erase(page);
+        for (uint32_t page = start & ~(kPage - 1); page < end; page += kPage) {
+            g_dirty.erase(page);
+            const uint32_t index = page / kPage;
+            g_pendingPages[index / 32].fetch_and(~(1u << (index % 32)), std::memory_order_relaxed);
+        }
         for (auto it = g_loggedWords.begin(); it != g_loggedWords.end();) {
             it = *it >= start && *it < end ? g_loggedWords.erase(it) : std::next(it);
         }
