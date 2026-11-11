@@ -419,9 +419,9 @@ inline double PpcPackIntegerWordInline(int32_t value)
         static_cast<uint64_t>(static_cast<uint32_t>(value)));
 }
 
-// FMA computes A*C +/- B, but PowerPC selects NaNs in A, B, C order.
-// Use the original operands so subtraction does not change a NaN's sign.
-inline double PpcResolveFmaNanInline(double result, double a, double b, double c)
+// Select NaNs in guest operand order and preserve the chosen sign/payload.
+// FMA passes A, B, C even though it computes A*C +/- B.
+inline double PpcResolveNanInline(double result, double a, double b, double c = 0.0)
 {
     if (!std::isnan(result)) return result;
     constexpr uint64_t quiet = 0x0008000000000000ull;
@@ -429,6 +429,26 @@ inline double PpcResolveFmaNanInline(double result, double a, double b, double c
         if (std::isnan(operand))
             return PpcBitCastToDoubleInline(PpcBitCastToU64Inline(operand) | quiet);
     return PpcBitCastToDoubleInline(0x7FF8000000000000ull);
+}
+
+inline double PpcFaddInline(double a, double b)
+{
+    return PpcResolveNanInline(a + b, a, b);
+}
+
+inline double PpcFsubInline(double a, double b)
+{
+    return PpcResolveNanInline(a - b, a, b);
+}
+
+inline double PpcFmulInline(double a, double b)
+{
+    return PpcResolveNanInline(a * b, a, b);
+}
+
+inline double PpcFdivInline(double a, double b)
+{
+    return PpcResolveNanInline(a / b, a, b);
 }
 
 template <bool Subtract>
@@ -458,28 +478,28 @@ inline double PpcAccurateSingleMaddIntermediateInline(double a, double c, double
                 (error > 0.0) == (result > 0.0) ? resultBits + 1 : resultBits - 1);
         }
     }
-    return PpcResolveFmaNanInline(result, a, b, c);
+    return PpcResolveNanInline(result, a, b, c);
 }
 
 inline double PpcFmulsInline(double a, double c)
 {
     return static_cast<double>(
-        PpcForceSingleValueInline(a * PpcForce25BitInline(c)));
+        PpcForceSingleValueInline(PpcFmulInline(a, std::isnan(c) ? c : PpcForce25BitInline(c))));
 }
 
 inline double PpcFmulsNoNiInline(double a, double c)
 {
-    return static_cast<double>(static_cast<float>(a * PpcForce25BitInline(c)));
+    return static_cast<double>(static_cast<float>(PpcFmulInline(a, std::isnan(c) ? c : PpcForce25BitInline(c))));
 }
 
 inline double PpcFmaddInline(double a, double c, double b)
 {
-    return PpcResolveFmaNanInline(std::fma(a, c, b), a, b, c);
+    return PpcResolveNanInline(std::fma(a, c, b), a, b, c);
 }
 
 inline double PpcFmsubInline(double a, double c, double b)
 {
-    return PpcResolveFmaNanInline(std::fma(a, c, -b), a, b, c);
+    return PpcResolveNanInline(std::fma(a, c, -b), a, b, c);
 }
 
 inline double PpcFnmaddInline(double a, double c, double b)

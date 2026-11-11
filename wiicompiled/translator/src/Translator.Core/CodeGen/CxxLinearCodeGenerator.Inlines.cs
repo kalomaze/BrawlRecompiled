@@ -165,17 +165,11 @@ public sealed partial class CxxLinearCodeGenerator
                     arguments[i] = WrapForScalar(scalarSpec.ArgumentOrder[i]);
                 }
 
-                var expression = scalarSpec.Kind switch
-                {
-                    ScalarInlineKind.HelperCall =>
-                        $"{scalarSpec.Helper}({string.Join(", ", arguments)})",
-                    ScalarInlineKind.RoundedBinary =>
-                        $"static_cast<double>({(scalarSpec.NoNiVariant
-                            ? $"static_cast<float>({arguments[0]} {scalarSpec.Operator} {arguments[1]})"
-                            : $"PpcForceSingleValueInline({arguments[0]} {scalarSpec.Operator} {arguments[1]})")})",
-                    _ => throw new InvalidOperationException(
-                        $"Unknown scalar inline kind '{scalarSpec.Kind}'.")
-                };
+                var expression = $"{scalarSpec.Helper}({string.Join(", ", arguments)})";
+                if (scalarSpec.Kind == ScalarInlineKind.RoundedHelper)
+                    expression = $"static_cast<double>({(scalarSpec.NoNiVariant
+                        ? $"static_cast<float>({expression})"
+                        : $"PpcForceSingleValueInline({expression})")})";
                 sb.AppendLine($"{pad}{dest} = {expression};");
             }
 
@@ -354,7 +348,7 @@ public sealed partial class CxxLinearCodeGenerator
     private enum ScalarInlineKind
     {
         HelperCall,
-        RoundedBinary,
+        RoundedHelper,
     }
 
     private readonly record struct PairedInlineSpec(
@@ -364,8 +358,7 @@ public sealed partial class CxxLinearCodeGenerator
 
     private readonly record struct ScalarInlineSpec(
         ScalarInlineKind Kind,
-        string? Helper,
-        string? Operator,
+        string Helper,
         bool NoNiVariant,
         int[] ArgumentOrder);
 
@@ -443,9 +436,8 @@ public sealed partial class CxxLinearCodeGenerator
     }
 
     /// <summary>
-    /// Descriptor table for scalar arithmetic helpers. Rounded binary operators
-    /// retain their distinct NI and NoNI expression forms; helper-call entries
-    /// retain the runtime primitive names directly.
+    /// Descriptor table for scalar arithmetic helpers. Single-precision results
+    /// retain their NI and NoNI rounding after the shared guest arithmetic helper.
     /// </summary>
     private static readonly IReadOnlyDictionary<string, ScalarInlineSpec> InlineScalarCallSpecs =
         BuildScalarInlineCallSpecs();
@@ -464,7 +456,6 @@ public sealed partial class CxxLinearCodeGenerator
                 new ScalarInlineSpec(
                     ScalarInlineKind.HelperCall,
                     helper,
-                    Operator: null,
                     NoNiVariant: false,
                     ArgumentOrder: argumentOrder));
 
@@ -482,41 +473,38 @@ public sealed partial class CxxLinearCodeGenerator
                 new ScalarInlineSpec(
                     ScalarInlineKind.HelperCall,
                     noNiHelper,
-                    Operator: null,
                     NoNiVariant: true,
                     ArgumentOrder: argumentOrder));
         }
 
-        static void AddRoundedBinary(
+        static void AddRoundedHelper(
             Dictionary<string, ScalarInlineSpec> destination,
             string target,
             string noNiTarget,
-            string @operator)
+            string helper)
         {
             destination.Add(
                 target,
                 new ScalarInlineSpec(
-                    ScalarInlineKind.RoundedBinary,
-                    Helper: null,
-                    Operator: @operator,
+                    ScalarInlineKind.RoundedHelper,
+                    Helper: helper,
                     NoNiVariant: false,
                     ArgumentOrder: new[] { 0, 1 }));
             destination.Add(
                 noNiTarget,
                 new ScalarInlineSpec(
-                    ScalarInlineKind.RoundedBinary,
-                    Helper: null,
-                    Operator: @operator,
+                    ScalarInlineKind.RoundedHelper,
+                    Helper: helper,
                     NoNiVariant: true,
                     ArgumentOrder: new[] { 0, 1 }));
         }
 
-        AddRoundedBinary(specs, "PPC_FADDS", "PPC_FADDSNONI", "+");
-        AddRoundedBinary(specs, "PPC_FSUBS", "PPC_FSUBSNONI", "-");
+        AddRoundedHelper(specs, "PPC_FADDS", "PPC_FADDSNONI", "PpcFaddInline");
+        AddRoundedHelper(specs, "PPC_FSUBS", "PPC_FSUBSNONI", "PpcFsubInline");
         AddHelperNoNi(
             specs, "PPC_FMULS", "PPC_FMULSNONI",
             "PpcFmulsInline", "PpcFmulsNoNiInline", 0, 1);
-        AddRoundedBinary(specs, "PPC_FDIVS", "PPC_FDIVSNONI", "/");
+        AddRoundedHelper(specs, "PPC_FDIVS", "PPC_FDIVSNONI", "PpcFdivInline");
 
         AddHelper(specs, "PPC_FSQRT", "std::sqrt", 0);
         AddHelper(specs, "PPC_FMADD", "PpcFmaddInline", 0, 1, 2);

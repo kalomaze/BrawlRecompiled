@@ -786,13 +786,13 @@ extern "C" double PPC_Fnmsub(double multiplicand, double multiplier, double subt
 // critical low bits (e.g., integer->float via 0x4330 trick), yielding zeros.
 extern "C" double PPC_Fadds(double a, double b)
 {
-    const float res = PpcForceSingleValueInline(a + b);
+    const float res = PpcForceSingleValueInline(PpcFaddInline(a, b));
     return static_cast<double>(res);
 }
 
 extern "C" double PPC_Fsubs(double a, double b)
 {
-    const float res = PpcForceSingleValueInline(a - b);
+    const float res = PpcForceSingleValueInline(PpcFsubInline(a, b));
     return static_cast<double>(res);
 }
 
@@ -803,7 +803,7 @@ extern "C" double PPC_Fmuls(double a, double b)
 
 extern "C" double PPC_Fdivs(double a, double b)
 {
-    const float res = PpcForceSingleValueInline(a / b);
+    const float res = PpcForceSingleValueInline(PpcFdivInline(a, b));
     return static_cast<double>(res);
 }
 

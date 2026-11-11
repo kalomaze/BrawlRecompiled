@@ -31,6 +31,66 @@ public class CodeGenTests
     }
 
     [NativeFact]
+    public void ScalarArithmeticPreservesGuestNanBitsThroughCodegen()
+    {
+        var instructions = new List<IrInstruction>();
+        var operations = new[] { "add", "sub", "mul", "fdiv" };
+        var single = new[] { "PPC_Fadds", "PPC_Fsubs", "PPC_Fmuls", "PPC_Fdivs" };
+        for (var i = 0; i < 4; ++i)
+        {
+            instructions.Add(new IrBinary($"f{i + 3}", IrValue.Register("f1"), IrValue.Register("f2"), operations[i]));
+            instructions.Add(new IrCall($"f{i + 7}", single[i], [IrValue.Register("f1"), IrValue.Register("f2")]));
+            instructions.Add(new IrCall($"f{i + 11}", single[i] + "NoNi", [IrValue.Register("f1"), IrValue.Register("f2")]));
+        }
+        instructions.Add(new IrReturn(IrValue.Register("f3")));
+        var function = new IrFunction("scalar_nan", "entry", [new IrBasicBlock("entry", instructions)]);
+        var types = new RepresentationEnvironment(Enumerable.Range(1, 14)
+            .ToDictionary(i => $"f{i}", _ => ValueRepresentation.Float64));
+        var code = new CxxLinearCodeGenerator().Emit(0x80003000,
+            new SsaTransformer().Convert(function),
+            new FunctionAbiClassification("scalar_nan", ValueRepresentation.Float64), types);
+        const string harness = """
+            #include "ppc_runtime.h"
+            #include <iostream>
+            #include <cstdlib>
+            extern "C" void scalar_nan(CpuContext*);
+            static void check(double value, uint64_t expected) {
+                if (PpcBitCastToU64Inline(value) != expected) {
+                    std::cerr << std::hex << PpcBitCastToU64Inline(value) << " != " << expected;
+                    std::abort();
+                }
+            }
+            int main() {
+                CpuContext ctx{};
+                const auto run = [&](double a, double b) {
+                    ctx.fpr[1].d = a; ctx.fpr[2].d = b; scalar_nan(&ctx);
+                };
+                // NaN payloads here survive single-precision narrowing exactly.
+                const double a = PpcBitCastToDoubleInline(0xFFF82468A0000000ull);
+                const double b = PpcBitCastToDoubleInline(0x7FF0468AC0000000ull);
+                run(a, b);
+                for (unsigned i = 3; i <= 14; ++i) check(ctx.fpr[i].d, 0xFFF82468A0000000ull);
+                run(2.0, b);
+                for (unsigned i = 3; i <= 14; ++i) check(ctx.fpr[i].d, 0x7FF8468AC0000000ull);
+                const double inf = std::numeric_limits<double>::infinity();
+                const double lhs[] = {inf, inf, 0.0, 0.0};
+                const double rhs[] = {-inf, inf, inf, 0.0};
+                using Op = double (*)(double, double);
+                const Op native[] = {PPC_Fadds, PPC_Fsubs, PPC_Fmuls, PPC_Fdivs};
+                for (unsigned i = 0; i < 4; ++i) {
+                    run(lhs[i], rhs[i]);
+                    for (unsigned group = 0; group < 3; ++group)
+                        check(ctx.fpr[3 + i + 4 * group].d, 0x7FF8000000000000ull);
+                    check(native[i](lhs[i], rhs[i]), 0x7FF8000000000000ull);
+                    check(native[i](2.0, b), 0x7FF8468AC0000000ull);
+                }
+                std::cout << "ok";
+            }
+            """;
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness, code));
+    }
+
+    [NativeFact]
     public void CodeGenerator_CompilesAndRunsThroughBridge()
     {
         var function = new IrFunction(

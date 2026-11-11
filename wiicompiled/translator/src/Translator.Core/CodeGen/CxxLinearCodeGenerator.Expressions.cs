@@ -20,6 +20,20 @@ public sealed partial class CxxLinearCodeGenerator
             };
         }
 
+        if (IsFloatRegister(bin.Destination))
+        {
+            var helper = bin.Op switch
+            {
+                "add" => "PpcFaddInline",
+                "sub" => "PpcFsubInline",
+                "mul" => "PpcFmulInline",
+                "fdiv" => "PpcFdivInline",
+                _ => null
+            };
+            if (helper is not null)
+                return $"{helper}({left}, {right})";
+        }
+
         return bin.Op switch
         {
             "add" => $"({left} + {right})",
