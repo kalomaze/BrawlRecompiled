@@ -58,16 +58,6 @@ extern "C" void GX__SetViewport_HLE(float l, float t, float w, float h, float nz
 PPC_NATIVE_OVERRIDE_VOID(801f5484, GX__SetViewport_HLE, (float l, float t, float w, float h, float nz, float fz), (l, t, w, h, nz, fz));
 
 extern "C" void GX__GetViewportv_HLE(uint32_t oa) {
-    // EGG::StateGX::GXSetViewport (0x802418D0) reads the current viewport unconditionally, and
-    // every offscreen bake reaches it via its clear pass (0x802D1900) before building its own
-    // projection, so arming the frustum-scale bypass here always beats the bake, including
-    // RaceScene::createSubsystems's frame-boundary-less ones. Gated to one walk per GX frame to
-    // skip the cross-TU call on repeats, while the first viewport read of each frame stays unthrottled.
-    static int lastBypassFrame = -1;
-    if (lastBypassFrame != g_gxFrameCount) {
-        lastBypassFrame = g_gxFrameCount;
-        AssertMkwOffscreenScreenBypass();
-    }
     if (!oa) return; for(int i=0; i<6; ++i) WriteGuestFloat(oa + i*4, g_viewportState[i]);
 }
 PPC_NATIVE_OVERRIDE_VOID(801f54b0, GX__GetViewportv_HLE, (uint32_t oa), (oa));
