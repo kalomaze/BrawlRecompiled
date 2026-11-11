@@ -193,24 +193,6 @@ const ExecutableRange* FindExecutableRange(uint32_t address, size_t length) {
     return hit;
 }
 
-// MKW-only: executable ranges are registered solely by translated mods (Retro Rewind), so this
-// never runs for the NSMBW base game, whose own REL loading writes are therefore unguarded.
-bool IsKnownBaseRelLoaderWrite(const ExecutableRange& range) {
-    if (range.name.find("StaticR.rel") == std::string::npos) {
-        return false;
-    }
-
-    const auto* cpu = TryGetCpuContext();
-    if (!cpu) {
-        return false;
-    }
-
-    // The game copies and relocates REL sections before executing them. Those
-    // writes are normal loading/linking, not runtime code patches.
-    return (cpu->lr >= 0x8000A000u && cpu->lr < 0x8000A400u) ||
-           (cpu->lr >= 0x801A6000u && cpu->lr < 0x801A7000u);
-}
-
 } // namespace
 
 namespace RecompMod {
@@ -403,10 +385,6 @@ bool HandleExecutableWrite(uint32_t address, size_t length, uint64_t value) {
 
     const auto hit = FindExecutableRange(address, length);
     if (!hit) {
-        return false;
-    }
-
-    if (IsKnownBaseRelLoaderWrite(*hit)) {
         return false;
     }
 
