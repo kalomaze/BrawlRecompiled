@@ -26,11 +26,11 @@ extern "C" void GX__GetCullMode_801c5890(uint32_t modePtr) {
 
 // GXAbortFrame asks the GPU to drop the frame in flight. Aurora submits whole frames and has nothing
 // half-finished to abandon, so there is nothing to do.
-extern "C" void GX__AbortFrame_801c4ce0() {
+extern "C" void GX__AbortFrame_HLE() {
     static bool logged = false;
     LogOnce(logged, "GXAbortFrame: no partial GPU frame to abandon (no-op)");
 }
-PPC_NATIVE_OVERRIDE_VOID(801f0724, GX__AbortFrame_801c4ce0, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801f0724, GX__AbortFrame_HLE, (), ());
 
 // GXPoke*: modes for CPU writes straight into the embedded frame buffer (GXPokeARGB/GXPokeZ). On
 // hardware they program pixel-engine registers; the runtime does not emulate CPU-to-EFB access, so

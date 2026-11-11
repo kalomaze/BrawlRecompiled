@@ -72,14 +72,14 @@ void DcRangeOp(const char* label, uint32_t addr, uint32_t length)
 }
 } // namespace
 
-extern "C" void DCInvalidateRange_801a1600(uint32_t addr, uint32_t length)
+extern "C" void DCInvalidateRange_HLE(uint32_t addr, uint32_t length)
 {
-    DcRangeOp("DCInvalidateRange_801a1600", addr, length);
+    DcRangeOp("DCInvalidateRange_HLE", addr, length);
 }
 
-extern "C" void DCFlushRange_801a162c(uint32_t addr, uint32_t length)
+extern "C" void DCFlushRange_HLE(uint32_t addr, uint32_t length)
 {
-    DcRangeOp("DCFlushRange_801a162c", addr, length);
+    DcRangeOp("DCFlushRange_HLE", addr, length);
 }
 
 // Brawl's screen picture (fn_8002F4B4, the Classic score screen and the like) converts the XFB on screen, 640x480
@@ -129,15 +129,15 @@ void FillScreenPicture(uint32_t addr, uint32_t length)
     }
 }
 
-extern "C" void DCStoreRange_801a165c(uint32_t addr, uint32_t length)
+extern "C" void DCStoreRange_HLE(uint32_t addr, uint32_t length)
 {
     FillScreenPicture(addr, length);
-    DcRangeOp("DCStoreRange_801a165c", addr, length);
+    DcRangeOp("DCStoreRange_HLE", addr, length);
 }
 
-extern "C" void DCFlushRangeNoSync_801a168c(uint32_t addr, uint32_t length)
+extern "C" void DCFlushRangeNoSync_HLE(uint32_t addr, uint32_t length)
 {
-    DcRangeOp("DCFlushRangeNoSync_801a168c", addr, length);
+    DcRangeOp("DCFlushRangeNoSync_HLE", addr, length);
 }
 
 extern "C" void DCStoreRangeNoSync_801a16b8(uint32_t addr, uint32_t length)
@@ -145,10 +145,10 @@ extern "C" void DCStoreRangeNoSync_801a16b8(uint32_t addr, uint32_t length)
     DcRangeOp("DCStoreRangeNoSync_801a16b8", addr, length);
 }
 
-PPC_NATIVE_OVERRIDE_VOID(801D76BC, DCInvalidateRange_801a1600, (uint32_t addr, uint32_t length), (addr, length));
-PPC_NATIVE_OVERRIDE_VOID(801D76E8, DCFlushRange_801a162c, (uint32_t addr, uint32_t length), (addr, length));
-PPC_NATIVE_OVERRIDE_VOID(801D7718, DCStoreRange_801a165c, (uint32_t addr, uint32_t length), (addr, length));
-PPC_NATIVE_OVERRIDE_VOID(801D7748, DCFlushRangeNoSync_801a168c, (uint32_t addr, uint32_t length), (addr, length));
+PPC_NATIVE_OVERRIDE_VOID(801D76BC, DCInvalidateRange_HLE, (uint32_t addr, uint32_t length), (addr, length));
+PPC_NATIVE_OVERRIDE_VOID(801D76E8, DCFlushRange_HLE, (uint32_t addr, uint32_t length), (addr, length));
+PPC_NATIVE_OVERRIDE_VOID(801D7718, DCStoreRange_HLE, (uint32_t addr, uint32_t length), (addr, length));
+PPC_NATIVE_OVERRIDE_VOID(801D7748, DCFlushRangeNoSync_HLE, (uint32_t addr, uint32_t length), (addr, length));
 
 // ----------------------------------------------------------------------------
 // CPU Cache Maintenance Stubs (DC/IC/LC)
@@ -200,7 +200,7 @@ bool CopyGuestRange(uint32_t dstAddr, uint32_t srcAddr, uint32_t len, const char
 
 } // namespace
 
-extern "C" void DCZeroRange_HLE_801a16e4(CpuContext* ctx)
+extern "C" void DCZeroRange_HLE(CpuContext* ctx)
 {
     const uint32_t addr = static_cast<uint32_t>(ctx->gpr[3]);
     const uint32_t len = static_cast<uint32_t>(ctx->gpr[4]);
@@ -272,7 +272,7 @@ extern "C" void LCQueueWait_HLE_801a1988(CpuContext*)
 }
 
 PPC_NATIVE_OVERRIDE_VOID(801d76a8, Cache_Maintenance_Stub, (), ()); // DCEnable
-PPC_NATIVE_OVERRIDE_VOID(801d77a0, DCZeroRange_HLE_801a16e4, (CpuContext* ctx), (ctx)); // DCZeroRange
+PPC_NATIVE_OVERRIDE_VOID(801d77a0, DCZeroRange_HLE, (CpuContext* ctx), (ctx)); // DCZeroRange
 PPC_NATIVE_OVERRIDE_VOID(801d77cc, Cache_Maintenance_Stub, (), ()); // ICInvalidateRange
 PPC_NATIVE_OVERRIDE_VOID(801d7800, Cache_Maintenance_Stub, (), ()); // ICFlashInvalidate
 PPC_NATIVE_OVERRIDE_VOID(801d7810, Cache_Maintenance_Stub, (), ()); // ICEnable

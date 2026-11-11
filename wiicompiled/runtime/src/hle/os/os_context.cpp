@@ -23,7 +23,7 @@ extern "C" uint32_t OS__GetCurrentThread_801a98b0_hle()
     }
 }
 
-extern "C" void OS__ClearContext_801a2098(uint32_t contextAddr)
+extern "C" void OS__ClearContext_HLE(uint32_t contextAddr)
 {
     if (contextAddr == 0) {
         return;
@@ -38,11 +38,11 @@ extern "C" void OS__ClearContext_801a2098(uint32_t contextAddr)
             ::Memory::Write32(kOSExceptionContextAddr, 0);
         }
     } catch (const ::Memory::AccessViolation& e) {
-        LogMemoryError(RT_TAG_OS, "OS__ClearContext_801a2098", e);
+        LogMemoryError(RT_TAG_OS, "OS__ClearContext_HLE", e);
     }
 }
 
-extern "C" void OS__SetCurrentContext_801a1e70(uint32_t contextAddr)
+extern "C" void OS__SetCurrentContext_HLE(uint32_t contextAddr)
 {
     try {
         if (contextAddr == 0) {
@@ -73,23 +73,23 @@ extern "C" void OS__SetCurrentContext_801a1e70(uint32_t contextAddr)
         }
         ::Memory::Write16(contextAddr + 0x1a2u, modeFlags);
     } catch (const ::Memory::AccessViolation& e) {
-        LogMemoryError(RT_TAG_OS, "OS__SetCurrentContext_801a1e70", e);
+        LogMemoryError(RT_TAG_OS, "OS__SetCurrentContext_HLE", e);
     }
 }
 
-PPC_NATIVE_OVERRIDE_VOID(801D81F4, OS__ClearContext_801a2098, (uint32_t contextAddr), (contextAddr));
-PPC_NATIVE_OVERRIDE_VOID(801D7FCC, OS__SetCurrentContext_801a1e70, (uint32_t contextAddr), (contextAddr));
+PPC_NATIVE_OVERRIDE_VOID(801D81F4, OS__ClearContext_HLE, (uint32_t contextAddr), (contextAddr));
+PPC_NATIVE_OVERRIDE_VOID(801D7FCC, OS__SetCurrentContext_HLE, (uint32_t contextAddr), (contextAddr));
 REGISTER_NATIVE_FUNCTION(0x801E0714, OS__GetCurrentThread_801a98b0_hle);
 
 // OSLoadContext (0x801ACE30): restores CPU state from a guest OSContext and jumps to SRR0 by hand,
 // since the real function's privileged mtspr/rfi can't be translated.
 
-extern "C" [[noreturn]] void OS__LoadContext_801a1f58(CpuContext* ctx)
+extern "C" [[noreturn]] void OS__LoadContext_HLE(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
     const uint32_t guestContextAddr = cpu->gpr[3];
 
-    RT_LOG(RT_TAG_OS) << "OS__LoadContext_801a1f58 called: ctx=0x" << std::hex << guestContextAddr << std::dec << std::endl;
+    RT_LOG(RT_TAG_OS) << "OS__LoadContext_HLE called: ctx=0x" << std::hex << guestContextAddr << std::dec << std::endl;
 
     if (guestContextAddr == 0) {
         RT_LOG(RT_TAG_OS) << "OS__LoadContext: FATAL - null context address!" << std::endl;
@@ -164,4 +164,4 @@ extern "C" [[noreturn]] void OS__LoadContext_801a1f58(CpuContext* ctx)
     std::abort();
 }
 
-PPC_NATIVE_OVERRIDE_VOID(801D80B4, OS__LoadContext_801a1f58, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801D80B4, OS__LoadContext_HLE, (CpuContext* ctx), (ctx));

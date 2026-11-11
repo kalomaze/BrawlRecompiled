@@ -167,7 +167,7 @@ bool ProcessSleepTimers(CpuContext* cpu)
 
         ClearOutstandingPark(threadPtr);
         cpu->gpr[3] = threadPtr;
-        OSResumeThread_HLE_801aa58c(cpu);
+        OSResumeThread_HLE(cpu);
 
         // OSResumeThread only peels one suspension level, so if the sleeper's count is inflated
         // (failed park, overlapping suspend) dropping the timer here would strand it. Keep it armed
@@ -251,7 +251,7 @@ bool ProcessSleepTimers(CpuContext* cpu)
                       << std::dec << " park-shaped with no pending wake timer for 100ms; "
                       << "resuming lost sleeper" << std::endl;
             cpu->gpr[3] = threadPtr;
-            OSResumeThread_HLE_801aa58c(cpu);
+            OSResumeThread_HLE(cpu);
         }
     }
 
@@ -272,7 +272,7 @@ extern "C" void OS__SleepTicks_HLE_801aaca8(CpuContext* ctx)
     }
 
     const uint64_t ticks = (static_cast<uint64_t>(cpu->gpr[3]) << 32) | cpu->gpr[4];
-    const int32_t irqState = OS__DisableInterrupts_801a65ac();
+    const int32_t irqState = OS__DisableInterrupts_HLE();
 
     try {
         uint32_t currentThread = ::Memory::Read32(kOSRunningContextAddr);
@@ -283,7 +283,7 @@ extern "C" void OS__SleepTicks_HLE_801aaca8(CpuContext* ctx)
             }
         }
         if (currentThread == 0) {
-            OS__RestoreInterrupts_801a65d4(irqState);
+            OS__RestoreInterrupts_HLE(irqState);
             return;
         }
 
@@ -303,14 +303,14 @@ extern "C" void OS__SleepTicks_HLE_801aaca8(CpuContext* ctx)
                           << sleepIdleFlag << "); busy-returning so the caller retries."
                           << std::endl;
             }
-            OS__RestoreInterrupts_801a65d4(irqState);
+            OS__RestoreInterrupts_HLE(irqState);
             return;
         }
 
         ScheduleSleepTimer(currentThread, ticks);
         MarkParkOutstanding(currentThread);
         cpu->gpr[3] = currentThread;
-        OSSuspendThread_HLE_801aa6a8(cpu);
+        OSSuspendThread_HLE(cpu);
 
         // Defence in depth: SelectThread has other refusal paths (context mismatch, drained run
         // queues), and there's a fire-before-park race where the timer fires and its resume is
@@ -346,7 +346,7 @@ extern "C" void OS__SleepTicks_HLE_801aaca8(CpuContext* ctx)
         LogMemoryError(RT_TAG_OS, "OSSleepTicks", e);
     }
 
-    OS__RestoreInterrupts_801a65d4(irqState);
+    OS__RestoreInterrupts_HLE(irqState);
 }
 
 namespace {
@@ -409,7 +409,7 @@ void ReportUnparkableSleep(uint32_t queuePtr, uint32_t thread)
 
 // OSSleepThread (0x801b5c90)
 // Puts the current thread to sleep on a specified wait queue.
-extern "C" void OSSleepThread_HLE_801aa9b8(CpuContext* ctx)
+extern "C" void OSSleepThread_HLE(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
     const uint32_t queuePtr = cpu->gpr[3];
@@ -419,7 +419,7 @@ extern "C" void OSSleepThread_HLE_801aa9b8(CpuContext* ctx)
         return;
     }
 
-    const int32_t irqState = OS__DisableInterrupts_801a65ac();
+    const int32_t irqState = OS__DisableInterrupts_HLE();
     
     try {
         uint32_t currentThread = ::Memory::Read32(kOSRunningContextAddr);
@@ -430,12 +430,12 @@ extern "C" void OSSleepThread_HLE_801aa9b8(CpuContext* ctx)
             currentThread = kDefaultThreadContextAddr;
             if (!Memory::Contains(currentThread, 4)) {
                 RT_LOG(RT_TAG_OS) << "OSSleepThread: no current thread and default thread not valid!" << std::endl;
-                OS__RestoreInterrupts_801a65d4(irqState);
+                OS__RestoreInterrupts_HLE(irqState);
                 return;
             }
             // Set the default thread as current (both running and context)
             ::Memory::Write32(kOSRunningContextAddr, currentThread);
-            OS__SetCurrentContext_801a1e70(currentThread);
+            OS__SetCurrentContext_HLE(currentThread);
             
             // Also register as a fiber if not already
             if (Fiber::GuestFiberManager::IsInitialized() && 
@@ -451,7 +451,7 @@ extern "C" void OSSleepThread_HLE_801aa9b8(CpuContext* ctx)
         // queue untouched and let the caller's retry loop re-test its condition.
         if (!SchedulerCanSwitchAway()) {
             ReportUnparkableSleep(queuePtr, currentThread);
-            OS__RestoreInterrupts_801a65d4(irqState);
+            OS__RestoreInterrupts_HLE(irqState);
             return;
         }
 
@@ -477,7 +477,7 @@ extern "C" void OSSleepThread_HLE_801aa9b8(CpuContext* ctx)
         
         // Match the original SDK behavior: sleep yields via SelectThread(0).
         cpu->gpr[3] = 0;
-        SelectThread_801a9c08(cpu);
+        SelectThread_HLE(cpu);
 
         // Defence in depth: SelectThread has other paths that return without switching (context
         // mismatch, uninitialised thread system, a run queue that drained mid-enqueue). None of
@@ -504,6 +504,6 @@ extern "C" void OSSleepThread_HLE_801aa9b8(CpuContext* ctx)
         LogMemoryError(RT_TAG_OS, "OSSleepThread", e);
     }
     
-    OS__RestoreInterrupts_801a65d4(irqState);
+    OS__RestoreInterrupts_HLE(irqState);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E1790, OSSleepThread_HLE_801aa9b8, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E1790, OSSleepThread_HLE, (CpuContext* ctx), (ctx));

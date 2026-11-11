@@ -1326,7 +1326,7 @@ extern "C" void GxNotifyDisplayListMemoryWrite(uint32_t addr, uint32_t size) {
     return false;
 }
 
-extern "C" void GX__CallDisplayList_80172f64(uint32_t listAddr, uint32_t nbytes) {
+extern "C" void GX__CallDisplayList_HLE(uint32_t listAddr, uint32_t nbytes) {
     if (nbytes == 0 || listAddr == 0) return;
     static const int s_skipId = std::getenv("SPM_SKIP_MATDL") ? std::atoi(std::getenv("SPM_SKIP_MATDL")) : -1;  // diagnostic: drop the geometry list drawn after material list <id>
     static bool s_skipNext = false;
@@ -1563,7 +1563,7 @@ extern "C" void GX__CallDisplayList_80172f64(uint32_t listAddr, uint32_t nbytes)
     } catch (...) {}
 }
 
-PPC_NATIVE_OVERRIDE_VOID(801F4EAC, GX__CallDisplayList_80172f64, (uint32_t listAddr, uint32_t nbytes), (listAddr, nbytes));
+PPC_NATIVE_OVERRIDE_VOID(801F4EAC, GX__CallDisplayList_HLE, (uint32_t listAddr, uint32_t nbytes), (listAddr, nbytes));
 
 extern "C" void nw4r__lyt__detail__DrawQuad_800847c0(CpuContext* ctx) {
     uint32_t colors[4];

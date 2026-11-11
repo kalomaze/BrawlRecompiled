@@ -2,7 +2,7 @@
 #include "gx_internal.h"
 
 // Vertex helper declarations not used by the direct-call catalog.
-extern "C" void GX__SetArray_8016e32c(uint32_t a, uint32_t ba, uint32_t str);
+extern "C" void GX__SetArray_HLE(uint32_t a, uint32_t ba, uint32_t str);
 extern "C" void GX_HLE_FIFO_WriteFloat(float val);
 extern "C" void GX_HLE_FIFO_Write8(uint8_t val);
 
@@ -40,7 +40,7 @@ extern "C" void EGG__LightTexture__SetupTevFinish_HLE_8022e2bc(CpuContext* ctx) 
                 GX_HLE_FIFO_WriteFloat(t);
             };
 
-            GX__Begin_8016f0f0(GX_QUADS, GX_VTXFMT0, 4);
+            GX__Begin_HLE(GX_QUADS, GX_VTXFMT0, 4);
             writeVertex(0, origin, origin);
             writeVertex(1, origin, lower);
             writeVertex(2, end, lower);

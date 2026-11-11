@@ -51,13 +51,13 @@
 #include <aurora/aurora.h>
 
 // Forward declaration for OSWakeupThread - used to wake threads on VI retrace queue
-extern "C" void OSWakeupThread_HLE_801aaaa4(CpuContext* ctx);
+extern "C" void OSWakeupThread_HLE(CpuContext* ctx);
 
 // Forward declaration for OSSleepThread - used by VIWaitForRetrace HLE
-extern "C" void OSSleepThread_HLE_801aa9b8(CpuContext* cpu);
+extern "C" void OSSleepThread_HLE(CpuContext* cpu);
 extern "C" int g_gxFrameCount;
-extern "C" int32_t OS__DisableInterrupts_801a65ac();
-extern "C" int32_t OS__RestoreInterrupts_801a65d4(int32_t level);
+extern "C" int32_t OS__DisableInterrupts_HLE();
+extern "C" int32_t OS__RestoreInterrupts_HLE(int32_t level);
 
 // Aurora frame cycle tracking - needs external linkage for the GX HLE
 // (declared in gx_internal.h, consumed by gx_frame.cpp). We need to call
@@ -580,7 +580,7 @@ void AdvanceRetrace(CpuContext* ctx, Clock::time_point retraceStamp, bool servic
             Memory::TryRead32(kViRetraceQueueAddr, queueHead);
         }
         ctx->gpr[3] = kViRetraceQueueAddr;
-        OSWakeupThread_HLE_801aaaa4(ctx);
+        OSWakeupThread_HLE(ctx);
         if (logWake) {
             ++s_wakeLogs;
             uint32_t runQueueBits = 0;
@@ -1167,17 +1167,17 @@ static void SeedViStateForInit(CpuContext* ctx, const char* who)
     ViSetR3(ctx, 0);
 }
 
-extern "C" void VIInit_HLE_801b94a4(CpuContext* ctx)
+extern "C" void VIInit_HLE(CpuContext* ctx)
 {
     SeedViStateForInit(ctx, "VIInit_801b94a4");
 }
-PPC_NATIVE_OVERRIDE_VOID(801E83E4, VIInit_HLE_801b94a4, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E83E4, VIInit_HLE, (CpuContext* ctx), (ctx));
 
-extern "C" void __VIInit_HLE_801b9294(CpuContext* ctx)
+extern "C" void __VIInit_HLE(CpuContext* ctx)
 {
     SeedViStateForInit(ctx, "__VIInit_801b9294");
 }
-PPC_NATIVE_OVERRIDE_VOID(801E81D4, __VIInit_HLE_801b9294, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E81D4, __VIInit_HLE, (CpuContext* ctx), (ctx));
 
 // -----------------------------------------------------------------------------
 // Helper stubs referenced by VIInit switch cases (case D variants).
@@ -1204,7 +1204,7 @@ extern "C" void VIInit_caseD_2_HLE_801b9944(CpuContext* ctx)
 // -----------------------------------------------------------------------------
 // VISetPreRetraceCallback (0x801BC3E0)
 // -----------------------------------------------------------------------------
-extern "C" void VISetPreRetraceCallback_HLE_801b90f4(CpuContext* ctx)
+extern "C" void VISetPreRetraceCallback_HLE(CpuContext* ctx)
 {
     const uint32_t newCb = ctx ? ctx->gpr[3] : 0;
     uint32_t prev = 0;
@@ -1217,12 +1217,12 @@ extern "C" void VISetPreRetraceCallback_HLE_801b90f4(CpuContext* ctx)
     }
     ViSetR3(ctx, prev);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E8034, VISetPreRetraceCallback_HLE_801b90f4, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E8034, VISetPreRetraceCallback_HLE, (CpuContext* ctx), (ctx));
 
 // -----------------------------------------------------------------------------
 // VISetPostRetraceCallback (0x801BC430)
 // -----------------------------------------------------------------------------
-extern "C" void VISetPostRetraceCallback_HLE_801b9138(CpuContext* ctx)
+extern "C" void VISetPostRetraceCallback_HLE(CpuContext* ctx)
 {
     const uint32_t newCb = ctx ? ctx->gpr[3] : 0;
     uint32_t prev = 0;
@@ -1235,22 +1235,22 @@ extern "C" void VISetPostRetraceCallback_HLE_801b9138(CpuContext* ctx)
     }
     ViSetR3(ctx, prev);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E8078, VISetPostRetraceCallback_HLE_801b9138, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E8078, VISetPostRetraceCallback_HLE, (CpuContext* ctx), (ctx));
 
 // -----------------------------------------------------------------------------
 // VIGetDTVStatus (0x801BE070)
 // Reads DTV status from VI hardware (MMIO 0xCC00206E). Stub to "not ready".
 // -----------------------------------------------------------------------------
-extern "C" void VIGetDTVStatus_HLE_801bad38(CpuContext* ctx)
+extern "C" void VIGetDTVStatus_HLE(CpuContext* ctx)
 {
     ViSetR3(ctx, 0); // return 0 -> not ready / disabled
 }
-PPC_NATIVE_OVERRIDE_VOID(801E9C9C, VIGetDTVStatus_HLE_801bad38, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E9C9C, VIGetDTVStatus_HLE, (CpuContext* ctx), (ctx));
 
 // -----------------------------------------------------------------------------
 // VIConfigure & related helpers: translate GXRenderModeObj into guest globals.
 // -----------------------------------------------------------------------------
-extern "C" void VIConfigure_HLE_801b9f6c(CpuContext* ctx)
+extern "C" void VIConfigure_HLE(CpuContext* ctx)
 {
     // One read of the guest GXRenderModeObj serves both the VI pending state and
     // aurora, rather than unpacking the same 0x39 bytes twice.
@@ -1287,9 +1287,9 @@ extern "C" void VIConfigure_HLE_801b9f6c(CpuContext* ctx)
 
     ViSetR3(ctx, 0);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E8DC8, VIConfigure_HLE_801b9f6c, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E8DC8, VIConfigure_HLE, (CpuContext* ctx), (ctx));
 
-extern "C" void VIFlush_HLE_801ba9a4(CpuContext* ctx)
+extern "C" void VIFlush_HLE(CpuContext* ctx)
 {
     uint32_t guestNextFb = 0;
     {
@@ -1324,9 +1324,9 @@ extern "C" void VIFlush_HLE_801ba9a4(CpuContext* ctx)
 
     ViSetR3(ctx, 0);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E98B0, VIFlush_HLE_801ba9a4, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E98B0, VIFlush_HLE, (CpuContext* ctx), (ctx));
 
-extern "C" void VISetNextFrameBuffer_HLE_801baab8(CpuContext* ctx)
+extern "C" void VISetNextFrameBuffer_HLE(CpuContext* ctx)
 {
     const uint32_t fbPtr = ctx ? ctx->gpr[3] : 0;
     {
@@ -1341,7 +1341,7 @@ extern "C" void VISetNextFrameBuffer_HLE_801baab8(CpuContext* ctx)
     SaveStates::FrameBoundary();  // a save or load the player asked for: here, between two frames
     Gecko::RunVbiHook(ctx);  // a Gecko code handler hooked at this function's blr
 }
-PPC_NATIVE_OVERRIDE_VOID(801E99C4, VISetNextFrameBuffer_HLE_801baab8, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E99C4, VISetNextFrameBuffer_HLE, (CpuContext* ctx), (ctx));
 
 extern "C" void VIGetNextFrameBuffer_HLE_801bab24(CpuContext* ctx)
 {
@@ -1356,7 +1356,7 @@ extern "C" void VIGetNextFrameBuffer_HLE_801bab24(CpuContext* ctx)
     VI_HLE_PollRetrace(ctx);
 }
 
-extern "C" void VISetBlack_HLE_801bab2c(CpuContext* ctx)
+extern "C" void VISetBlack_HLE(CpuContext* ctx)
 {
     const bool makeBlack = ctx ? (ctx->gpr[3] != 0) : false;
     {
@@ -1367,9 +1367,9 @@ extern "C" void VISetBlack_HLE_801bab2c(CpuContext* ctx)
     }
     ViSetR3(ctx, 0);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E9A30, VISetBlack_HLE_801bab2c, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E9A30, VISetBlack_HLE, (CpuContext* ctx), (ctx));
 
-extern "C" void VIGetRetraceCount_HLE_801baba4(CpuContext* ctx)
+extern "C" void VIGetRetraceCount_HLE(CpuContext* ctx)
 {
     uint32_t count = 0;
     {
@@ -1380,9 +1380,9 @@ extern "C" void VIGetRetraceCount_HLE_801baba4(CpuContext* ctx)
     ViSetR3(ctx, count);
     VI_HLE_PollRetrace(ctx);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E9AA8, VIGetRetraceCount_HLE_801baba4, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E9AA8, VIGetRetraceCount_HLE, (CpuContext* ctx), (ctx));
 
-extern "C" void VIGetNextField_HLE_801babac(CpuContext* ctx)
+extern "C" void VIGetNextField_HLE(CpuContext* ctx)
 {
     bool fieldOdd = false;
     {
@@ -1393,9 +1393,9 @@ extern "C" void VIGetNextField_HLE_801babac(CpuContext* ctx)
     ViSetR3(ctx, fieldOdd ? 1 : 0);
     VI_HLE_PollRetrace(ctx);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E9AB0, VIGetNextField_HLE_801babac, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E9AB0, VIGetNextField_HLE, (CpuContext* ctx), (ctx));
 
-extern "C" void VIGetCurrentLine_HLE_801bac48(CpuContext* ctx)
+extern "C" void VIGetCurrentLine_HLE(CpuContext* ctx)
 {
     uint32_t height = 480;
     std::chrono::nanoseconds interval{16666us};
@@ -1426,14 +1426,14 @@ extern "C" void VIGetCurrentLine_HLE_801bac48(CpuContext* ctx)
     }
     ViSetR3(ctx, line);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E9B4C, VIGetCurrentLine_HLE_801bac48, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E9B4C, VIGetCurrentLine_HLE, (CpuContext* ctx), (ctx));
 
-extern "C" void VIWaitForRetrace_HLE_801b99ec(CpuContext* ctx)
+extern "C" void VIWaitForRetrace_HLE(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
     
     if (Fiber::GuestFiberManager::IsInitialized()) {
-        const int32_t irqState = OS__DisableInterrupts_801a65ac();
+        const int32_t irqState = OS__DisableInterrupts_HLE();
         uint32_t retraceCount = 0;
         {
             std::lock_guard<std::mutex> lock(g_viMutex);
@@ -1443,7 +1443,7 @@ extern "C" void VIWaitForRetrace_HLE_801b99ec(CpuContext* ctx)
 
         do {
             cpu->gpr[3] = kViRetraceQueueAddr;
-            OSSleepThread_HLE_801aa9b8(cpu);
+            OSSleepThread_HLE(cpu);
 
             {
                 std::lock_guard<std::mutex> lock(g_viMutex);
@@ -1454,7 +1454,7 @@ extern "C" void VIWaitForRetrace_HLE_801b99ec(CpuContext* ctx)
             }
         } while (true);
 
-        OS__RestoreInterrupts_801a65d4(irqState);
+        OS__RestoreInterrupts_HLE(irqState);
     } else {
         std::chrono::nanoseconds interval{16666us};
         Clock::time_point target;
@@ -1473,7 +1473,7 @@ extern "C" void VIWaitForRetrace_HLE_801b99ec(CpuContext* ctx)
     }
     ViSetR3(cpu, 0);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E892C, VIWaitForRetrace_HLE_801b99ec, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E892C, VIWaitForRetrace_HLE, (CpuContext* ctx), (ctx));
 
 // VIGetScanMode (SPM 0x8028211C): reads the VI clock/DTV registers on hardware. The host has no
 // cable, so report interlaced (VI_INTERLACE = 0), the mode every NTSC console supports.

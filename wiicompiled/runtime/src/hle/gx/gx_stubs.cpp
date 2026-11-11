@@ -20,7 +20,7 @@ extern "C" void GX_HLE_FIFO_Write8(uint8_t val) { HleFifoWrite(static_cast<u32>(
 extern "C" void GX__SetDrawSync_8016ed08(uint32_t token) {
     (void)token;
     try { uint32_t gd = Memory::Read32(kGXDataPtrAddr); if (gd) {
-        if (Memory::Read32(gd + 0x5FCu)) GX__SetDirtyState_8016ee78();
+        if (Memory::Read32(gd + 0x5FCu)) GX__SetDirtyState_HLE();
         Memory::Write16(gd + 2, 0);
     } } catch (...) {}
 }
@@ -41,13 +41,13 @@ extern "C" void SPM_GXSetDrawSync(uint32_t token) {
 }
 PPC_NATIVE_OVERRIDE_VOID(801f08d8, SPM_GXSetDrawSync, (uint32_t token), (token));
 
-extern "C" void OSWakeupThread_HLE_801aaaa4(CpuContext* ctx);
+extern "C" void OSWakeupThread_HLE(CpuContext* ctx);
 
 // Brawl (RSBE01) GXFinishInterruptHandler globals: DrawDoneCB r13-0x3B5C, FinishQueue r13-0x3B68.
 constexpr uint32_t kGxDrawDoneCallbackAddr = 0x805A08C4u;
 constexpr uint32_t kGxFinishQueueAddr = 0x805A08B8u;
 
-extern "C" void GX__FinishInterruptHandler_8016ed94() {
+extern "C" void GX__FinishInterruptHandler_HLE() {
     try {
         uint32_t gd = Memory::Read32(kGXDataPtrAddr);
         if (gd) Memory::Write16(gd + 0x0Au, static_cast<uint16_t>(Memory::Read16(gd + 0x0Au) | 0x0008u));
@@ -62,57 +62,57 @@ extern "C" void GX__FinishInterruptHandler_8016ed94() {
         }
         CpuContext wake = *cpu;
         wake.gpr[3] = kGxFinishQueueAddr;
-        OSWakeupThread_HLE_801aaaa4(&wake);
+        OSWakeupThread_HLE(&wake);
     }
 }
-PPC_NATIVE_OVERRIDE_VOID(801f0d2c, GX__FinishInterruptHandler_8016ed94, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801f0d2c, GX__FinishInterruptHandler_HLE, (), ());
 
-extern "C" void GX__DrawDone_8016eab0() {
+extern "C" void GX__DrawDone_HLE() {
     try { Memory::Write8(kGxDrawDoneFlagAddr, 0); } catch (...) {}
-    GXDrawDone(); GX__FinishInterruptHandler_8016ed94();
+    GXDrawDone(); GX__FinishInterruptHandler_HLE();
 }
-PPC_NATIVE_OVERRIDE_VOID(801f0a30, GX__DrawDone_8016eab0, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801f0a30, GX__DrawDone_HLE, (), ());
 
-extern "C" void GX__PixModeSync_8016eb70() {
+extern "C" void GX__PixModeSync_HLE() {
     try { uint32_t gd = Memory::Read32(kGXDataPtrAddr); if (gd) Memory::Write16(gd + 2, 0); } catch (...) {}
     GXPixModeSync();
 }
-PPC_NATIVE_OVERRIDE_VOID(801f0af0, GX__PixModeSync_8016eb70, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801f0af0, GX__PixModeSync_HLE, (), ());
 
 // ============================================================================
 // Hardware Revision / Thread Query - No-ops
 // ============================================================================
 
-extern "C" void __GX__InitRevisionBits_8016b720() {}
-PPC_NATIVE_OVERRIDE_VOID(801ed7d8, __GX__InitRevisionBits_8016b720, (), ());
+extern "C" void __GX__InitRevisionBits_HLE() {}
+PPC_NATIVE_OVERRIDE_VOID(801ed7d8, __GX__InitRevisionBits_HLE, (), ());
 
 // ============================================================================
 // Texture State Management - Aurora handles internally
 // ============================================================================
 
-extern "C" void __GX__SetSUTexRegs_801712f0() {
+extern "C" void __GX__SetSUTexRegs_HLE() {
     __GXSetSUTexRegs();
     try { uint32_t gd = Memory::Read32(kGXDataPtrAddr); if (gd) Memory::Write16(gd + 2, 0); } catch (...) {}
 }
-PPC_NATIVE_OVERRIDE_VOID(801f3294, __GX__SetSUTexRegs_801712f0, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801f3294, __GX__SetSUTexRegs_HLE, (), ());
 
-extern "C" void __GX__SetTmemConfig_80171458(uint32_t mode) {
+extern "C" void __GX__SetTmemConfig_HLE(uint32_t mode) {
     // TMEM layout configuration - Aurora manages internally
     (void)mode;
 }
-PPC_NATIVE_OVERRIDE_VOID(801F33FC, __GX__SetTmemConfig_80171458, (uint32_t mode), (mode));
+PPC_NATIVE_OVERRIDE_VOID(801F33FC, __GX__SetTmemConfig_HLE, (uint32_t mode), (mode));
 
-extern "C" void __GX__FlushTextureState_80171c28() {
+extern "C" void __GX__FlushTextureState_HLE() {
     // BP texture state flush - Aurora handles via API
     try { uint32_t gd = Memory::Read32(kGXDataPtrAddr); if (gd) Memory::Write16(gd + 2, 0); } catch (...) {}
 }
-PPC_NATIVE_OVERRIDE_VOID(801f3b78, __GX__FlushTextureState_80171c28, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801f3b78, __GX__FlushTextureState_HLE, (), ());
 
 // ============================================================================
 // Copy Configuration - No-ops for features Aurora doesn't use
 // ============================================================================
 
-extern "C" void GX__SetDispCopyFrame2Field_8016f5f8(uint32_t f) {
+extern "C" void GX__SetDispCopyFrame2Field_HLE(uint32_t f) {
     GXSetDispCopyFrame2Field(f);
     try {
         const uint32_t gd = Memory::Read32(kGXDataPtrAddr);
@@ -122,9 +122,9 @@ extern "C" void GX__SetDispCopyFrame2Field_8016f5f8(uint32_t f) {
         }
     } catch (...) {}
 }
-PPC_NATIVE_OVERRIDE_VOID(801f16e4, GX__SetDispCopyFrame2Field_8016f5f8, (uint32_t f), (f));
+PPC_NATIVE_OVERRIDE_VOID(801f16e4, GX__SetDispCopyFrame2Field_HLE, (uint32_t f), (f));
 
-extern "C" void GX__SetCopyClamp_8016f618(uint32_t c) {
+extern "C" void GX__SetCopyClamp_HLE(uint32_t c) {
     GXSetCopyClamp(static_cast<GXFBClamp>(c));
     try {
         const uint32_t gd = Memory::Read32(kGXDataPtrAddr);
@@ -135,9 +135,9 @@ extern "C" void GX__SetCopyClamp_8016f618(uint32_t c) {
         }
     } catch (...) {}
 }
-PPC_NATIVE_OVERRIDE_VOID(801f1704, GX__SetCopyClamp_8016f618, (uint32_t c), (c));
+PPC_NATIVE_OVERRIDE_VOID(801f1704, GX__SetCopyClamp_HLE, (uint32_t c), (c));
 
-extern "C" void GX__ClearBoundingBox_8016fecc() {
+extern "C" void GX__ClearBoundingBox_HLE() {
     SpmBBoxClear();
     GXClearBoundingBox();
     try {
@@ -145,7 +145,7 @@ extern "C" void GX__ClearBoundingBox_8016fecc() {
         if (gd) Memory::Write16(gd + 2, 0);
     } catch (...) {}
 }
-PPC_NATIVE_OVERRIDE_VOID(801f1fb8, GX__ClearBoundingBox_8016fecc, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801f1fb8, GX__ClearBoundingBox_HLE, (), ());
 
 // GXReadBoundingBox (SPM 0x8028E26C, this SDK's order: left, top, right, bottom).
 extern "C" void GX__ReadBoundingBox_SPM(uint32_t leftPtr, uint32_t topPtr, uint32_t rightPtr, uint32_t bottomPtr) {
@@ -172,12 +172,12 @@ extern "C" void GX__ReadBoundingBox_SPM(uint32_t leftPtr, uint32_t topPtr, uint3
 // FIFO/State Management - No-ops
 // ============================================================================
 
-extern "C" void GX__SetDirtyState_8016ee78() {
+extern "C" void GX__SetDirtyState_HLE() {
     try { uint32_t gd = Memory::Read32(kGXDataPtrAddr); if (gd) Memory::Write32(gd + 0x5FCu, 0); } catch (...) {}
 }
-PPC_NATIVE_OVERRIDE_VOID(801f0e10, GX__SetDirtyState_8016ee78, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801f0e10, GX__SetDirtyState_HLE, (), ());
 
-extern "C" void GX__ResetWriteGatherPipe_8016e6b0() {
+extern "C" void GX__ResetWriteGatherPipe_HLE() {
     // WPAR reset - not needed on host
 }
-PPC_NATIVE_OVERRIDE_VOID(801f058c, GX__ResetWriteGatherPipe_8016e6b0, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801f058c, GX__ResetWriteGatherPipe_HLE, (), ());

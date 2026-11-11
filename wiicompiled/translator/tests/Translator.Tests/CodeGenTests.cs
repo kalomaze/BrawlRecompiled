@@ -1243,8 +1243,8 @@ public class CodeGenTests
         File.WriteAllText(
             Path.Combine(tempDir, "gx_test.cpp"),
             """
-            PPC_NATIVE_OVERRIDE_VOID(801733b4, GX__SetViewport_801733b4, (float l, uint32_t t, uint32_t out), (l, t, out));
-            PPC_NATIVE_OVERRIDE_VOID(801A0870, OSSetAlarm_HLE_801a0870, (CpuContext* ctx), (ctx));
+            PPC_NATIVE_OVERRIDE_VOID(801733b4, GX__SetViewport_HLE, (float l, uint32_t t, uint32_t out), (l, t, out));
+            PPC_NATIVE_OVERRIDE_VOID(801A0870, OSSetAlarm_HLE, (CpuContext* ctx), (ctx));
             """);
 
         var provider = RuntimeNativeFunctionAbiProvider.LoadVoidStubAbisFromDirectory(tempDir);
