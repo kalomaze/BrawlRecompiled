@@ -46,6 +46,17 @@ def unpack(archive, destination):
         tar.extractall(destination, filter='data')
 
 
+def translation_fingerprint(sources):
+    # The translator reads native registrations/effects from runtime/src, not the
+    # renderer or runtime headers. Native CMake/Ninja tracks those separately.
+    inputs = {name: digest for name, digest in sources.items()
+              if name.startswith(('wiicompiled/translator/src/',
+                                  'wiicompiled/projects/brawl/',
+                                  'wiicompiled/runtime/src/')) or
+              name == 'tools/build_ubuntu.py'}
+    return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--disc', type=Path, required=True)
@@ -115,7 +126,7 @@ def build_game(args, disc, build):
     for name in previous.keys() - current.keys():
         (work / name).unlink(missing_ok=True)
     source_stamp.write_text(json.dumps(current, sort_keys=True))
-    fingerprint = hashlib.sha256(source_stamp.read_bytes()).hexdigest()
+    fingerprint = translation_fingerprint(current)
     wc = work / 'wiicompiled'
     for project in ('tools/disc-extract/DiscExtract.csproj', 'wiicompiled/translator/src/Translator.Cli/Translator.Cli.csproj'):
         run(dotnet, 'build', work / project, '-c', 'Release', '--nologo', '--disable-build-servers')
@@ -129,7 +140,8 @@ def build_game(args, disc, build):
             i += 1
     identity = [(str(p), p.stat().st_size, p.stat().st_mtime_ns) for p in images]
     extraction_stamp = build / 'extracted.json'
-    extraction_key = json.dumps([identity, current['launcher/WiiDisc.cs'], current['tools/disc-extract/Program.cs']])
+    extraction_key = json.dumps([identity, current['launcher/WiiDisc.cs'], current['tools/disc-extract/Program.cs'],
+                                 current['tools/disc-extract/DiscExtract.csproj']])
     data = build / 'disc'
     if not extraction_stamp.exists() or extraction_stamp.read_text() != extraction_key:
         temporary = build / 'disc.partial'
