@@ -57,7 +57,6 @@ float BEF(const uint8_t* p) {
     std::memcpy(&f, &v, 4);
     return f;
 }
-int16_t BES16(const uint8_t* p) { return static_cast<int16_t>(BE16(p)); }
 
 // Straight from the extracted game's files/ folder (the disc root): this also works before the
 // game has set up its own disc access, which the boot screen needs.
@@ -292,45 +291,8 @@ bool DecodeTexture(const uint8_t* src, size_t size, uint32_t format, uint32_t wi
 struct Image {
     uint32_t width = 0;
     uint32_t height = 0;
-    uint8_t wrapS = 0;
-    uint8_t wrapT = 0;
     std::vector<uint8_t> rgba;
 };
-
-bool ParseTpl(const uint8_t* data, size_t size, Image& image) {
-    if (size < 12 || BE32(data) != 0x0020AF30u || BE32(data + 4) == 0) {
-        return false;
-    }
-    const uint32_t table = BE32(data + 8);
-    if (table + 8 > size) {
-        return false;
-    }
-    const uint32_t header = BE32(data + table);
-    const uint32_t paletteHeader = BE32(data + table + 4);
-    if (header + 0x24 > size) {
-        return false;
-    }
-    image.height = BE16(data + header);
-    image.width = BE16(data + header + 2);
-    const uint32_t format = BE32(data + header + 4);
-    const uint32_t offset = BE32(data + header + 8);
-    image.wrapS = static_cast<uint8_t>(BE32(data + header + 12));
-    image.wrapT = static_cast<uint8_t>(BE32(data + header + 16));
-    const uint8_t* palette = nullptr;
-    uint32_t paletteFormat = 0;
-    if (paletteHeader != 0 && paletteHeader + 12 <= size) {
-        paletteFormat = BE32(data + paletteHeader + 4);
-        const uint32_t paletteOffset = BE32(data + paletteHeader + 8);
-        if (paletteOffset < size) {
-            palette = data + paletteOffset;
-        }
-    }
-    if (offset >= size) {
-        return false;
-    }
-    return DecodeTexture(data + offset, size - offset, format, image.width, image.height, image.rgba, palette,
-                         paletteFormat);
-}
 
 uint64_t Upload(const Image& image) {
     return static_cast<uint64_t>(aurora_imgui_add_texture(image.width, image.height, image.rgba.data()));
@@ -454,9 +416,7 @@ std::shared_ptr<Font> LoadFont(const std::string& name) {
         g_fonts[name] = font;
         return font;
     }
-    // A name starting with '/' is a disc path (Brawl: "/system/font/font_hira.brfnt"); else NSMBW's font folder.
-    const std::string brfntPath = !name.empty() && name[0] == '/' ? name : "/US/EngUS/Font/" + name;
-    if (ReadDiscFile(brfntPath, data) && data.size() > 0x30 && BE32(data.data()) == 0x52464E54u) {
+    if (ReadDiscFile(name, data) && data.size() > 0x30 && BE32(data.data()) == 0x52464E54u) {
         const uint16_t headerSize = BE16(&data[12]);
         const uint8_t* finf = &data[headerSize];
         if (BE32(finf) == 0x46494E46u) {  // FINF
@@ -710,43 +670,10 @@ void DrawText(ImDrawList* list, const View& view, const Font& font, const std::u
 }
 
 // ---------------------------------------------------------------- layouts
-struct Layout::Material {
-    std::string name;
-    Rgba black{0, 0, 0, 0};
-    Rgba white{1, 1, 1, 1};
-    bool hasTexture = false;
-    uint64_t texture = 0;  // the first texture map, interpolated between black and white
-    uint32_t textureWidth = 0;
-    uint32_t textureHeight = 0;
-    uint8_t wrapS = 0, wrapT = 0;
-    float srtTx = 0, srtTy = 0, srtSx = 1, srtSy = 1;
-    bool hasMatColor = false;
-    Rgba matColor;
-    bool colorFromMaterial = false;
-};
-
 struct Layout::Pane {
-    enum Kind { kNull, kPicture, kText, kWindow, kBounding } kind = kNull;
     std::string name;
-    uint8_t flags = 1;
-    uint8_t origin = 4;
-    uint8_t alpha = 255;
-    float tx = 0, ty = 0, rot = 0, sx = 1, sy = 1, w = 0, h = 0;
+    float tx = 0, ty = 0, sx = 1, sy = 1, w = 0, h = 0;
     std::vector<const Pane*> children;
-    // picture / window content
-    uint32_t vtx[4] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
-    int material = -1;
-    float uv[4][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
-    // text
-    std::u16string text;
-    int font = -1;
-    uint8_t textPosition = 4;
-    uint8_t textAlignment = 0;
-    uint32_t topColor = 0xFFFFFFFFu, bottomColor = 0xFFFFFFFFu;
-    float fontW = 32, fontH = 32, charSpace = 0, lineSpace = 0;
-    // window
-    float overflow[4] = {0, 0, 0, 0};  // left, right, top, bottom
-    std::vector<std::pair<int, uint8_t>> frames;  // material, flip
 };
 
 Layout::Layout() = default;
@@ -775,32 +702,6 @@ bool Layout::Load(const std::string& arcPath, const std::string& brlytName) {
     if (lyt == nullptr || lytSize < 16 || BE32(lyt) != 0x524C5954u) {  // RLYT
         return false;
     }
-    const auto findFile = [&](const std::string& name) -> std::pair<const uint8_t*, size_t> {
-        for (const auto& [path, where] : files) {
-            if (path.size() >= name.size() && path.compare(path.size() - name.size(), name.size(), name) == 0 &&
-                where.first + where.second <= arc.size()) {
-                return {&arc[where.first], where.second};
-            }
-        }
-        return {nullptr, 0};
-    };
-
-    std::vector<std::string> textureNames;
-    std::vector<std::string> fontNames;
-    std::unordered_map<std::string, Image> images;
-    const auto image = [&](const std::string& name) -> const Image* {
-        if (const auto it = images.find(name); it != images.end()) {
-            return it->second.rgba.empty() ? nullptr : &it->second;
-        }
-        Image& decoded = images[name];
-        const auto [data, size] = findFile(name);
-        if (data == nullptr || !ParseTpl(data, size, decoded)) {
-            decoded.rgba.clear();
-            return nullptr;
-        }
-        return &decoded;
-    };
-
     std::vector<Pane*> stack;
     Pane* last = nullptr;
     const uint16_t headerSize = BE16(lyt + 12);
@@ -815,166 +716,22 @@ bool Layout::Load(const std::string& arcPath, const std::string& brlytName) {
         }
         const uint8_t* body = sec + 8;
         switch (kind) {
-        case 0x74786C31u:    // txl1
-        case 0x666E6C31u: {  // fnl1
-            const uint16_t count = BE16(body);
-            for (uint16_t i = 0; i < count; ++i) {
-                const uint32_t offset = BE32(body + 4 + i * 8);
-                std::string name(reinterpret_cast<const char*>(body + 4 + offset));
-                (kind == 0x74786C31u ? textureNames : fontNames).push_back(name);
-            }
-            if (kind == 0x666E6C31u) {
-                for (const auto& name : fontNames) {
-                    m_fonts.push_back(LoadFont(name));
-                }
-            }
-            break;
-        }
-        case 0x6D617431u: {  // mat1
-            const uint16_t count = BE16(body);
-            for (uint16_t i = 0; i < count; ++i) {
-                const uint8_t* m = sec + BE32(body + 4 + i * 4);
-                auto mat = std::make_unique<Material>();
-                mat->name.assign(reinterpret_cast<const char*>(m), strnlen(reinterpret_cast<const char*>(m), 20));
-                const auto s10 = [&](int color) {
-                    const uint8_t* c = m + 20 + color * 8;
-                    return Rgba{BES16(c) / 255.0f, BES16(c + 2) / 255.0f, BES16(c + 4) / 255.0f, BES16(c + 6) / 255.0f};
-                };
-                mat->black = s10(0);
-                mat->white = s10(1);
-                const uint32_t flags = BE32(m + 60);
-                const uint8_t* p = m + 64;
-                const uint32_t texCount = flags & 15;
-                const uint32_t srtCount = (flags >> 4) & 15;
-                const uint32_t coordCount = (flags >> 8) & 15;
-                int texIndex = -1;
-                for (uint32_t t = 0; t < texCount; ++t, p += 4) {
-                    if (t == 0) {
-                        texIndex = BE16(p);
-                        mat->wrapS = p[2];
-                        mat->wrapT = p[3];
-                    }
-                }
-                for (uint32_t t = 0; t < srtCount; ++t, p += 20) {
-                    if (t == 0) {
-                        mat->srtTx = BEF(p);
-                        mat->srtTy = BEF(p + 4);
-                        mat->srtSx = BEF(p + 12);
-                        mat->srtSy = BEF(p + 16);
-                    }
-                }
-                p += coordCount * 4;
-                if (flags & (1u << 25)) {  // channel control: colour / alpha source
-                    mat->colorFromMaterial = p[0] == 0;  // GX_SRC_REG
-                    p += 4;
-                }
-                if (flags & (1u << 27)) {
-                    mat->hasMatColor = true;
-                    mat->matColor = FromRgba8(BE32(p));
-                    p += 4;
-                }
-                if (texIndex >= 0 && texIndex < static_cast<int>(textureNames.size())) {
-                    if (const Image* src = image(textureNames[texIndex])) {
-                        // Bake the material's black-to-white interpolation into a texture of its own.
-                        Image baked = *src;
-                        const bool identity = mat->black.r == 0 && mat->black.g == 0 && mat->black.b == 0 &&
-                                              mat->black.a == 0 && mat->white.r >= 1 && mat->white.g >= 1 &&
-                                              mat->white.b >= 1 && mat->white.a >= 1;
-                        if (!identity) {
-                            for (size_t px = 0; px < baked.rgba.size(); px += 4) {
-                                const float c[4] = {baked.rgba[px] / 255.0f, baked.rgba[px + 1] / 255.0f,
-                                                    baked.rgba[px + 2] / 255.0f, baked.rgba[px + 3] / 255.0f};
-                                const float bk[4] = {mat->black.r, mat->black.g, mat->black.b, mat->black.a};
-                                const float wh[4] = {mat->white.r, mat->white.g, mat->white.b, mat->white.a};
-                                for (int k = 0; k < 4; ++k) {
-                                    const float v = bk[k] + (wh[k] - bk[k]) * c[k];
-                                    baked.rgba[px + k] = static_cast<uint8_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
-                                }
-                            }
-                        }
-                        mat->texture = Upload(baked);
-                        mat->textureWidth = baked.width;
-                        mat->textureHeight = baked.height;
-                        mat->hasTexture = true;
-                    }
-                }
-                m_materials.push_back(std::move(mat));
-            }
-            break;
-        }
         case 0x70616E31u:    // pan1
         case 0x70696331u:    // pic1
         case 0x74787431u:    // txt1
         case 0x776E6431u:    // wnd1
         case 0x626E6431u: {  // bnd1
+            if (secSize < 8 + 68) {
+                return false;
+            }
             auto pane = std::make_unique<Pane>();
-            pane->kind = kind == 0x70696331u   ? Pane::kPicture
-                         : kind == 0x74787431u ? Pane::kText
-                         : kind == 0x776E6431u ? Pane::kWindow
-                         : kind == 0x626E6431u ? Pane::kBounding
-                                               : Pane::kNull;
-            pane->flags = body[0];
-            pane->origin = body[1];
-            pane->alpha = body[2];
             pane->name.assign(reinterpret_cast<const char*>(body + 4), strnlen(reinterpret_cast<const char*>(body + 4), 16));
             pane->tx = BEF(body + 28);
             pane->ty = BEF(body + 32);
-            pane->rot = BEF(body + 48);
             pane->sx = BEF(body + 52);
             pane->sy = BEF(body + 56);
             pane->w = BEF(body + 60);
             pane->h = BEF(body + 64);
-            const uint8_t* extra = body + 68;
-            const auto readContent = [&](const uint8_t* c) {
-                for (int i = 0; i < 4; ++i) {
-                    pane->vtx[i] = BE32(c + i * 4);
-                }
-                pane->material = BE16(c + 16);
-                const uint8_t coords = c[18];
-                if (coords > 0) {
-                    for (int i = 0; i < 4; ++i) {
-                        pane->uv[i][0] = BEF(c + 20 + i * 8);
-                        pane->uv[i][1] = BEF(c + 24 + i * 8);
-                    }
-                }
-            };
-            if (pane->kind == Pane::kPicture) {
-                readContent(extra);
-            } else if (pane->kind == Pane::kText) {
-                const uint16_t stringSize = BE16(extra + 2);
-                pane->material = BE16(extra + 4);
-                pane->font = BE16(extra + 6);
-                pane->textPosition = extra[8];
-                pane->textAlignment = extra[9];
-                const uint32_t stringOffset = BE32(extra + 12);
-                pane->topColor = BE32(extra + 16);
-                pane->bottomColor = BE32(extra + 20);
-                pane->fontW = BEF(extra + 24);
-                pane->fontH = BEF(extra + 28);
-                pane->charSpace = BEF(extra + 32);
-                pane->lineSpace = BEF(extra + 36);
-                for (uint32_t i = 0; i + 1 < stringSize && stringOffset + i + 1 < secSize; i += 2) {
-                    const char16_t c = static_cast<char16_t>(BE16(sec + stringOffset + i));
-                    if (c == 0) {
-                        break;
-                    }
-                    pane->text.push_back(c);
-                }
-            } else if (pane->kind == Pane::kWindow) {
-                for (int i = 0; i < 4; ++i) {
-                    pane->overflow[i] = BEF(extra + i * 4);
-                }
-                const uint8_t frameCount = extra[16];
-                const uint32_t contentOffset = BE32(extra + 20);
-                const uint32_t frameTable = BE32(extra + 24);
-                if (contentOffset < secSize) {
-                    readContent(sec + contentOffset);
-                }
-                for (uint8_t f = 0; f < frameCount && frameTable + f * 4 + 4 <= secSize; ++f) {
-                    const uint8_t* fr = sec + BE32(sec + frameTable + f * 4);
-                    pane->frames.emplace_back(BE16(fr), fr[2]);
-                }
-            }
             last = pane.get();
             if (!stack.empty()) {
                 stack.back()->children.push_back(pane.get());

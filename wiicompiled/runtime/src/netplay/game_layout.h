@@ -41,15 +41,12 @@ public:
     bool PaneWorldRect(const std::string& paneName, float& x, float& y, float& w, float& h) const;
     std::vector<std::string> PaneNames() const;
 
-    struct Material;
     struct Pane;
 
 private:
     bool m_loaded = false;
     std::vector<std::unique_ptr<Pane>> m_panes;  // m_panes[0] is the root
     std::unordered_map<std::string, const Pane*> m_byName;
-    std::vector<std::unique_ptr<Material>> m_materials;
-    std::vector<std::shared_ptr<Font>> m_fonts;
 };
 
 // Load a font from the extracted disc, such as "/system/font/font_hira.brfnt".
