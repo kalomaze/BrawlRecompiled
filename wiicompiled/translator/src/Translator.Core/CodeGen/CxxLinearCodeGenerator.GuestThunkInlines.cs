@@ -1,7 +1,6 @@
 ﻿using System.Text;
 using Translator.Core.Analysis;
 using Translator.Core.Analysis.Representation;
-using Translator.Core.Representation;
 
 namespace Translator.Core.CodeGen;
 
@@ -11,7 +10,6 @@ public sealed partial class CxxLinearCodeGenerator
         uint address,
         StringBuilder sb,
         string pad,
-        RepresentationEnvironment types,
         bool frameBaseIsStack)
     {
         if (!TryGetInlineGuestThunkSpec(address, out var spec))
@@ -19,10 +17,10 @@ public sealed partial class CxxLinearCodeGenerator
             return false;
         }
 
-        var frameBase = RegisterToReadExpression("r11", types);
+        var frameBase = RegisterToCtxExpression("r11", written: false);
         var isFloat = spec.Kind is InlineGuestThunkKind.SaveFpr or InlineGuestThunkKind.RestFpr;
         var isStore = spec.Kind is InlineGuestThunkKind.SaveGpr or InlineGuestThunkKind.SaveFpr;
-        EmitInlineGuestThunkRange(spec, frameBase, sb, pad, types, frameBaseIsStack, isFloat, isStore);
+        EmitInlineGuestThunkRange(spec, frameBase, sb, pad, frameBaseIsStack, isFloat, isStore);
         return true;
     }
 
@@ -31,7 +29,6 @@ public sealed partial class CxxLinearCodeGenerator
         string frameBase,
         StringBuilder sb,
         string pad,
-        RepresentationEnvironment types,
         bool frameBaseIsStack,
         bool isFloat,
         bool isStore)
@@ -51,9 +48,7 @@ public sealed partial class CxxLinearCodeGenerator
                 var offset = (reg - 32) * bytesPerRegister;
                 var rangeOffset = offset - firstOffset;
                 var registerName = isFloat ? FprRegisterName(reg) : GprRegisterName(reg);
-                var value = isStore
-                    ? RegisterToReadExpression(registerName, types)
-                    : RegisterToWriteExpression(registerName, types);
+                var value = RegisterToCtxExpression(registerName, written: !isStore);
                 if (isStore)
                 {
                     var storedValue = isFloat ? value : $"static_cast<uint32_t>({value})";
@@ -74,9 +69,7 @@ public sealed partial class CxxLinearCodeGenerator
         {
             var offset = (reg - 32) * bytesPerRegister;
             var registerName = isFloat ? FprRegisterName(reg) : GprRegisterName(reg);
-            var value = isStore
-                ? RegisterToReadExpression(registerName, types)
-                : RegisterToWriteExpression(registerName, types);
+            var value = RegisterToCtxExpression(registerName, written: !isStore);
             if (isStore)
             {
                 var storedValue = isFloat ? value : $"static_cast<uint32_t>({value})";

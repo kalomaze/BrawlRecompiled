@@ -71,21 +71,21 @@ public class CodeGenExpressionCoverageTests
     {
         var types = new RepresentationEnvironment();
 
-        Assert.Equal("ctx->cr", InvokePrivate<string>("RegisterToCtxRead", "cr", types));
-        Assert.Equal("((ctx->cr >> 0) & 0xF)", InvokePrivate<string>("RegisterToCtxRead", "cr7", types));
-        Assert.Equal("ctx->srr0", InvokePrivate<string>("RegisterToCtxRead", "srr0", types));
-        Assert.Equal("ctx->srr1", InvokePrivate<string>("RegisterToCtxRead", "srr1", types));
-        Assert.Equal("ctx->hid0", InvokePrivate<string>("RegisterToCtxRead", "hid0", types));
-        Assert.Equal("ctx->hid1", InvokePrivate<string>("RegisterToCtxRead", "hid1", types));
-        Assert.Equal("ctx->hid2", InvokePrivate<string>("RegisterToCtxRead", "hid2", types));
-        Assert.Equal("ctx->gqr[3]", InvokePrivate<string>("RegisterToCtxRead", "gqr3", types));
-        Assert.Equal("0", InvokePrivate<string>("RegisterToCtxRead", "gqr9", types));
+        Assert.Equal("ctx->cr", InvokePrivate<string>("RegisterToCtxExpression", "cr", false));
+        Assert.Equal("((ctx->cr >> 0) & 0xF)", InvokePrivate<string>("RegisterToCtxExpression", "cr7", false));
+        Assert.Equal("ctx->srr0", InvokePrivate<string>("RegisterToCtxExpression", "srr0", false));
+        Assert.Equal("ctx->srr1", InvokePrivate<string>("RegisterToCtxExpression", "srr1", false));
+        Assert.Equal("ctx->hid0", InvokePrivate<string>("RegisterToCtxExpression", "hid0", false));
+        Assert.Equal("ctx->hid1", InvokePrivate<string>("RegisterToCtxExpression", "hid1", false));
+        Assert.Equal("ctx->hid2", InvokePrivate<string>("RegisterToCtxExpression", "hid2", false));
+        Assert.Equal("ctx->gqr[3]", InvokePrivate<string>("RegisterToCtxExpression", "gqr3", false));
+        Assert.Equal("0", InvokePrivate<string>("RegisterToCtxExpression", "gqr9", false));
 
-        Assert.Equal("ctx->cr", InvokePrivate<string>("RegisterToCtxWrite", "cr", types));
-        Assert.Equal("cr6", InvokePrivate<string>("RegisterToCtxWrite", "cr6", types));
-        Assert.Equal("ctx->hid2", InvokePrivate<string>("RegisterToCtxWrite", "hid2", types));
-        Assert.Equal("ctx->gqr[5]", InvokePrivate<string>("RegisterToCtxWrite", "gqr5", types));
-        Assert.Equal("gqr8", InvokePrivate<string>("RegisterToCtxWrite", "gqr8", types));
+        Assert.Equal("ctx->cr", InvokePrivate<string>("RegisterToCtxExpression", "cr", true));
+        Assert.Equal("cr6", InvokePrivate<string>("RegisterToCtxExpression", "cr6", true));
+        Assert.Equal("ctx->hid2", InvokePrivate<string>("RegisterToCtxExpression", "hid2", true));
+        Assert.Equal("ctx->gqr[5]", InvokePrivate<string>("RegisterToCtxExpression", "gqr5", true));
+        Assert.Equal("gqr8", InvokePrivate<string>("RegisterToCtxExpression", "gqr8", true));
 
         Assert.Equal("0", InvokePrivate<string>("ToExpression", new IrValue("temporary"), types));
         Assert.Equal("tmp_local", InvokePrivate<string>("ToExpression", IrValue.Register("tmp_local"), types));

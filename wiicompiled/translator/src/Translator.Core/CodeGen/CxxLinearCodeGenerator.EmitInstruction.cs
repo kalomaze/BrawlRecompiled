@@ -311,7 +311,7 @@ public sealed partial class CxxLinearCodeGenerator
             case IrCall call:
                 if (TryParseAddress(call.Target, out var addr))
                 {
-                    if (TryEmitInlineGuestThunk(addr, sb, pad, types, inlineGuestThunkStackBase))
+                    if (TryEmitInlineGuestThunk(addr, sb, pad, inlineGuestThunkStackBase))
                     {
                         break;
                     }
