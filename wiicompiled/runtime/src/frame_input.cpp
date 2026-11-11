@@ -2,7 +2,6 @@
 
 #include "det_clock.h"
 #include "input_bindings.h"
-#include "netplay_ui.h"
 #include "settings_overlay.h"
 
 // hle/input/pad.cpp: the local GameCube ports as the game would read them now.
@@ -42,7 +41,6 @@ Frame SampleLocal() {
             remote.pad = pad;
             continue;
         }
-        NetplayUi::FilterGameInput(chan, remote.sample);
         // The startup cover waits for A or 2 from any remote, controller or keyboard mapping.
         if (settings_overlay::StartupScreenVisible() && (remote.sample.hold & (0x0800u | 0x0100u)) != 0) {
             settings_overlay::NotifyStrapInputAccepted();
