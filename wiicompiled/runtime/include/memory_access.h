@@ -2,6 +2,7 @@
 
 #include "guest_flat_memory.h"
 #include "memory.h"
+#include "isa/ppc_isa_float.h"
 #include "brawl_dirty_memory.h"
 #include "recomp_mod_loader.h"
 
@@ -498,10 +499,11 @@ MKW_MEMORY_FORCE_INLINE uint32_t ReadResolved32(uint8_t* r, uint32_t o, uint32_t
 // Live via isa/ppc_isa_quantized.h (the psq resolved tier packs two lanes into
 // one 64-bit access); generated code never names it directly.
 MKW_MEMORY_FORCE_INLINE uint64_t ReadResolved64(uint8_t* r, uint32_t o, uint32_t a) { return ReadResolved<uint64_t>(r, o, a, ReadResolvedFallback<uint64_t>); }
-MKW_MEMORY_FORCE_INLINE float ReadResolvedFloat32(uint8_t* r, uint32_t o, uint32_t a) {
-    uint32_t bits = 0;
-    if (!ReadResolvedScalar(r, o, bits)) [[unlikely]] return ReadResolvedFallbackFloat32(a);
-    float value; std::memcpy(&value, &bits, sizeof(value)); return value;
+// lfs widens the stored single to an FPR double without flushing subnormals,
+// even when FPSCR[NI] enables host DAZ/FZ for arithmetic. A C++ float->double
+// conversion would silently turn those loads into zero on such hosts.
+MKW_MEMORY_FORCE_INLINE double ReadResolvedFloat32(uint8_t* r, uint32_t o, uint32_t a) {
+    return PpcBitCastToDoubleInline(PpcConvertToDoubleBitsInline(ReadResolved32(r, o, a)));
 }
 MKW_MEMORY_FORCE_INLINE double ReadResolvedFloat64(uint8_t* r, uint32_t o, uint32_t a) {
     uint64_t bits = 0;
@@ -580,11 +582,8 @@ MKW_MEMORY_FORCE_INLINE uint32_t FlatRead32(uint32_t address) {
     return FlatLoad<uint32_t>(address);
 }
 
-MKW_MEMORY_FORCE_INLINE float FlatReadFloat32(uint32_t address) {
-    const uint32_t bits = FlatRead32(address);
-    float value = 0.0f;
-    std::memcpy(&value, &bits, sizeof(value));
-    return value;
+MKW_MEMORY_FORCE_INLINE double FlatReadFloat32(uint32_t address) {
+    return PpcBitCastToDoubleInline(PpcConvertToDoubleBitsInline(FlatRead32(address)));
 }
 
 MKW_MEMORY_FORCE_INLINE double FlatReadFloat64(uint32_t address) {
