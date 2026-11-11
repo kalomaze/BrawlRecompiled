@@ -33,10 +33,7 @@
 
 extern "C" {
 int g_spmDrawDump = 0;
-int g_spmSweepDump = 0;
 int g_spmBBoxArmed = 0;
-unsigned g_spmAudit[8] = {};  // render audit for tools/sweep-spm-maps.py
-unsigned g_spmGameClear = 0;  // the game's own EFB clear colour (0xRRGGBB) while sweeping
 }
 namespace aurora::gx {
 GXState::CopyTextureRef* find_copy_texture_for_texobj(const GXTexObj_& obj) noexcept;  // gx.cpp
@@ -50,6 +47,7 @@ uint32_t g_arrayUploadEpoch = 1;
 namespace aurora::gx::fifo {
 bool g_replayingDisplayList = false;
 static Module Log("aurora::gx::fifo");
+static unsigned s_drawDiagnosticIndex = 0;
 
 using IndexBuffer = std::vector<u16>;
 
@@ -677,7 +675,6 @@ uint32_t process(const u8* data, u32 size, bool bigEndian) {
       const u32 byteOffset = srcArrayIdx * array.stride;
       const u32 byteCount = static_cast<u32>(len) * 4u;
       if (array.data == nullptr || array.stride == 0 || byteOffset + byteCount > array.size) {
-        ++g_spmAudit[4];
         static u32 invalidIndexedXfLogCount = 0;
         if (invalidIndexedXfLogCount < 16) {
           Log.warn("Skipping indexed XF load with invalid source array: array={} idx={} stride={} offset={} bytes={} "
@@ -710,7 +707,6 @@ uint32_t process(const u8* data, u32 size, bool bigEndian) {
     case CP_CMD_CALL_DL: {
       // Call display list: 8 bytes (address + size)
       CHECK(pos + 8 <= size, "call DL read overrun");
-      ++g_spmAudit[5];
       Log.warn("Ignoring nested GX_CMD_CALL_DL");
       pos += 8;
       break;
@@ -1447,7 +1443,6 @@ static void handle_bp(u32 value, bool bigEndian) {
     u8 a = bp_get(value, 8, 8);
     g_gxState.clearColor[0] = static_cast<float>(r) / 255.f;
     g_gxState.clearColor[3] = static_cast<float>(a) / 255.f;
-    g_spmGameClear = (g_spmGameClear & 0x00FFFFu) | (u32(r) << 16);  // recorded for the sweep report only
     g_gxState.stateDirty = true;
     break;
   }
@@ -1456,7 +1451,6 @@ static void handle_bp(u32 value, bool bigEndian) {
     u8 g = bp_get(value, 8, 8);
     g_gxState.clearColor[2] = static_cast<float>(b) / 255.f;
     g_gxState.clearColor[1] = static_cast<float>(g) / 255.f;
-    g_spmGameClear = (g_spmGameClear & 0xFF0000u) | (u32(g) << 8) | b;
     g_gxState.stateDirty = true;
     break;
   }
@@ -1976,7 +1970,6 @@ static void handle_xf(const u8* data, u32& pos, u32 size, bool bigEndian) {
 
 static void handle_draw_overrun(u8 cmd, u16 vtxCount, u32 vtxSize, u32 totalVtxBytes, const u8* data, const u32& pos,
                                 u32 size) {
-  ++g_spmAudit[1];
   static u32 truncatedDrawLogCount = 0;
   if (truncatedDrawLogCount >= 64) {
     if (truncatedDrawLogCount == 64) {
@@ -2358,7 +2351,7 @@ static void spm_dump_draw(const char* path, u8 prim, u32 fmt, u32 count, u32 vtx
     static int clipLogged = 0;
     const auto& pa = g_gxState.arrays[GX_VA_POS];
     const auto& pf = g_gxState.vtxFmts[fmt].attrs[GX_VA_POS];
-    if ((clipLogged < 6000 || g_spmSweepDump) && prim == 0x98 && v && pa.data != nullptr && g_gxState.vtxDesc[GX_VA_POS] == GX_INDEX16 &&
+    if (clipLogged < 6000 && prim == 0x98 && v && pa.data != nullptr && g_gxState.vtxDesc[GX_VA_POS] == GX_INDEX16 &&
         pf.type == GX_S16 && vtxSize >= pre + 2) {
       ++clipLogged;
       float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f, z0 = 1e9f, z1 = -1e9f;
@@ -2395,7 +2388,7 @@ static void spm_dump_draw(const char* path, u8 prim, u32 fmt, u32 count, u32 vtx
         static int stLogged = 0;
         const auto& rv = g_gxState.renderViewport;
         const auto& rs = g_gxState.renderScissor;
-        if (stLogged++ < 6000 || g_spmSweepDump)
+        if (stLogged++ < 6000)
           Log.warn("[spmst] {} be {} frz {} {:.4f},{:.4f},{:.4f},{} cu {} au {} zc {} zf {} zu {} blend {} lop {} pn {} vp {:.0f},{:.0f} {:.0f}x{:.0f} z {:.2f}-{:.2f} sc {},{} {}x{} chans {} tg {} tev {} bbox {:.2f},{:.2f}..{:.2f},{:.2f} oz {:.7f}..{:.7f}",
                    path, be, g_gxState.zFreeze, g_gxState.zFreezePlane.x(), g_gxState.zFreezePlane.y(), g_gxState.zFreezePlane.z(), g_gxState.zFreezePlane.w(), g_gxState.colorUpdate, g_gxState.alphaUpdate, g_gxState.depthCompare, (int)g_gxState.depthFunc, g_gxState.depthUpdate, (int)g_gxState.blendMode,
                    (int)g_gxState.blendOp, g_gxState.currentPnMtx, rv.left, rv.top, rv.width, rv.height, rv.znear, rv.zfar, rs.x, rs.y,
@@ -2759,7 +2752,7 @@ static void spm_log_draw_extent(u8 prim, GXVtxFmt fmt, const u8* verts, u32 coun
     }
   }
   Log.warn("[spmext] draw {} prim {:#x} fmt {} n {} ndc {:.3f} {:.3f} .. {:.3f} {:.3f}{} proj {} tex {}x{} f{} blend {} src {} dst {} zc {} tev {}{} chan0 mat {} amb {} lit {} clr0 desc {} type {} ac {} {} {} {}",
-           g_spmAudit[0], prim, (int)fmt, count, x0, y0, x1, y1, depth, (int)g_gxState.projType, to.width(), to.height(), to.format(),
+           s_drawDiagnosticIndex, prim, (int)fmt, count, x0, y0, x1, y1, depth, (int)g_gxState.projType, to.width(), to.height(), to.format(),
            (int)g_gxState.blendMode, (int)g_gxState.blendFacSrc, (int)g_gxState.blendFacDst, g_gxState.depthCompare,
            g_gxState.numTevStages, tev, (int)cc.matSrc, (int)cc.ambSrc, cc.lightingEnabled, (int)g_gxState.vtxDesc[GX_VA_CLR0],
            (int)g_gxState.vtxFmts[fmt].attrs[GX_VA_CLR0].type, (int)g_gxState.alphaCompare.comp0, g_gxState.alphaCompare.ref0,
@@ -2807,7 +2800,6 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
 
   const u32 expectedVertexBytes = static_cast<u32>(vtxCount) * vtxSize;
   if (expectedVertexBytes == 0 || expectedVertexBytes != vertexBytes) {
-    ++g_spmAudit[1];
     static uint32_t rawVertexSizeMismatchCount = 0;
     if (rawVertexSizeMismatchCount++ < 64) {
       Log.warn("raw draw vertex-size mismatch prim={} fmt={} count={} cached_stride={} expected={} supplied={}",
@@ -2817,7 +2809,7 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
     return false;
   }
 
-  ++g_spmAudit[0];
+  ++s_drawDiagnosticIndex;
   spm_dump_draw("raw", static_cast<u8>(prim | fmt), fmt, vtxCount, vtxSize, vertices, false);
   spm_bbox_accumulate(fmt, vertices, vtxCount, vtxSize, true);
   if (!has_complete_primitive(prim, vtxCount)) return true;
@@ -2870,7 +2862,7 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
   }
 
 
-  ++g_spmAudit[0];
+  ++s_drawDiagnosticIndex;
   spm_dump_draw("fifo", cmd, fmt, vtxCount, vtxSize, data + pos, bigEndian);
   spm_bbox_accumulate(fmt, data + pos, vtxCount, vtxSize, bigEndian);
   if (!has_complete_primitive(prim, vtxCount)) {

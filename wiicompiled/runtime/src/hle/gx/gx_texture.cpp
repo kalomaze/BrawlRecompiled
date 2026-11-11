@@ -1,4 +1,3 @@
-extern "C" unsigned g_spmAudit[8];
 #include <memory>
 #include <tuple>
 #include <map>
@@ -471,7 +470,6 @@ extern "C" void GX__LoadTexObj_HLE(uint32_t oa, uint32_t tid) {
 
     if (tid >= g_boundTexMaps.size()) {
         if (s_invalidTidLogCount < 128) {
-            ++g_spmAudit[3];
             RT_LOGF(RT_TAG_GX, "GXLoadTexObj: invalid tex map id %u (oa=0x%08X)\n", tid, oa);
             ++s_invalidTidLogCount;
         }

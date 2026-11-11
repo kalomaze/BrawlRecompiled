@@ -401,7 +401,7 @@ static std::atomic<bool> s_presentSequenceActive{false};
 
 // Frames the guest actually handed to the presenter (an XFB was ready).
 static std::atomic<uint32_t> s_presentedXfbFrames{0};
-extern "C" { extern int g_spmDrawDump; extern int g_spmSweepDump; }  // aurora command_processor (SPM bring-up diagnostics)
+extern "C" { extern int g_spmDrawDump; }  // aurora command_processor (SPM bring-up diagnostics)
 static uint32_t SpmPresentedFramesLocal() { return s_presentedXfbFrames.load(std::memory_order_relaxed); }
 static uint32_t (*const g_spmFramesFn)() = &SpmPresentedFramesLocal;
 
@@ -850,7 +850,7 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
         {
             const uint32_t pf = s_presentedXfbFrames.fetch_add(1, std::memory_order_relaxed) + 1;
             const int32_t dumpTarget = SpmDumpTarget();
-            g_spmDrawDump = ((dumpTarget >= 0 && pf == static_cast<uint32_t>(dumpTarget)) || g_spmSweepDump) ? 1 : 0;
+            g_spmDrawDump = (dumpTarget >= 0 && pf == static_cast<uint32_t>(dumpTarget)) ? 1 : 0;
         }
         // SPM bring-up: with drawdump.txt present, report any guest write into the DOL's
         // read-only sections (.rodata/.sdata2) once the game has been running a while.
