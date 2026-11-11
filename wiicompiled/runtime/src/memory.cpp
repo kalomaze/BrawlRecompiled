@@ -187,8 +187,7 @@ Region* TryResolveRegion(uint32_t address, size_t length) {
         const uint64_t base = region.config.baseAddress;
         const uint64_t limit = base + region.storageSize;
         const uint64_t addr = address;
-        const uint64_t end = addr + length;
-        if (addr >= base && end <= limit) {
+        if (addr >= base && addr <= limit && length <= limit - addr) {
             return &region;
         }
     }

@@ -148,7 +148,7 @@ MKW_MEMORY_FORCE_INLINE bool TryGetPointerFast(uint32_t address, size_t length, 
     }
     const uint32_t offset = address & kPageMask;
     const auto& entry = g_pageTable[page];
-    if (!entry.base || offset + length > entry.limit) {
+    if (!entry.base || offset > entry.limit || length > entry.limit - offset) {
         pointer = nullptr;
         return false;
     }

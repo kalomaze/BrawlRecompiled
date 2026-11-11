@@ -174,6 +174,17 @@ public class PpcRuntimeHelperTests
                 require(GuestFlat::IsActive() == bool(MKW_FLAT_MEMORY));
                 require(Memory::Contains(0x817FFFFFu));
                 require(!Memory::Contains(0x81800000u));
+                // Oversized native lengths must not wrap into an apparently valid guest range.
+                const bool fastRejectsOverflow = MemoryInline::GetPointerFast(0x80000001u, SIZE_MAX) == nullptr;
+                const bool regionRejectsOverflow = !Memory::Contains(0x80000000u, SIZE_MAX);
+                if (!fastRejectsOverflow || !regionRejectsOverflow) {
+                    std::cerr << "overflow rejection: fast=" << fastRejectsOverflow
+                              << " region=" << regionRejectsOverflow;
+                    return 1;
+                }
+                require(Memory::Contains(0x817FFFF8u, 8));
+                require(!Memory::Contains(0x817FFFF8u, 9));
+                require(!Memory::Contains(0x81800000u, SIZE_MAX));
                 for (uint32_t bank : {0u, 0x10000000u}) {
                     auto* physical = Memory::GetPointer(bank + 0x100u, 8);
                     auto* cached = Memory::GetPointer(bank + 0x80000100u, 8);
