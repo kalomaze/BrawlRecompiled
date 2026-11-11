@@ -29,11 +29,4 @@
   </ItemGroup>
 
 
-  <!-- Legacy compiler-dependent tests are excluded from the binary-free suite. -->
-  <ItemGroup>
-    <Compile Remove="CodeGenInlineCoverageTests.cs" />
-    <Compile Remove="CodeGenTests.cs" />
-    <Compile Remove="PpcRuntimeHelperTests.cs" />
-  </ItemGroup>
-
 </Project>

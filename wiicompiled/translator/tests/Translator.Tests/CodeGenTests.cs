@@ -1,9 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Text;
 using Translator.Core.Analysis.Ssa;
 using Translator.Core.CodeGen;
@@ -32,7 +30,7 @@ public class CodeGenTests
             _abis.TryGetValue(target, out abi!);
     }
 
-    [Fact]
+    [NativeFact]
     public void CodeGenerator_CompilesAndRunsThroughBridge()
     {
         var function = new IrFunction(
@@ -61,21 +59,10 @@ public class CodeGenTests
         // Linear generator expects entryPoint for function mapping
         var code = new CxxLinearCodeGenerator().Emit(0x80001000, ssa, signature, types);
 
-        var root = Translator.Core.Loading.ProjectPaths.FindRepositoryRoot();
-        var tempDir = Path.Combine(Path.GetTempPath(), "mkw_codegen_tests");
-        Directory.CreateDirectory(tempDir);
-
-        var genPath = Path.Combine(tempDir, "generated.cpp");
-        var harnessPath = Path.Combine(tempDir, "harness.cpp");
-        File.WriteAllText(genPath, code);
-
         var harness = new StringBuilder();
         harness.AppendLine("#include <iostream>");
         harness.AppendLine("#include \"ppc_runtime.h\"");
         harness.AppendLine("#include \"abi_bridge.h\"");
-        harness.AppendLine("// Mocks for runtime symbols");
-        harness.AppendLine("void TranslatedFunctionRegistry::Register(TranslatedFunctionInfo info) {}");
-        harness.AppendLine("CpuContext& GetPersistentCpuContext() { static CpuContext ctx; return ctx; }");
         
         harness.AppendLine("extern \"C\" void add_two(CpuContext* ctx);");
         harness.AppendLine("int main() {");
@@ -87,47 +74,7 @@ public class CodeGenTests
         harness.AppendLine("    std::cout << ctx.gpr[3];");
         harness.AppendLine("    return 0;");
         harness.AppendLine("}");
-        File.WriteAllText(harnessPath, harness.ToString());
-
-        var exePath = Path.Combine(tempDir, "a.out");
-        var gpp = new ProcessStartInfo
-        {
-            FileName = "g++",
-            ArgumentList =
-            {
-                "-std=c++20",
-                "-Wall",
-                "-Werror",
-                "-Wno-error=unused-but-set-variable",
-                "-I", Path.Combine(root, "runtime", "include"),
-                genPath,
-                harnessPath,
-                "-o", exePath
-            },
-            RedirectStandardError = true,
-            RedirectStandardOutput = true
-        };
-
-        using (var proc = Process.Start(gpp)!)
-        {
-            proc.WaitForExit(20000);
-            if (proc.ExitCode != 0)
-            {
-                var output = proc.StandardOutput.ReadToEnd() + proc.StandardError.ReadToEnd();
-                throw new InvalidOperationException($"g++ failed: {output}\n\nGenerated Code:\n{code}");
-            }
-        }
-
-        var run = new ProcessStartInfo
-        {
-            FileName = exePath,
-            RedirectStandardOutput = true
-        };
-        using var runProc = Process.Start(run)!;
-        runProc.WaitForExit(5000);
-        var outputText = runProc.StandardOutput.ReadToEnd().Trim();
-
-        Assert.Equal(0, runProc.ExitCode);
+        var outputText = TranslatorCppTestHarness.CompileAndRun(harness.ToString(), code);
         Assert.Equal("12", outputText);
     }
 
@@ -164,7 +111,7 @@ public class CodeGenTests
         var callIndex = code.IndexOf("InvokeDirectCpu<0x8170B834u>(ctx);", StringComparison.Ordinal);
         Assert.True(callIndex >= 0);
         var returnIndex = code.IndexOf("return;", callIndex, StringComparison.Ordinal);
-        var assignmentIndex = code.IndexOf("ctx->gpr[3] = 1;", callIndex, StringComparison.Ordinal);
+        var assignmentIndex = code.IndexOf("r3 = 1;", callIndex, StringComparison.Ordinal);
         Assert.True(returnIndex > callIndex);
         Assert.True(assignmentIndex > returnIndex);
     }
@@ -249,7 +196,7 @@ public class CodeGenTests
         var callIndex = code.IndexOf("InvokeDirectCpu<0x8172CC0Cu>(ctx);", StringComparison.Ordinal);
         var fallthroughGuardIndex = code.IndexOf("if (ctx->lr != 0x80661144u)", callIndex, StringComparison.Ordinal);
         var returnIndex = code.IndexOf("return;", fallthroughGuardIndex, StringComparison.Ordinal);
-        var assignmentIndex = code.IndexOf("ctx->gpr[3] = 1;", callIndex, StringComparison.Ordinal);
+        var assignmentIndex = code.IndexOf("r3 = 1;", callIndex, StringComparison.Ordinal);
 
         Assert.True(callIndex >= 0);
         Assert.True(fallthroughGuardIndex > callIndex);
@@ -298,7 +245,7 @@ public class CodeGenTests
         var fallthroughGuardIndex = code.IndexOf("if (ctx->lr != 0x800E5920u)", callIndex, StringComparison.Ordinal);
         var localCaseIndex = code.IndexOf("case 0x800E5934u:", fallthroughGuardIndex, StringComparison.Ordinal);
         var returnIndex = code.IndexOf("return;", localCaseIndex, StringComparison.Ordinal);
-        var fallthroughAssignmentIndex = code.IndexOf("ctx->gpr[3] = 8;", callIndex, StringComparison.Ordinal);
+        var fallthroughAssignmentIndex = code.IndexOf("r3 = 8;", callIndex, StringComparison.Ordinal);
 
         Assert.True(callIndex >= 0);
         Assert.True(fallthroughGuardIndex > callIndex);
@@ -348,7 +295,7 @@ public class CodeGenTests
         var localCaseIndex = code.IndexOf("case 0x8053513Cu:", callIndex, StringComparison.Ordinal);
         var localGotoIndex = code.IndexOf("goto loc_8053513C;", localCaseIndex, StringComparison.Ordinal);
         var instructionLabelIndex = code.IndexOf("loc_8053513C:", localGotoIndex, StringComparison.Ordinal);
-        var assignmentIndex = code.IndexOf("ctx->gpr[3] = 2;", instructionLabelIndex, StringComparison.Ordinal);
+        var assignmentIndex = code.IndexOf("r3 = 2;", instructionLabelIndex, StringComparison.Ordinal);
 
         Assert.True(callIndex >= 0);
         Assert.True(localCaseIndex > callIndex);
@@ -391,7 +338,7 @@ public class CodeGenTests
         var ssa = new SsaTransformer().Convert(function);
         var code = new CxxLinearCodeGenerator().Emit(0x80008000, ssa, signature, types);
 
-        Assert.Contains("PPC_PsqStInline<0u, 0u>(", code, StringComparison.Ordinal);
+        Assert.Contains("PPC_PsqStGqrInline<0u, 0u>(", code, StringComparison.Ordinal);
         Assert.Contains("PPC_PsFromScalarInline", code, StringComparison.Ordinal);
     }
 
@@ -432,8 +379,8 @@ public class CodeGenTests
         var ssa = new SsaTransformer().Convert(function);
         var code = new CxxLinearCodeGenerator().Emit(0x80008010, ssa, signature, types);
 
-        Assert.Contains("ctx->fpr[2].d = PPC_PsqLInline<0u, 0u>(ctx, ctx->gpr[3]);", code, StringComparison.Ordinal);
-        Assert.Contains("MemoryInline::FlatWriteFloat32(ctx->gpr[4], PPC_PsToScalarInline(ctx->fpr[2].d));", code, StringComparison.Ordinal);
+        Assert.Contains("PpcSetPairedFprInline(f2, PPC_PsqLGqrInline<0u, 0u>(ctx, mkw_gqr0, r3));", code, StringComparison.Ordinal);
+        Assert.Contains("MemoryInline::FlatWriteFloat32(r4, PPC_PsToScalarInline(f2.d));", code, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -471,13 +418,13 @@ public class CodeGenTests
             ValueRepresentation.Void);
 
         var ssa = new SsaTransformer().Convert(function);
-        var code = new CxxLinearCodeGenerator().Emit(0x80008018, ssa, signature, types);
+        var code = new CxxLinearCodeGenerator().Emit(0x80008018, ssa, signature, types, enableGpuFifoBurstCoalescing: false);
 
-        Assert.Contains("GX_HLE_FIFO_Write8(static_cast<uint8_t>(ctx->gpr[3]));", code, StringComparison.Ordinal);
-        Assert.Contains("GX_HLE_FIFO_Write16(static_cast<uint16_t>(ctx->gpr[4]));", code, StringComparison.Ordinal);
-        Assert.Contains("GX_HLE_FIFO_Write32(static_cast<uint32_t>(ctx->gpr[7]));", code, StringComparison.Ordinal);
-        Assert.Contains("GX_HLE_FIFO_WriteFloat(static_cast<float>(ctx->fpr[1].d));", code, StringComparison.Ordinal);
-        Assert.Contains("MemoryInline::FlatWrite8((ctx->gpr[6] + -32768), static_cast<uint32_t>(ctx->gpr[3]));", code, StringComparison.Ordinal);
+        Assert.Contains("GX_HLE_FIFO_Write8(static_cast<uint8_t>(r3));", code, StringComparison.Ordinal);
+        Assert.Contains("GX_HLE_FIFO_Write16(static_cast<uint16_t>(r4));", code, StringComparison.Ordinal);
+        Assert.Contains("GX_HLE_FIFO_Write32(static_cast<uint32_t>(r7));", code, StringComparison.Ordinal);
+        Assert.Contains("GX_HLE_FIFO_WriteFloat(static_cast<float>(f1.d));", code, StringComparison.Ordinal);
+        Assert.Contains("MemoryInline::FlatWrite8((r6 + -32768), static_cast<uint8_t>(r3));", code, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -511,10 +458,10 @@ public class CodeGenTests
         var ssa = new SsaTransformer().Convert(function);
         var code = new CxxLinearCodeGenerator().Emit(0x8000801C, ssa, signature, types);
 
-        Assert.Contains("fctiwzword0 = PPC_FprLowWordInline(ctx->fpr[0].d);", code, StringComparison.Ordinal);
-        Assert.DoesNotContain("MemoryInline::FlatWriteFloat64((ctx->gpr[1] + -16), ctx->fpr[0].d);", code, StringComparison.Ordinal);
-        Assert.Contains("ctx->gpr[3] = fctiwzword0;", code, StringComparison.Ordinal);
-        Assert.DoesNotContain("ctx->gpr[3] = MemoryInline::FlatRead32((ctx->gpr[1] + -12));", code, StringComparison.Ordinal);
+        Assert.Contains("fctiwzword0 = PPC_FprLowWordInline(f0.d);", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("MemoryInline::FlatWriteRamFloat64((r1 + -16), f0.d);", code, StringComparison.Ordinal);
+        Assert.Contains("r3 = fctiwzword0;", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("r3 = MemoryInline::FlatRead32((r1 + -12));", code, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -549,9 +496,9 @@ public class CodeGenTests
         var ssa = new SsaTransformer().Convert(function);
         var code = new CxxLinearCodeGenerator().Emit(0x8000801E, ssa, signature, types);
 
-        Assert.Contains("fctiwzword0 = PPC_FprLowWordInline(ctx->fpr[0].d);", code, StringComparison.Ordinal);
-        Assert.Contains("MemoryInline::FlatWriteFloat64((ctx->gpr[1] + -16), ctx->fpr[0].d);", code, StringComparison.Ordinal);
-        Assert.Contains("ctx->gpr[3] = fctiwzword0;", code, StringComparison.Ordinal);
+        Assert.Contains("fctiwzword0 = PPC_FprLowWordInline(f0.d);", code, StringComparison.Ordinal);
+        Assert.Contains("MemoryInline::FlatWriteRamFloat64((r1 + -16), f0.d);", code, StringComparison.Ordinal);
+        Assert.Contains("r3 = fctiwzword0;", code, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -588,7 +535,7 @@ public class CodeGenTests
         var code = new CxxLinearCodeGenerator().Emit(0x8000801D, ssa, signature, types);
 
         Assert.DoesNotContain("PPC_FprLowWordInline", code, StringComparison.Ordinal);
-        Assert.Contains("ctx->gpr[3] = MemoryInline::FlatRead32((ctx->gpr[1] + -12));", code, StringComparison.Ordinal);
+        Assert.Contains("r3 = MemoryInline::FlatRead32((r1 + -12));", code, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -622,8 +569,8 @@ public class CodeGenTests
         var code = new CxxLinearCodeGenerator().Emit(0x80008020, ssa, signature, types);
 
         Assert.DoesNotContain("InvokeDirectCpu<0x80021504u>(ctx);", code, StringComparison.Ordinal);
-        Assert.Contains("MemoryInline::FlatWriteFloat64((ctx->gpr[11] + -48), ctx->fpr[26].d);", code, StringComparison.Ordinal);
-        Assert.Contains("MemoryInline::FlatWriteFloat64((ctx->gpr[11] + -8), ctx->fpr[31].d);", code, StringComparison.Ordinal);
+        Assert.Contains("MemoryInline::FlatWriteFloat64((r11 + -48), f26.d);", code, StringComparison.Ordinal);
+        Assert.Contains("MemoryInline::FlatWriteFloat64((r11 + -8), f31.d);", code, StringComparison.Ordinal);
         Assert.DoesNotContain("DebugTrackPcIfLightweight", code, StringComparison.Ordinal);
         Assert.Contains("// RECOMP_REGISTRATION base 0x80008020 save_fpr_midrange_thunk preserves=true fpr_mask=0x00000000", code, StringComparison.Ordinal);
     }
@@ -659,13 +606,13 @@ public class CodeGenTests
         var code = new CxxLinearCodeGenerator().Emit(0x80008024, ssa, signature, types);
 
         Assert.DoesNotContain("InvokeDirectCpu<0x80021550u>(ctx);", code, StringComparison.Ordinal);
-        Assert.Contains("ctx->fpr[26].d = MemoryInline::FlatReadFloat64((ctx->gpr[11] + -48));", code, StringComparison.Ordinal);
-        Assert.Contains("ctx->fpr[31].d = MemoryInline::FlatReadFloat64((ctx->gpr[11] + -8));", code, StringComparison.Ordinal);
+        Assert.Contains("f26.d = MemoryInline::FlatReadFloat64((r11 + -48));", code, StringComparison.Ordinal);
+        Assert.Contains("f31.d = MemoryInline::FlatReadFloat64((r11 + -8));", code, StringComparison.Ordinal);
         Assert.DoesNotContain("DebugTrackPcIfLightweight", code, StringComparison.Ordinal);
         Assert.Contains("// RECOMP_REGISTRATION base 0x80008024 rest_fpr_midrange_thunk preserves=false fpr_mask=0xFC000000", code, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [NativeFact]
     public void Bridge_PassesFloatingPointRegisters()
     {
         var function = new IrFunction(
@@ -688,22 +635,11 @@ public class CodeGenTests
         var ssa = new SsaTransformer().Convert(function);
         var code = new CxxLinearCodeGenerator().Emit(0x80002000, ssa, signature, types);
 
-        var root = Translator.Core.Loading.ProjectPaths.FindRepositoryRoot();
-        var tempDir = Path.Combine(Path.GetTempPath(), "mkw_codegen_float_tests");
-        Directory.CreateDirectory(tempDir);
-
-        var genPath = Path.Combine(tempDir, "generated_float.cpp");
-        var harnessPath = Path.Combine(tempDir, "harness_float.cpp");
-        File.WriteAllText(genPath, code);
-
         var harness = new StringBuilder();
         harness.AppendLine("#include <cmath>");
         harness.AppendLine("#include <iostream>");
         harness.AppendLine("#include \"ppc_runtime.h\"");
         harness.AppendLine("#include \"abi_bridge.h\"");
-        harness.AppendLine("// Mocks for runtime symbols");
-        harness.AppendLine("void TranslatedFunctionRegistry::Register(TranslatedFunctionInfo info) {}");
-        harness.AppendLine("CpuContext& GetPersistentCpuContext() { static CpuContext ctx; return ctx; }");
 
         harness.AppendLine("extern \"C\" void float_passthrough(CpuContext* ctx);");
         harness.AppendLine("int main() {");
@@ -715,51 +651,11 @@ public class CodeGenTests
         harness.AppendLine("    std::cout << ctx.fpr[1].d;");
         harness.AppendLine("    return 0;");
         harness.AppendLine("}");
-        File.WriteAllText(harnessPath, harness.ToString());
-
-        var exePath = Path.Combine(tempDir, "float_test.out");
-        var gpp = new ProcessStartInfo
-        {
-            FileName = "g++",
-            ArgumentList =
-            {
-                "-std=c++20",
-                "-Wall",
-                "-Werror",
-                "-Wno-error=unused-but-set-variable",
-                "-I", Path.Combine(root, "runtime", "include"),
-                genPath,
-                harnessPath,
-                "-o", exePath
-            },
-            RedirectStandardError = true,
-            RedirectStandardOutput = true
-        };
-
-        using (var proc = Process.Start(gpp)!)
-        {
-            proc.WaitForExit(20000);
-            if (proc.ExitCode != 0)
-            {
-                var output = proc.StandardOutput.ReadToEnd() + proc.StandardError.ReadToEnd();
-                throw new InvalidOperationException($"g++ failed: {output}");
-            }
-        }
-
-        var run = new ProcessStartInfo
-        {
-            FileName = exePath,
-            RedirectStandardOutput = true
-        };
-        using var runProc = Process.Start(run)!;
-        runProc.WaitForExit(5000);
-        var outputText = runProc.StandardOutput.ReadToEnd().Trim();
-
-        Assert.Equal(0, runProc.ExitCode);
+        var outputText = TranslatorCppTestHarness.CompileAndRun(harness.ToString(), code);
         Assert.Equal("3.5", outputText);
     }
 
-    [Fact]
+    [NativeFact]
     public void Bridge_SimpleIntegerPassThrough()
     {
         var function = new IrFunction(
@@ -783,21 +679,10 @@ public class CodeGenTests
         var ssa = new SsaTransformer().Convert(function);
         var code = new CxxLinearCodeGenerator().Emit(0x80003000, ssa, signature, types);
 
-        var root = Translator.Core.Loading.ProjectPaths.FindRepositoryRoot();
-        var tempDir = Path.Combine(Path.GetTempPath(), "mkw_codegen_int_tests");
-        Directory.CreateDirectory(tempDir);
-
-        var genPath = Path.Combine(tempDir, "generated_int.cpp");
-        var harnessPath = Path.Combine(tempDir, "harness_int.cpp");
-        File.WriteAllText(genPath, code);
-
         var harness = new StringBuilder();
         harness.AppendLine("#include <iostream>");
         harness.AppendLine("#include \"ppc_runtime.h\"");
         harness.AppendLine("#include \"abi_bridge.h\"");
-        harness.AppendLine("// Mocks for runtime symbols");
-        harness.AppendLine("void TranslatedFunctionRegistry::Register(TranslatedFunctionInfo info) {}");
-        harness.AppendLine("CpuContext& GetPersistentCpuContext() { static CpuContext ctx; return ctx; }");
 
         harness.AppendLine("extern \"C\" void simple_int(CpuContext* ctx);");
         harness.AppendLine("int main() {");
@@ -809,52 +694,12 @@ public class CodeGenTests
         harness.AppendLine("    std::cout << ctx.gpr[3];");
         harness.AppendLine("    return 0;");
         harness.AppendLine("}");
-        File.WriteAllText(harnessPath, harness.ToString());
-
-        var exePath = Path.Combine(tempDir, "int_test.out");
-        var gpp = new ProcessStartInfo
-        {
-            FileName = "g++",
-            ArgumentList =
-            {
-                "-std=c++20",
-                "-Wall",
-                "-Werror",
-                "-Wno-error=unused-but-set-variable",
-                "-I", Path.Combine(root, "runtime", "include"),
-                genPath,
-                harnessPath,
-                "-o", exePath
-            },
-            RedirectStandardError = true,
-            RedirectStandardOutput = true
-        };
-
-        using (var proc = Process.Start(gpp)!)
-        {
-            proc.WaitForExit(20000);
-            if (proc.ExitCode != 0)
-            {
-                var output = proc.StandardOutput.ReadToEnd() + proc.StandardError.ReadToEnd();
-                throw new InvalidOperationException($"g++ failed: {output}");
-            }
-        }
-
-        var run = new ProcessStartInfo
-        {
-            FileName = exePath,
-            RedirectStandardOutput = true
-        };
-        using var runProc = Process.Start(run)!;
-        runProc.WaitForExit(5000);
-        var outputText = runProc.StandardOutput.ReadToEnd().Trim();
-
-        Assert.Equal(0, runProc.ExitCode);
+        var outputText = TranslatorCppTestHarness.CompileAndRun(harness.ToString(), code);
         Assert.Equal("11", outputText);
     }
 
     [Fact]
-    public void CodeGenerator_EmitsDirectRegisterAccessWithinBasicBlock()
+    public void CodeGenerator_ReusesResidentRegistersWithinBasicBlock()
     {
         var function = new IrFunction(
             "cache_test",
@@ -882,8 +727,8 @@ public class CodeGenTests
         var code = new CxxLinearCodeGenerator().Emit(0x80004000, ssa, signature, types);
 
         Assert.DoesNotContain("_cached_", code);
-        Assert.Contains("ctx->gpr[5] = (ctx->gpr[3] + ctx->gpr[4]);", code);
-        Assert.Contains("ctx->gpr[6] = (ctx->gpr[3] + ctx->gpr[5]);", code);
+        Assert.Contains("r5 = (r3 + r4);", code);
+        Assert.Contains("r6 = (r3 + r5);", code);
     }
 
     [Fact]
@@ -963,7 +808,7 @@ public class CodeGenTests
         var ssa = new SsaTransformer().Convert(function);
         var code = new CxxLinearCodeGenerator().Emit(0x80006000, ssa, signature, types);
 
-        Assert.Contains("ctx->fpr[5].d = PPC_PsToScalarInline(ctx->fpr[5].d);", code, StringComparison.Ordinal);
+        Assert.Contains("f5.d = PPC_PsToScalarInline(f5.d);", code, StringComparison.Ordinal);
         Assert.Contains("goto loc_merge;", code, StringComparison.Ordinal);
     }
 
@@ -1003,9 +848,9 @@ public class CodeGenTests
         var code = new CxxLinearCodeGenerator().Emit(0x80006100, ssa, signature, types);
 
         Assert.Contains("InvokeDirectCpu<0x80001234u>(ctx);", code, StringComparison.Ordinal);
-        Assert.Contains("ctx->fpr[31].d = ctx->fpr[1].d;", code, StringComparison.Ordinal);
-        Assert.Contains("PPC_Fcmp(0, ctx->fpr[31].d, ctx->fpr[4].d);", code, StringComparison.Ordinal);
-        Assert.DoesNotContain("PPC_Fcmp(0, PPC_PsToScalarInline(ctx->fpr[31].d)", code, StringComparison.Ordinal);
+        Assert.Contains("f31.d = f1.d;", code, StringComparison.Ordinal);
+        Assert.Contains("SetCRFloatResident(cr, 0, f31.d, f4.d);", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("PPC_PsToScalarInline(f31.d)", code, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1044,13 +889,13 @@ public class CodeGenTests
 
         var callIndex = code.IndexOf("InvokeDirectCpu<0x8019ADE0u>(ctx);", StringComparison.Ordinal);
         var normalizeIndex = code.IndexOf("ctx->fpr[1].d = PPC_PsToScalarInline(ctx->fpr[1].d);", StringComparison.Ordinal);
-        var assignIndex = code.IndexOf("ctx->fpr[31].d = ctx->fpr[1].d;", StringComparison.Ordinal);
+        var assignIndex = code.IndexOf("f31.d = f1.d;", StringComparison.Ordinal);
 
         Assert.True(callIndex >= 0, code);
         Assert.True(normalizeIndex > callIndex, code);
         Assert.True(assignIndex > normalizeIndex, code);
-        Assert.Contains("PPC_Fcmp(0, ctx->fpr[31].d, ctx->fpr[4].d);", code, StringComparison.Ordinal);
-        Assert.DoesNotContain("PPC_Fcmp(0, PPC_PsToScalarInline(ctx->fpr[31].d)", code, StringComparison.Ordinal);
+        Assert.Contains("SetCRFloatResident(cr, 0, f31.d, f4.d);", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("PPC_PsToScalarInline(f31.d)", code, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1085,7 +930,7 @@ public class CodeGenTests
                 ("func_807D5B38", new GuestFunctionAbi(new[] { "f3" }))))
             .Emit(0x80006110, ssa, signature, types);
 
-        Assert.Contains("ctx->fpr[3].d = ctx->fpr[29].d;", code, StringComparison.Ordinal);
+        Assert.Contains("f3.d = f29.d;", code, StringComparison.Ordinal);
         Assert.Contains("ctx->fpr[3].d = PPC_PsToScalarInline(ctx->fpr[3].d);", code, StringComparison.Ordinal);
         Assert.Contains("InvokeDirectCpu<0x807D5B38u>(ctx);", code, StringComparison.Ordinal);
     }
@@ -1121,12 +966,12 @@ public class CodeGenTests
 
         Assert.Contains("InvokeDirectCpu<0x8019ACCCu>(ctx);", code, StringComparison.Ordinal);
         Assert.DoesNotContain("ctx->fpr[3].d = PPC_PsToScalarInline(ctx->fpr[3].d);", code, StringComparison.Ordinal);
-        Assert.Contains("ctx->fpr[4].d = PPC_PsNegInline(ctx->fpr[3].d);", code, StringComparison.Ordinal);
-        Assert.DoesNotContain("PPC_PsFromScalarInline(ctx->fpr[3].d)", code, StringComparison.Ordinal);
+        Assert.Contains("PpcSetPairedFprInline(f4, PPC_PsNegInline(f3.d));", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("PPC_PsFromScalarInline(f3.d)", code, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void CodeGenerator_CachesContextRegistersForLeafFunctionsWhenEnabled()
+    public void CodeGenerator_CachesContextRegistersForLeafFunctions()
     {
         var function = new IrFunction(
             "leaf_register_cache",
@@ -1159,15 +1004,15 @@ public class CodeGenTests
             signature,
             types);
 
-        Assert.Contains("uint32_t cached_r3 = ctx->gpr[3];", code, StringComparison.Ordinal);
-        Assert.Contains("uint32_t cached_r4 = ctx->gpr[4];", code, StringComparison.Ordinal);
-        Assert.Contains("double cached_f1 = 0.0;", code, StringComparison.Ordinal);
-        Assert.Contains("cached_r3 = (cached_r3 + cached_r4);", code, StringComparison.Ordinal);
-        Assert.Contains("cached_f1 = PPC_PsMulInline(PPC_PsFromScalarInline(cached_f2), PPC_PsFromScalarInline(cached_f3));", code, StringComparison.Ordinal);
-        Assert.Contains("MemoryInline::FlatWriteFloat64((cached_r3 + 4), cached_f1);", code, StringComparison.Ordinal);
-        Assert.DoesNotContain("ctx->gpr[4] = cached_r4;", code, StringComparison.Ordinal);
+        Assert.Contains("uint32_t r3 = ctx->gpr[3];", code, StringComparison.Ordinal);
+        Assert.Contains("uint32_t r4 = ctx->gpr[4];", code, StringComparison.Ordinal);
+        Assert.Contains("PPC_FPR f1 = ctx->fpr[1];", code, StringComparison.Ordinal);
+        Assert.Contains("r3 = (r3 + r4);", code, StringComparison.Ordinal);
+        Assert.Contains("PpcSetPairedFprInline(f1, PPC_PsMulInline(PPC_PsFromScalarInline(f2.d), PPC_PsFromScalarInline(f3.d)));", code, StringComparison.Ordinal);
+        Assert.Contains("MemoryInline::FlatWriteFloat64((r3 + 4), f1.d);", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("ctx->gpr[4] = r4;", code, StringComparison.Ordinal);
 
-        var flushIndex = code.IndexOf("ctx->gpr[3] = cached_r3;", StringComparison.Ordinal);
+        var flushIndex = code.IndexOf("ctx->gpr[3] = r3;", StringComparison.Ordinal);
         var returnIndex = code.IndexOf("    return;", flushIndex, StringComparison.Ordinal);
         Assert.True(flushIndex >= 0, code);
         Assert.True(returnIndex > flushIndex, code);
@@ -1211,8 +1056,8 @@ public class CodeGenTests
             signature,
             types);
 
-        Assert.Contains("uint32_t cached_r3 = ctx->gpr[3];", code, StringComparison.Ordinal);
-        Assert.Contains("uint32_t cached_r4 = ctx->gpr[4];", code, StringComparison.Ordinal);
+        Assert.Contains("uint32_t r3 = ctx->gpr[3];", code, StringComparison.Ordinal);
+        Assert.Contains("uint32_t r4 = ctx->gpr[4];", code, StringComparison.Ordinal);
     }
     [Fact]
     public void CodeGenerator_DoesNotElideDirectOnlyFprSaveAfterRegisterModification()
@@ -1248,8 +1093,8 @@ public class CodeGenTests
             signature,
             types);
 
-        Assert.Contains("MemoryInline::FlatWriteRamFloat64((cached_r1 + 40), cached_f31);", code, StringComparison.Ordinal);
-        Assert.Contains("MemoryInline::FlatReadFloat64((cached_r1 + 40))", code, StringComparison.Ordinal);
+        Assert.Contains("MemoryInline::FlatWriteRamFloat64((r1 + 40), f31.d);", code, StringComparison.Ordinal);
+        Assert.Contains("MemoryInline::FlatReadFloat64((r1 + 40))", code, StringComparison.Ordinal);
         Assert.DoesNotContain("leaf_stack_saved_f31_entry", code, StringComparison.Ordinal);
     }
 
@@ -1292,9 +1137,9 @@ public class CodeGenTests
             types);
 
         Assert.Contains("InvokeDirectCpu<0x80001234u>(ctx);", code, StringComparison.Ordinal);
-        Assert.Contains("PPC_PsqStInline<0u, 0u>", code, StringComparison.Ordinal);
-        Assert.DoesNotContain("PPC_PsqLInline<0u, 0u>", code, StringComparison.Ordinal);
-        Assert.Contains("MemoryInline::FlatReadFloat64((cached_r1 + 112))", code, StringComparison.Ordinal);
+        Assert.Contains("PPC_PsqStStackInline<0u, 0u>", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("PPC_PsqLStackInline<0u, 0u>", code, StringComparison.Ordinal);
+        Assert.Contains("MemoryInline::FlatReadFloat64((r1 + 112))", code, StringComparison.Ordinal);
         Assert.Contains("tmp_psq_store", code, StringComparison.Ordinal);
         Assert.DoesNotContain("tmp_psq_load", code, StringComparison.Ordinal);
         Assert.DoesNotContain("leaf_stack_saved_f31_entry", code, StringComparison.Ordinal);
@@ -1339,9 +1184,9 @@ public class CodeGenTests
             signature,
             types);
 
-        Assert.Contains("PPC_PsqLInline<0u, 0u>", code, StringComparison.Ordinal);
-        Assert.Contains("MemoryInline::FlatWriteFloat64((cached_r1 + 40), cached_f31);", code, StringComparison.Ordinal);
-        Assert.Contains("MemoryInline::FlatReadFloat64((cached_r1 + 112))", code, StringComparison.Ordinal);
+        Assert.Contains("PPC_PsqLStackInline<0u, 0u>", code, StringComparison.Ordinal);
+        Assert.Contains("MemoryInline::FlatWriteRamFloat64((r1 + 40), f31.d);", code, StringComparison.Ordinal);
+        Assert.Contains("MemoryInline::FlatReadFloat64((r1 + 112))", code, StringComparison.Ordinal);
         Assert.DoesNotContain("leaf_stack_saved_f31_entry", code, StringComparison.Ordinal);
     }
 
@@ -1384,9 +1229,9 @@ public class CodeGenTests
             signature,
             types);
 
-        Assert.DoesNotContain("PPC_PsqLInline<0u, 0u>", code, StringComparison.Ordinal);
-        Assert.Contains("MemoryInline::FlatReadFloat32((cached_r1 + 116))", code, StringComparison.Ordinal);
-        Assert.Contains("MemoryInline::FlatReadFloat64((cached_r1 + 112))", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("PPC_PsqLStackInline<0u, 0u>", code, StringComparison.Ordinal);
+        Assert.Contains("MemoryInline::FlatReadFloat32((r1 + 116))", code, StringComparison.Ordinal);
+        Assert.Contains("MemoryInline::FlatReadFloat64((r1 + 112))", code, StringComparison.Ordinal);
         Assert.DoesNotContain("leaf_stack_saved_f31_entry", code, StringComparison.Ordinal);
     }
 
@@ -1465,8 +1310,7 @@ public class CodeGenTests
             0x80008000,
             new SsaTransformer().Convert(undefinedFunction),
             signature,
-            types,
-            );
+            types);
         Assert.Contains("UNDEFINED(0x80008000u, 0x7C000008u, \"trap for coverage\");", undefinedCode, StringComparison.Ordinal);
         Assert.Contains("return;", undefinedCode, StringComparison.Ordinal);
 
@@ -1490,11 +1334,10 @@ public class CodeGenTests
             0x80008010,
             new SsaTransformer().Convert(jumpTableFunction),
             signature,
-            types,
-            );
-        Assert.Contains("switch (static_cast<uint32_t>(ctx->gpr[3]))", jumpTableCode, StringComparison.Ordinal);
+            types);
+        Assert.Contains("switch (static_cast<uint32_t>(r3))", jumpTableCode, StringComparison.Ordinal);
         Assert.Contains("case 0x80008100u:", jumpTableCode, StringComparison.Ordinal);
-        Assert.Contains("InvokeIndirectJump(ctx->gpr[3], ctx);", jumpTableCode, StringComparison.Ordinal);
+        Assert.Contains("InvokeIndirectJump(r3, ctx);", jumpTableCode, StringComparison.Ordinal);
 
         var implicitReturnFunction = new IrFunction(
             "implicit_return_case",
@@ -1510,43 +1353,9 @@ public class CodeGenTests
             0x80008020,
             new SsaTransformer().Convert(implicitReturnFunction),
             signature,
-            new RepresentationEnvironment(new Dictionary<string, ValueRepresentation> { ["tmp_local"] = ValueRepresentation.Int32 }),
-            );
+            new RepresentationEnvironment(new Dictionary<string, ValueRepresentation> { ["tmp_local"] = ValueRepresentation.Int32 }));
         Assert.DoesNotContain("tmp_local_0 = 1;", implicitReturnCode, StringComparison.Ordinal);
         Assert.Contains("return;", implicitReturnCode, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void CodeGenerator_NormalizesScalarInputsToPairedAndParsesInvalidFloatRegisters()
-    {
-        var normalizeMethod = typeof(CxxLinearCodeGenerator).GetMethod(
-            "EmitNormalizePairedStateOnEdge",
-            BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(normalizeMethod);
-
-        var sb = new StringBuilder();
-        normalizeMethod!.Invoke(
-            null,
-            new object?[]
-            {
-                sb,
-                "    ",
-                "from",
-                "to",
-                new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["from"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                },
-                new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["to"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "f5" }
-                }
-            });
-
-        Assert.Contains("ctx->fpr[5].d = PPC_PsFromScalarInline(ctx->fpr[5].d);", sb.ToString(), StringComparison.Ordinal);
-
-        var parseMethod = typeof(CxxLinearCodeGenerator).GetMethod("ParseFloatRegisterIndex", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(parseMethod);
-        Assert.Equal(int.MaxValue, (int)parseMethod!.Invoke(null, new object?[] { "not_a_float_reg" })!);
-    }
 }

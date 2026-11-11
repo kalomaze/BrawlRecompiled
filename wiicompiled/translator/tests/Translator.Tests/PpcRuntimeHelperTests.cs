@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Text;
 using Translator.Core.Loading;
@@ -9,118 +8,9 @@ namespace Translator.Tests;
 
 public class PpcRuntimeHelperTests
 {
-    private static (int ExitCode, string Output) RunProcess(string fileName, string arguments, TimeSpan? timeout = null)
-    {
-        using var process = new Process
-        {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = fileName,
-                Arguments = arguments,
-                RedirectStandardError = true,
-                RedirectStandardOutput = true,
-                UseShellExecute = false
-            }
-        };
-
-        process.Start();
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        var exitedInTime = timeout.HasValue
-            ? process.WaitForExit((int)timeout.Value.TotalMilliseconds)
-            : process.WaitForExit(60000);
-
-        if (!exitedInTime)
-        {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch
-            {
-                // ignored
-            }
-
-            process.WaitForExit();
-            var staleOutput = stdoutTask.GetAwaiter().GetResult() + stderrTask.GetAwaiter().GetResult();
-            throw new TimeoutException($"Process '{fileName}' timed out. Output before kill:\n{staleOutput}");
-        }
-
-        var output = stdoutTask.GetAwaiter().GetResult() + stderrTask.GetAwaiter().GetResult();
-        return (process.ExitCode, output);
-    }
-
-    private static string CppCompiler()
-    {
-        var envCompiler = Environment.GetEnvironmentVariable("CXX");
-        if (!string.IsNullOrWhiteSpace(envCompiler) && ExecutableExists(envCompiler))
-        {
-            return envCompiler;
-        }
-
-        foreach (var candidate in new[] { "g++", "clang++" })
-        {
-            if (ExecutableExists(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        throw new FileNotFoundException("No C++ compiler found. Set CXX or install g++/clang++ on PATH.");
-    }
-
-    private static bool ExecutableExists(string fileName)
-    {
-        if (Path.IsPathFullyQualified(fileName))
-        {
-            return File.Exists(fileName);
-        }
-
-        var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-        var extensions = OperatingSystem.IsWindows()
-            ? (Environment.GetEnvironmentVariable("PATHEXT") ?? ".EXE;.BAT;.CMD").Split(';', StringSplitOptions.RemoveEmptyEntries)
-            : new[] { string.Empty };
-
-        foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            foreach (var extension in extensions)
-            {
-                var candidate = Path.Combine(directory, fileName);
-                if (!candidate.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
-                {
-                    candidate += extension;
-                }
-
-                if (File.Exists(candidate))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
-    private static string RunnerPath(string runnerBasePath)
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            var exePath = runnerBasePath + ".exe";
-            if (File.Exists(exePath))
-            {
-                return exePath;
-            }
-        }
-
-        return runnerBasePath;
-    }
-
-    [Fact]
+    [NativeFact]
     public void FselAndPsSelMatchDolphinForNaNAndSignedZeroControls()
     {
-        var root = ProjectPaths.FindRepositoryRoot();
-        var tempRoot = Path.Combine(root, "test_output", "ppc_runtime_helpers");
-        Directory.CreateDirectory(tempRoot);
 
         var harness = new StringBuilder();
         harness.AppendLine("#include <cmath>");
@@ -154,34 +44,12 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("    return 0;");
         harness.AppendLine("}");
 
-        var harnessPath = Path.Combine(tempRoot, "harness_ppc_runtime_helpers.cpp");
-        File.WriteAllText(harnessPath, harness.ToString());
-
-        var runnerBasePath = Path.Combine(tempRoot, "runner_ppc_runtime_helpers");
-        var args = TranslatorCppTestHarness.BuildCompileArguments(
-            root,
-            tempRoot,
-            Array.Empty<string>(),
-            harnessPath,
-            runnerBasePath,
-            includeDataSections: false);
-
-        var compiler = CppCompiler();
-        var (compileExitCode, compileOutput) = RunProcess(compiler, args, TimeSpan.FromSeconds(60));
-        Assert.True(compileExitCode == 0, $"{compiler} failed: {compileOutput}");
-
-        var runnerPath = RunnerPath(runnerBasePath);
-        var (runExitCode, runOutput) = RunProcess(runnerPath, "", TimeSpan.FromSeconds(10));
-        Assert.True(runExitCode == 0, $"Runner failed ({runExitCode}). Output:\n{runOutput}");
-        Assert.Equal("ok", runOutput.Trim());
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness.ToString()));
     }
 
-    [Fact]
+    [NativeFact]
     public void InlinePsqFloatFastPathPreservesGuestLaneOrder()
     {
-        var root = ProjectPaths.FindRepositoryRoot();
-        var tempRoot = Path.Combine(root, "test_output", "ppc_runtime_psq_lane_order");
-        Directory.CreateDirectory(tempRoot);
 
         var harness = new StringBuilder();
         harness.AppendLine("#include <cstdint>");
@@ -289,34 +157,12 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("    return 0;");
         harness.AppendLine("}");
 
-        var harnessPath = Path.Combine(tempRoot, "harness_psq_lane_order.cpp");
-        File.WriteAllText(harnessPath, harness.ToString());
-
-        var runnerBasePath = Path.Combine(tempRoot, "runner_psq_lane_order");
-        var args = TranslatorCppTestHarness.BuildCompileArguments(
-            root,
-            tempRoot,
-            Array.Empty<string>(),
-            harnessPath,
-            runnerBasePath,
-            includeDataSections: false);
-
-        var compiler = CppCompiler();
-        var (compileExitCode, compileOutput) = RunProcess(compiler, args, TimeSpan.FromSeconds(60));
-        Assert.True(compileExitCode == 0, $"{compiler} failed: {compileOutput}");
-
-        var runnerPath = RunnerPath(runnerBasePath);
-        var (runExitCode, runOutput) = RunProcess(runnerPath, "", TimeSpan.FromSeconds(10));
-        Assert.True(runExitCode == 0, $"Runner failed ({runExitCode}). Output:\n{runOutput}");
-        Assert.Equal("ok", runOutput.Trim());
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness.ToString()));
     }
 
-    [Fact]
+    [NativeFact]
     public void KnownU8Scale61PairedStoreMatchesExactQuantizationOnFastAndColdPaths()
     {
-        var root = ProjectPaths.FindRepositoryRoot();
-        var tempRoot = Path.Combine(root, "test_output", "ppc_runtime_psq_u8_scale61");
-        Directory.CreateDirectory(tempRoot);
 
         var harness = new StringBuilder();
         harness.AppendLine("#include <cmath>");
@@ -376,34 +222,12 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("    std::cout << \"ok\"; return 0;");
         harness.AppendLine("}");
 
-        var harnessPath = Path.Combine(tempRoot, "harness_psq_u8_scale61.cpp");
-        File.WriteAllText(harnessPath, harness.ToString());
-
-        var runnerBasePath = Path.Combine(tempRoot, "runner_psq_u8_scale61");
-        var args = TranslatorCppTestHarness.BuildCompileArguments(
-            root,
-            tempRoot,
-            Array.Empty<string>(),
-            harnessPath,
-            runnerBasePath,
-            includeDataSections: false);
-
-        var compiler = CppCompiler();
-        var (compileExitCode, compileOutput) = RunProcess(compiler, args, TimeSpan.FromSeconds(60));
-        Assert.True(compileExitCode == 0, $"{compiler} failed: {compileOutput}");
-
-        var runnerPath = RunnerPath(runnerBasePath);
-        var (runExitCode, runOutput) = RunProcess(runnerPath, "", TimeSpan.FromSeconds(10));
-        Assert.True(runExitCode == 0, $"Runner failed ({runExitCode}). Output:\n{runOutput}");
-        Assert.Equal("ok", runOutput.Trim());
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness.ToString()));
     }
 
-    [Fact]
+    [NativeFact]
     public void InlinePairedSingleArithmeticPreservesLaneOrder()
     {
-        var root = ProjectPaths.FindRepositoryRoot();
-        var tempRoot = Path.Combine(root, "test_output", "ppc_runtime_ps_arithmetic");
-        Directory.CreateDirectory(tempRoot);
 
         var harness = new StringBuilder();
         harness.AppendLine("#include <cmath>");
@@ -507,34 +331,12 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("    return 0;");
         harness.AppendLine("}");
 
-        var harnessPath = Path.Combine(tempRoot, "harness_ps_arithmetic.cpp");
-        File.WriteAllText(harnessPath, harness.ToString());
-
-        var runnerBasePath = Path.Combine(tempRoot, "runner_ps_arithmetic");
-        var args = TranslatorCppTestHarness.BuildCompileArguments(
-            root,
-            tempRoot,
-            Array.Empty<string>(),
-            harnessPath,
-            runnerBasePath,
-            includeDataSections: false);
-
-        var compiler = CppCompiler();
-        var (compileExitCode, compileOutput) = RunProcess(compiler, args, TimeSpan.FromSeconds(60));
-        Assert.True(compileExitCode == 0, $"{compiler} failed: {compileOutput}");
-
-        var runnerPath = RunnerPath(runnerBasePath);
-        var (runExitCode, runOutput) = RunProcess(runnerPath, "", TimeSpan.FromSeconds(10));
-        Assert.True(runExitCode == 0, $"Runner failed ({runExitCode}). Output:\n{runOutput}");
-        Assert.Equal("ok", runOutput.Trim());
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness.ToString()));
     }
 
-    [Fact]
+    [NativeFact]
     public void NonvolatileFprGuardPreservesPackedPairedAndScalarFprs()
     {
-        var root = ProjectPaths.FindRepositoryRoot();
-        var tempRoot = Path.Combine(root, "test_output", "ppc_nonvolatile_fpr_guard");
-        Directory.CreateDirectory(tempRoot);
 
         var harness = new StringBuilder();
         harness.AppendLine("#include <cstdint>");
@@ -572,7 +374,7 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("    if (ctx.fpr[31].raw != saved31.raw) return 5;");
         harness.AppendLine("    ctx.fpr[14] = saved14;");
         harness.AppendLine("    TranslatedFunctionInfo info{};");
-        harness.AppendLine("    info.entryPoint = reinterpret_cast<void*>(&ClobberNonvolatileFprs);");
+        harness.AppendLine("    info.rawCpuInvoker = &ClobberNonvolatileFprs;");
         harness.AppendLine("    info.nonvolatileFprWriteMask = 1u << 31;");
         harness.AppendLine("    if (!TryDispatchResolvedCpuTarget(&info, &ctx)) return 6;");
         harness.AppendLine("    if (ctx.fpr[14].raw == saved14.raw) return 7;");
@@ -591,32 +393,12 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("    return 0;");
         harness.AppendLine("}");
 
-        var harnessPath = Path.Combine(tempRoot, "harness_nonvolatile_fpr_guard.cpp");
-        File.WriteAllText(harnessPath, harness.ToString());
-
-        var runnerBasePath = Path.Combine(tempRoot, "runner_nonvolatile_fpr_guard");
-        var args =
-            "-std=c++17 " +
-            $"\"{harnessPath}\" " +
-            $"-I\"{Path.Combine(root, "runtime", "include")}\" " +
-            $"-o \"{runnerBasePath}\"";
-
-        var compiler = CppCompiler();
-        var (compileExitCode, compileOutput) = RunProcess(compiler, args, TimeSpan.FromSeconds(60));
-        Assert.True(compileExitCode == 0, $"{compiler} failed: {compileOutput}");
-
-        var runnerPath = RunnerPath(runnerBasePath);
-        var (runExitCode, runOutput) = RunProcess(runnerPath, "", TimeSpan.FromSeconds(10));
-        Assert.True(runExitCode == 0, $"Runner failed ({runExitCode}). Output:\n{runOutput}");
-        Assert.Equal("ok", runOutput.Trim());
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness.ToString()));
     }
 
-    [Fact]
+    [NativeFact]
     public void DirectCpuDispatchSeesModOverrideRegisteredAfterFirstBaseCall()
     {
-        var root = ProjectPaths.FindRepositoryRoot();
-        var tempRoot = Path.Combine(root, "test_output", "ppc_direct_mod_override_refresh");
-        Directory.CreateDirectory(tempRoot);
 
         var harness = new StringBuilder();
         harness.AppendLine("#include <cstdint>");
@@ -629,19 +411,13 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("extern \"C\" void GX_HLE_FIFO_WriteFloat(float) {}");
         harness.AppendLine("extern \"C\" void BaseTranslated(CpuContext* ctx) { ctx->gpr[3] = 0xBACE0001u; }");
         harness.AppendLine("extern \"C\" void ModTranslated(CpuContext* ctx) { ctx->gpr[3] = 0xC0DE0002u; }");
-        harness.AppendLine("template <> struct KnownTranslatedCpuCall<0x81234568u> {");
-        harness.AppendLine("    static constexpr bool kAvailable = true;");
-        harness.AppendLine("    static constexpr uint32_t kNonvolatileFprWriteMask = 0;");
-        harness.AppendLine("    static constexpr bool kMayBeOverridden = true;");
-        harness.AppendLine("    static constexpr void (*Entry)(CpuContext*) = &BaseTranslated;");
-        harness.AppendLine("};");
         harness.AppendLine("static void Register(uint32_t priority, FunctionKind kind, const char* name, void (*entry)(CpuContext*)) {");
         harness.AppendLine("    TranslatedFunctionInfo info{};");
         harness.AppendLine("    info.address = 0x81234568u;");
         harness.AppendLine("    info.name = name;");
         harness.AppendLine("    info.kind = kind;");
         harness.AppendLine("    info.priority = priority;");
-        harness.AppendLine("    info.entryPoint = reinterpret_cast<void*>(entry);");
+        harness.AppendLine("    info.rawCpuInvoker = entry;");
         harness.AppendLine("    info.nonvolatileFprWriteMask = 0;");
         harness.AppendLine("    TranslatedFunctionRegistry::Register(std::move(info));");
         harness.AppendLine("}");
@@ -662,25 +438,6 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("    return 0;");
         harness.AppendLine("}");
 
-        var harnessPath = Path.Combine(tempRoot, "harness_direct_mod_override_refresh.cpp");
-        File.WriteAllText(harnessPath, harness.ToString());
-
-        var runnerBasePath = Path.Combine(tempRoot, "runner_direct_mod_override_refresh");
-        var args = TranslatorCppTestHarness.BuildCompileArguments(
-            root,
-            tempRoot,
-            Array.Empty<string>(),
-            harnessPath,
-            runnerBasePath,
-            includeDataSections: false);
-
-        var compiler = CppCompiler();
-        var (compileExitCode, compileOutput) = RunProcess(compiler, args, TimeSpan.FromSeconds(60));
-        Assert.True(compileExitCode == 0, $"{compiler} failed: {compileOutput}");
-
-        var runnerPath = RunnerPath(runnerBasePath);
-        var (runExitCode, runOutput) = RunProcess(runnerPath, "", TimeSpan.FromSeconds(10));
-        Assert.True(runExitCode == 0, $"Runner failed ({runExitCode}). Output:\n{runOutput}");
-        Assert.Contains("ok", runOutput);
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness.ToString()));
     }
 }
