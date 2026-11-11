@@ -437,7 +437,6 @@ void SystemBridge::SeedLowMemDefaults(const Memory::Config& config) {
     entries.push_back({0x80000000u, 0x52534245u, "Disc game code"}); // RSBE
     entries.push_back({0x80000004u, 0x30310001u, "Disc maker/id"});  // "01", disc 0, revision 1 (boot.bin)
     entries.push_back({0x80003194u, 0x52534245u, "OS app game code"}); // RSBE
-    entries.push_back({0x80003194u, 0x52534245u, "OS app gamename"});  // RSBE
     // NSMBW's OSInit (newer SDK than Mario Kart's) compares the running IOS (0x80003140) with the
     // title's required IOS at 0x80003188 - same major, revision not older - and calls OSFatal
     // ("ERROR #002") otherwise. The boot path leaves the TMD's IOS here; Dolphin writes the IOS word.

@@ -9,6 +9,70 @@ namespace Translator.Tests;
 public class PpcRuntimeHelperTests
 {
     [NativeFact]
+    public void GuestMemoryAliasesAndCheckedAccessPreserveSemantics()
+    {
+        const string harness = """
+            #include "ppc_runtime.h"
+            #include <iostream>
+            #include <cstdlib>
+            static unsigned fifo = 0, materialized = 0;
+            extern "C" void GX_HLE_FIFO_Write8(uint8_t) {}
+            extern "C" void GX_HLE_FIFO_Write16(uint16_t) {}
+            extern "C" void GX_HLE_FIFO_Write32(uint32_t value) { fifo = value; }
+            extern "C" void GX_HLE_FIFO_WriteFloat(float) {}
+            static void require(bool value) { if (!value) std::abort(); }
+            static bool Materialize(void*) {
+                ++materialized;
+                Memory::Write32(0x80000100u, 0x12345678u);
+                return true;
+            }
+            int main() {
+                auto config = Memory::Config::WiiDefaults();
+                Memory::Init(config);
+                require(Memory::Contains(0x817FFFFFu));
+                require(!Memory::Contains(0x81800000u));
+                for (uint32_t bank : {0u, 0x10000000u}) {
+                    auto* physical = Memory::GetPointer(bank + 0x100u, 8);
+                    auto* cached = Memory::GetPointer(bank + 0x80000100u, 8);
+                    auto* uncached = Memory::GetPointer(bank + 0xC0000100u, 8);
+                    require(physical == cached && cached == uncached);
+                    MemoryInline::FlatWriteRam32(bank + 0x80000100u, 0x12345678u);
+                    require(MemoryInline::FlatRead32(bank + 0x100u) == 0x12345678u);
+                    require(physical[0] == 0x12 && physical[3] == 0x78);
+                    Memory::Write64(bank + 0xC0000100u, 0x123456789ABCDEF0ull);
+                    require(Memory::Read64(bank + 0x80000100u) == 0x123456789ABCDEF0ull);
+                }
+                Memory::RegisterDeferredRead(0x80000100u, 4, Materialize, nullptr);
+            #if !MKW_FLAT_MEMORY
+                require(!GuestFlat::IsActive());
+                require(MemoryInline::ResolveRangeHost(0x80000100u, 0, 4, true, false) == nullptr);
+                require(MemoryInline::FlatRead32(0x80000100u) == 0x12345678u);
+            #else
+                // The standalone harness has no application's signal handler.
+                require(Memory::Read32(0x80000100u) == 0x12345678u);
+            #endif
+                require(materialized == 1);
+                require(Memory::Read32(0x80000100u) == 0x12345678u && materialized == 1);
+                require(MemoryInline::ResolveRangeHost(0x80000100u, 0, 4, true, true) != nullptr);
+                require(MemoryInline::ResolveRangeHost(0xFFFFFFFCu, 0, 8, true, true) == nullptr);
+                MemoryInline::FlatWrite32(0xCC008000u, 0xAABBCCDDu);
+                require(fifo == 0xAABBCCDDu);
+            #if !MKW_FLAT_MEMORY
+                const uint32_t page = 0x80000100u >> RecompMod::kExecutableWriteGuardPageShift;
+                RecompMod::g_executableWriteGuardPages[page].store(1);
+                require(MemoryInline::ResolveRangeHost(0x80000100u, 0, 4, false, true) == nullptr);
+                RecompMod::g_executableWriteGuardPages[page].store(0);
+                try { MemoryInline::FlatRead32(0x60000000u); return 1; }
+                catch (const Memory::AccessViolation&) {}
+            #endif
+                Memory::Reset();
+                std::cout << "ok";
+            }
+            """;
+        Assert.EndsWith("ok", TranslatorCppTestHarness.CompileAndRun(harness));
+    }
+
+    [NativeFact]
     public void FselAndPsSelMatchDolphinForNaNAndSignedZeroControls()
     {
 

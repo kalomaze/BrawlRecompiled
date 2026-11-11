@@ -68,6 +68,8 @@ else()
     set(MKW_BASELINE_ARCH_FLAG "")
 endif()
 
+option(MKW_FLAT_MEMORY "Use fixed-address 4 GiB mapping and OS page protections for guest accesses" ON)
+
 option(MKW_BUILD_PRODUCTS "Build translated WiiCompiled product targets" ON)
 option(MKW_BUILD_PSQ_TESTS "Build focused PSQ ISA tests" OFF)
 
@@ -77,7 +79,7 @@ option(MKW_BUILD_PSQ_TESTS "Build focused PSQ ISA tests" OFF)
 # so every target created afterwards (mkw_runtime_common, the translated shard
 # libraries and the products in cmake/PublicProducts.cmake) inherits them while
 # aurora-main and its third-party tree stay unaffected.
-set(MKW_PROJECT_COMPILE_DEFINITIONS NOMINMAX)
+set(MKW_PROJECT_COMPILE_DEFINITIONS NOMINMAX MKW_FLAT_MEMORY=$<BOOL:${MKW_FLAT_MEMORY}>)
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -344,7 +346,11 @@ endif()
 # a registration file is silently never compiled and never errors. The stale-glob
 # failure mode is worth far more than the milliseconds.
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
-if(MKW_PLATFORM_MACOS)
+if(NOT MKW_FLAT_MEMORY)
+    list(REMOVE_ITEM SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/src/guest_flat_memory.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/src/guest_flat_memory_macos.cpp")
+elseif(MKW_PLATFORM_MACOS)
     list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_LIST_DIR}/src/guest_flat_memory.cpp")
 else()
     list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_LIST_DIR}/src/guest_flat_memory_macos.cpp")

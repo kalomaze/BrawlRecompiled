@@ -9,12 +9,17 @@
 #include <cstdint>
 #include <vector>
 
+#ifndef MKW_FLAT_MEMORY
+#define MKW_FLAT_MEMORY 0
+#endif
+
 namespace GuestFlat {
 
 // Fixed base so the emitted access is `[reg + imm64-in-register]` with no load
 // of a global.
 inline constexpr uint64_t kGuestSpaceSize = 0x1'0000'0000ull;
 inline constexpr size_t kGuestPageSize = 0x1000;
+#if MKW_FLAT_MEMORY
 #if defined(__x86_64__)
 // 16 TiB: clear of the Windows ASan shadow (32 TiB) and of the usual image/heap
 // placement.
@@ -41,6 +46,7 @@ inline constexpr uintptr_t kFixedFlatGuestBase = 0x0000'0010'0000'0000ull;
 #endif
 
 #define MKW_FLAT_GUEST_BASE (reinterpret_cast<uint8_t*>(GuestFlat::kFixedFlatGuestBase))
+#endif // MKW_FLAT_MEMORY
 
 enum class Backing {
     Owned,
@@ -62,6 +68,7 @@ struct FaultCounters {
     uint32_t unmappedRegions = 0;  // distinct 64 KiB blocks committed on demand
 };
 
+#if MKW_FLAT_MEMORY
 // True once the reservation exists and translated code may use the flat path.
 bool IsActive();
 
@@ -125,5 +132,19 @@ void LogFaultSummary() noexcept;
 // The platform-specific handler that calls this is expected to have already
 // done that extraction - this function only ever works with the parsed pair.
 bool HandleAccessViolation(void* faultAddress, bool isWrite) noexcept;
+
+#else
+// The baseline uses Memory's allocated backing and explicit access checks.
+// Protection hooks have no work here: the checked paths enforce their policy.
+inline constexpr bool IsActive() { return false; }
+inline constexpr bool RequiresCheckedAccess() noexcept { return true; }
+inline void ProtectDeferredRange(uint32_t, size_t) {}
+inline void UnprotectDeferredRange(uint32_t, size_t) {}
+inline void RegisterExecutableRange(uint32_t, uint32_t) {}
+inline void ReprotectExecutablePage(uint32_t) {}
+inline FaultCounters Counters() { return {}; }
+inline void LogFaultSummary() noexcept {}
+inline bool HandleAccessViolation(void*, bool) noexcept { return false; }
+#endif
 
 } // namespace GuestFlat

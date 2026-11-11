@@ -236,20 +236,28 @@ MKW_MEMORY_FORCE_INLINE bool TryGetWritablePointerFast(
 // proof since length <= kPageSize (1 MiB) can't straddle the 32 MiB MMIO window.
 MKW_MEMORY_FORCE_INLINE uint8_t* ResolveRangeHost(uint32_t base, int32_t minOffset, uint32_t length,
                                                  bool needsRead, bool needsWrite) {
-    (void)needsRead;
     const uint32_t guestStart = base + static_cast<uint32_t>(minOffset);
     if (length == 0 || length > kPageSize || guestStart > UINT32_MAX - (length - 1)) return nullptr;
-    if (GuestFlat::RequiresCheckedAccess()) {
-        // A host page can cover multiple independently-special Wii pages.
-        // Returning null keeps resolved accesses on the checked Memory::*
-        // path, which materializes deferred reads and applies write policy.
-        (void)needsWrite;
-        return nullptr;
-    }
+#if MKW_FLAT_MEMORY
+    (void)needsRead;
+    if (GuestFlat::RequiresCheckedAccess()) return nullptr;
     if (needsWrite &&
         (FlatWriteNeedsPolicy(guestStart) || FlatWriteNeedsPolicy(guestStart + (length - 1))))
         [[unlikely]] return nullptr;
     return MKW_FLAT_GUEST_BASE + guestStart;
+#else
+    const uint32_t last = guestStart + length - 1;
+    const uint32_t page = guestStart >> kPageShift;
+    if ((last >> kPageShift) != page || IsMmioAddress(guestStart) || IsMmioAddress(last))
+        return nullptr;
+    if (needsRead && g_deferredReadCoveredPages[page]) return nullptr;
+    if (needsWrite) {
+        for (uint32_t p = guestStart >> kWritableSubPageShift; p <= (last >> kWritableSubPageShift); ++p)
+            if (RecompMod::g_executableWriteGuardPages[p].load(std::memory_order_relaxed))
+                return nullptr;
+    }
+    return GetPointerFast(guestStart, length);
+#endif
 }
 
 // Guest-address byte order. Distinct from isa/big_endian.h, which is the
@@ -547,15 +555,23 @@ MKW_MEMORY_FORCE_INLINE void WriteResolvedFloat64(uint8_t* r, uint32_t o, uint32
 
 template <typename T>
 MKW_MEMORY_FORCE_INLINE T FlatLoad(uint32_t address) {
+#if MKW_FLAT_MEMORY
     T value{};
     std::memcpy(&value, MKW_FLAT_GUEST_BASE + address, sizeof(T));
     return MaybeByteSwap(value);
+#else
+    return ReadResolvedFallback<T>(address);
+#endif
 }
 
 template <typename T>
 MKW_MEMORY_FORCE_INLINE void FlatStore(uint32_t address, T value) {
+#if MKW_FLAT_MEMORY
     const T swapped = MaybeByteSwap(value);
     std::memcpy(MKW_FLAT_GUEST_BASE + address, &swapped, sizeof(T));
+#else
+    WriteResolvedFallback<T>(address, value);
+#endif
 }
 
 MKW_MEMORY_FORCE_INLINE uint8_t FlatRead8(uint32_t address) {

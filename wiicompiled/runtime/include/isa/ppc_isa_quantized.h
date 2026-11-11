@@ -266,7 +266,11 @@ MKW_PPC_FORCE_INLINE const uint8_t* PpcTryGetPsqReadableHostInline(uint32_t addr
 {
     if (GuestFlat::RequiresCheckedAccess()) [[unlikely]]
         return nullptr;
+#if MKW_FLAT_MEMORY
     return MKW_FLAT_GUEST_BASE + addr;
+#else
+    return nullptr;
+#endif
 }
 
 // Same reduction for stores. Still refuses a 32-bit address wrap (one host access can't
@@ -283,7 +287,11 @@ MKW_PPC_FORCE_INLINE uint8_t* PpcTryGetPsqWritableHostInline(uint32_t addr)
     if (MemoryInline::FlatWriteNeedsPolicy(addr) ||
         MemoryInline::FlatWriteNeedsPolicy(addr + 7u)) [[unlikely]]
         return nullptr;
+#if MKW_FLAT_MEMORY
     return MKW_FLAT_GUEST_BASE + addr;
+#else
+    return nullptr;
+#endif
 }
 
 inline double PpcLoadPairPsqFloatFastInline(uint32_t addr)

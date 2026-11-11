@@ -127,6 +127,11 @@ On x86-64, add `-DMKW_HOST_ISA=v2` to build without AVX2/FMA, or `v3` for the
 newer CPU baseline (the current default). The v2 build still requires SSE4.2 and
 POPCNT; it does not support every 2008 CPU. The choice persists in the build directory.
 
+Fixed-address guest mapping is enabled by default on supported targets. Add
+`-DMKW_FLAT_MEMORY=OFF` to use ordinary allocated RAM with shared guest aliases
+and explicit memory-access checks, without reserving a fixed 4 GiB host address
+range. Use `ON` to re-enable the optimization; the choice persists in the build directory.
+
 The current entry point requires CMake 3.25+, Python 3.12+, Git, Clang, Ninja, and the
 Ubuntu C/C++ development environment. It downloads its pinned .NET SDK locally and does not
 install system packages. On a machine without development tools:
@@ -139,7 +144,8 @@ sudo apt install cmake python3 git clang lld ninja-build build-essential pkg-con
 
 Run `BRAWL_NATIVE_TESTS=1 build/dotnet/dotnet test wiicompiled/translator/tests/Translator.Tests/Translator.Tests.csproj`
 to include tests that compile and execute the native PowerPC helpers. Set `MKW_HOST_ISA=v2`
-or `v3` to select their x86 instruction baseline. `BRAWL_NATIVE_RUNNER` may name an
+or `v3` to select their x86 instruction baseline. Native tests use allocated guest RAM
+by default; set `MKW_FLAT_MEMORY=1` to exercise fixed mapping. `BRAWL_NATIVE_RUNNER` may name an
 executable wrapper that receives the test binary as its argument, for CPU emulation.
 
 ### Upstream Windows build

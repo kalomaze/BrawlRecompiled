@@ -106,6 +106,7 @@ void RefreshDeferredReadPage(uint32_t page) {
 
 struct Region {
     Memory::RegionConfig config;
+    std::shared_ptr<std::vector<uint8_t>> storage;
     uint8_t* storagePtr = nullptr;
     size_t storageSize = 0;
 };
@@ -431,9 +432,8 @@ GuestFlat::Backing ClassifyBacking(uint32_t baseAddress) {
         return GuestFlat::Backing::Mem1;
     }
 
-    // NDEV-sized MEM2: physical (0x10000000), cached (0x90000000),
-    // uncached (0xD0000000). Mario Kart Wii detects this configuration and
-    // creates its original EGGRootDebug expansion heap.
+    // Expanded MEM2 holds Brawl's prelinked modules above the retail 64 MiB.
+    // Physical, cached and uncached views alias the same backing.
     if ((baseAddress >= Memory::kMem2PhysicalBase &&
          baseAddress < Memory::kMem2PhysicalEnd) ||
         (baseAddress >= Memory::kMem2CachedBase &&
@@ -541,15 +541,6 @@ Memory::Config Memory::Config::WiiDefaults() {
         .sizeBytes = Memory::kMem2Size,
     });
 
-    // Kamek module overlay: 2 MiB above MEM1, which the game believes ends at 0x81800000, so this
-    // costs no arena space (unlike the old in-arena reservation that shrank the race scene heaps).
-    // Base must stay within +/-32 MiB of every DOL/StaticR hook site for Kamek Rel24 branches to encode.
-    config.regions.push_back(RegionConfig{
-        .name = "MEM1_KAMEK_OVERLAY",
-        .baseAddress = 0x81800000,
-        .sizeBytes = 0x200000,
-    });
-
     // Locked cache (THP decoder fast RAM) is really 16KB at 0xE0000000, but a sub-page mapping can
     // never enter the coarse 1MiB bias tables, forcing every THP load/store through the checked
     // fallback (the dominant cost of THP-heavy screens). Back a full 1MiB page plus the successor
@@ -577,6 +568,7 @@ void Memory::Init(const Config& config) {
     ClearPageTable();
     regions.reserve(config.regions.size());
 
+#if MKW_FLAT_MEMORY
     // The flat reservation backs every guest view from one shared section object, so cached/uncached/
     // physical mirrors alias as before. GetPointer still hands out the unprotected host alias, so
     // native code (image loading, DVD reads, HLE) is unaffected by the guest view's protections.
@@ -591,15 +583,48 @@ void Memory::Init(const Config& config) {
         GuestFlat::Initialize(flatRegions);
     }
 
+#else
+    // Cached, uncached and physical guest aliases share one allocation per RAM
+    // bank. Other configured regions own their storage independently.
+    struct Store { size_t size = 0; std::shared_ptr<std::vector<uint8_t>> bytes; };
+    std::unordered_map<uint64_t, Store> stores;
+    const auto key = [](uint32_t base) {
+        const auto backing = ClassifyBacking(base);
+        return (static_cast<uint64_t>(backing) << 32) |
+            (backing == GuestFlat::Backing::Owned ? base : 0u);
+    };
+    const auto offset = [](uint32_t base) -> size_t {
+        switch (ClassifyBacking(base)) {
+        case GuestFlat::Backing::Mem1: return base & 0x01FFFFFFu;
+        case GuestFlat::Backing::Mem2: return base & 0x0FFFFFFFu;
+        default: return 0;
+        }
+    };
+    for (const auto& region : config.regions) {
+        if (region.sizeBytes > GuestFlat::kGuestSpaceSize - region.baseAddress)
+            throw std::invalid_argument("Guest memory region exceeds the 32-bit address space");
+        auto& store = stores[key(region.baseAddress)];
+        store.size = std::max(store.size, offset(region.baseAddress) + region.sizeBytes);
+    }
+    for (auto& [_, store] : stores)
+        store.bytes = std::make_shared<std::vector<uint8_t>>(store.size);
+#endif
+
     // Map virtual regions onto that backing store, with mirroring.
     for (const auto& regionConfig : config.regions) {
         Region instance;
         instance.config = regionConfig;
 
+#if MKW_FLAT_MEMORY
         instance.storagePtr = GuestFlat::HostPointer(regionConfig.baseAddress);
         if (instance.storagePtr == nullptr && regionConfig.sizeBytes != 0) {
             throw std::runtime_error("Flat guest mapping is missing region '" + regionConfig.name + "'");
         }
+#else
+        instance.storage = stores.at(key(regionConfig.baseAddress)).bytes;
+        instance.storagePtr = instance.storage->empty() ? nullptr :
+            instance.storage->data() + offset(regionConfig.baseAddress);
+#endif
         instance.storageSize = regionConfig.sizeBytes;
 
         regions.emplace_back(std::move(instance));

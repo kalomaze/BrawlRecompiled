@@ -45,8 +45,14 @@ internal static class TranslatorCppTestHarness
                     throw new ArgumentException("MKW_HOST_ISA must be v2 or v3");
                 arguments.Add($"-march=x86-64-{isa}");
             }
-            foreach (var source in new[] { "abi_bridge.cpp", "fpu_helpers.cpp", "memory.cpp", "guest_flat_memory.cpp", "ppc_helpers.cpp", "ppc_quantized.cpp" })
+            foreach (var source in new[] { "abi_bridge.cpp", "fpu_helpers.cpp", "memory.cpp", "ppc_helpers.cpp", "ppc_quantized.cpp" })
                 arguments.Add(Path.Combine(root, "runtime", "src", source));
+            if (Environment.GetEnvironmentVariable("MKW_FLAT_MEMORY") == "1")
+            {
+                arguments.Add("-DMKW_FLAT_MEMORY=1");
+                arguments.Add(Path.Combine(root, "runtime", "src",
+                    OperatingSystem.IsMacOS() ? "guest_flat_memory_macos.cpp" : "guest_flat_memory.cpp"));
+            }
             if (generated is not null)
             {
                 var generatedPath = Path.Combine(temp, "generated.cpp");

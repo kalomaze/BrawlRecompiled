@@ -66,6 +66,7 @@ def main():
     parser.add_argument('--build-type', default='Release',
                         choices=('Debug', 'Release', 'RelWithDebInfo', 'MinSizeRel'))
     parser.add_argument('--host-isa', choices=('v2', 'v3'))
+    parser.add_argument('--flat-memory', choices=('ON', 'OFF'))
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error('--jobs must be positive')
@@ -189,10 +190,12 @@ def build_game(args, disc, build):
             '--base-metadata', 'generated/base_translation_output.json', '--base-functions-dir', 'generated/functions',
             '--native-source-dir', 'runtime/src', '--out', 'generated/build_shards', '--base-shards', '600', cwd=wc)
         translated_stamp.write_text(translation_key)
-    isa_options = [f'-DMKW_HOST_ISA={args.host_isa}'] if args.host_isa else []
+    native_options = [f'-DMKW_HOST_ISA={args.host_isa}'] if args.host_isa else []
+    if args.flat_memory is not None:
+        native_options.append(f'-DMKW_FLAT_MEMORY={args.flat_memory}')
     run(args.cmake, '-S', wc / 'runtime', '-B', build / 'native', '-G', 'Ninja',
         f'-DCMAKE_BUILD_TYPE={args.build_type}', f'-DCMAKE_C_COMPILER={shutil.which("clang")}',
-        f'-DCMAKE_CXX_COMPILER={shutil.which("clang++")}', f'-DMKW_TRANSLATED_COMPILE_JOBS={args.jobs}', *isa_options)
+        f'-DCMAKE_CXX_COMPILER={shutil.which("clang++")}', f'-DMKW_TRANSLATED_COMPILE_JOBS={args.jobs}', *native_options)
     run(args.cmake, '--build', build / 'native', '--target', 'WiiCompiled', '--parallel', args.jobs)
     print(f'Built: {build / "native/WiiCompiled"}\nExtracted game data: {data}', flush=True)
 
