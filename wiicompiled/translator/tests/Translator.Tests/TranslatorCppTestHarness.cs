@@ -50,8 +50,7 @@ internal static class TranslatorCppTestHarness
             if (Environment.GetEnvironmentVariable("MKW_FLAT_MEMORY") == "1")
             {
                 arguments.Add("-DMKW_FLAT_MEMORY=1");
-                arguments.Add(Path.Combine(root, "runtime", "src",
-                    OperatingSystem.IsMacOS() ? "guest_flat_memory_macos.cpp" : "guest_flat_memory.cpp"));
+                arguments.Add(Path.Combine(root, "runtime", "src", "guest_flat_memory.cpp"));
             }
             if (generated is not null)
             {

@@ -65,6 +65,15 @@ public class PpcRuntimeHelperTests
                 try { MemoryInline::FlatRead32(0x60000000u); return 1; }
                 catch (const Memory::AccessViolation&) {}
             #endif
+                // Reinitializing the same layout must clear both RAM banks and
+                // retain the physical/cached/uncached alias relationship.
+                Memory::Init(config);
+                for (uint32_t bank : {0u, 0x10000000u}) {
+                    require(Memory::Read64(bank + 0x80000100u) == 0);
+                    Memory::Write32(bank + 0xC0000100u, 0x87654321u);
+                    require(Memory::Read32(bank + 0x100u) == 0x87654321u);
+                    require(Memory::Read32(bank + 0x80000100u) == 0x87654321u);
+                }
                 Memory::Reset();
                 std::cout << "ok";
             }

@@ -347,13 +347,7 @@ endif()
 # failure mode is worth far more than the milliseconds.
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 if(NOT MKW_FLAT_MEMORY)
-    list(REMOVE_ITEM SOURCES
-        "${CMAKE_CURRENT_LIST_DIR}/src/guest_flat_memory.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/src/guest_flat_memory_macos.cpp")
-elseif(MKW_PLATFORM_MACOS)
     list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_LIST_DIR}/src/guest_flat_memory.cpp")
-else()
-    list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_LIST_DIR}/src/guest_flat_memory_macos.cpp")
 endif()
 if(MKW_TARGET_ARM64)
     enable_language(ASM)

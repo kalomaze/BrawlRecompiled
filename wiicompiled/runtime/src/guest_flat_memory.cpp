@@ -674,9 +674,23 @@ void Initialize(const std::vector<RegionRequest>& regions) {
         // twice below (once here as the always-accessible host view, once per-region as the
         // guest view whose protection the fault handler controls), the same "one backing store,
         // two VA aliases" trick CreateFileMapping/MapViewOfFile(3) gives Windows.
+#if defined(__linux__)
         section.fd = memfd_create("wiicompiled-guest-ram", MFD_CLOEXEC);
+#else
+        // POSIX hosts without memfd_create use an unlinked backing file.
+        char path[] = "/tmp/wiicompiled-guest-XXXXXX";
+        section.fd = mkstemp(path);
+        if (section.fd >= 0) {
+            if (unlink(path) != 0 || fcntl(section.fd, F_SETFD, FD_CLOEXEC) != 0) {
+                const int error = errno;
+                close(section.fd);
+                errno = error;
+                throw std::runtime_error(LastErrorText("preparing guest RAM backing file"));
+            }
+        }
+#endif
         if (section.fd < 0) {
-            throw std::runtime_error(LastErrorText("memfd_create for guest RAM"));
+            throw std::runtime_error(LastErrorText("creating guest RAM backing store"));
         }
         if (ftruncate(section.fd, static_cast<off_t>(rounded)) != 0) {
             throw std::runtime_error(LastErrorText("ftruncate for guest RAM"));
