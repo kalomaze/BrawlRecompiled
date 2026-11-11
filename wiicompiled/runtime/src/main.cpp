@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -1071,10 +1072,16 @@ void InstallPosixMemoryFaultHandler() {
     action.sa_sigaction = PosixMemoryFaultHandler;
     action.sa_flags = SA_SIGINFO;
     sigemptyset(&action.sa_mask);
-    sigaction(SIGSEGV, &action, nullptr);
+    if (sigaction(SIGSEGV, &action, nullptr) != 0) {
+        FaultReport::Message message;
+        message.Text("[runtime] FATAL installing SIGSEGV handler; errno=").Decimal(errno).Fatal();
+    }
     // Linux pager failures use SIGBUS; Darwin protection faults can use it too.
     // Only faults admitted by platform-specific classification enter memory recovery.
-    sigaction(SIGBUS, &action, nullptr);
+    if (sigaction(SIGBUS, &action, nullptr) != 0) {
+        FaultReport::Message message;
+        message.Text("[runtime] FATAL installing SIGBUS handler; errno=").Decimal(errno).Fatal();
+    }
 }
 #endif
 
@@ -1176,7 +1183,10 @@ int RuntimeMain(int argc, char** argv) {
     InstallPosixMemoryFaultHandler();
 #endif
     InitializeProcessTranscript(argc, argv);
-    std::signal(SIGABRT, AbortSignalHandler);
+    if (std::signal(SIGABRT, AbortSignalHandler) == SIG_ERR) {
+        FaultReport::Message message;
+        message.Text("[runtime] FATAL installing SIGABRT handler; errno=").Decimal(errno).Fatal();
+    }
     // Install exit/terminate handlers to ensure we get crash info
     std::atexit(AtExitHandler);
     std::set_terminate(TerminateHandler);
