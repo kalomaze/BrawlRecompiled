@@ -11,19 +11,41 @@
 #include "system_bridge.h"
 #include "recomp_mod_loader.h"
 
+namespace {
+std::atomic<unsigned> patchNotifications{0};
+bool rearmDuringPolicy = false;
+}
+namespace GuestCodePatch {
+bool NoteWrite(uint32_t) { patchNotifications.fetch_add(1, std::memory_order_relaxed); return true; }
+}
+
 // No guest execution is needed to exercise the real mappings and protection recovery.
 namespace RecompMod {
 uint32_t CurrentTranslatedExecutionAddress() noexcept { return 0; }
-bool HandleExecutableWrite(uint32_t, size_t, uint64_t) { return false; }
+bool HandleExecutableWrite(uint32_t address, size_t, uint64_t) {
+    GuestCodePatch::NoteWrite(address);
+    if (rearmDuringPolicy) {
+        // Model Sync consuming the early notification and rearming before the
+        // handler's permission change. The post-open notification must survive.
+        patchNotifications.store(0);
+        GuestFlat::ReprotectExecutablePage(address);
+    }
+    return false;
+}
 }
 void SystemBridge::DumpCpuState(const CpuContext*) { std::abort(); }
 void ShowRuntimeFatalPopup(std::string_view, std::string_view) noexcept { std::abort(); }
 
 namespace {
 volatile std::sig_atomic_t recovered = 0;
+std::atomic<uint32_t> recoveryAddress{0x32000000u};
+void RecoverActualFault(int, siginfo_t* info, void*) {
+    if (!GuestFlat::HandleAccessViolation(info->si_addr, true,
+                                         reinterpret_cast<const void*>(&RecoverActualFault))) std::_Exit(2);
+}
 void RecoverWhileInterrupted(int) {
     auto* base = reinterpret_cast<uint8_t*>(GuestFlat::kFixedFlatGuestBase);
-    recovered = GuestFlat::HandleAccessViolation(base + 0x32000000u, true,
+    recovered = GuestFlat::HandleAccessViolation(base + recoveryAddress.load(), true,
                                                  reinterpret_cast<const void*>(&RecoverWhileInterrupted));
 }
 }
@@ -105,9 +127,53 @@ int main() {
         const auto sparseFaults = GuestFlat::Counters().unmapped;
         if (!GuestFlat::HandleAccessViolation(page, true, reinterpret_cast<const void*>(&main)) ||
             GuestFlat::Counters().unmapped != sparseFaults) return 1;
+        // Recovery must work even if the interrupted operation owns StateMutex.
+        recoveryAddress.store(address);
+        std::signal(SIGUSR1, RecoverWhileInterrupted);
+        {
+            std::lock_guard<std::mutex> interrupted(GuestFlat::StateMutex());
+            std::raise(SIGUSR1);
+        }
+        std::signal(SIGUSR1, SIG_DFL);
+        if (!recovered) return 1;
+        recoveryAddress.store(0x32000000u);
+
+        rearmDuringPolicy = true;
+        if (!GuestFlat::HandleAccessViolation(page, true, reinterpret_cast<const void*>(&main)) ||
+            patchNotifications.load() != 1) return 1;
+        rearmDuringPolicy = false;
+        *page = 0x7c;
+        if (mem1Physical[0x1000] != 0x7c) return 1;
+
+        // If Sync consumes the post-open notification before the store retries,
+        // its rearm must cause a fresh real write fault and a fresh notification.
+        struct sigaction action{}, previous{};
+        action.sa_sigaction = RecoverActualFault;
+        action.sa_flags = SA_SIGINFO;
+        sigemptyset(&action.sa_mask);
+        if (sigaction(SIGSEGV, &action, &previous) != 0) return 1;
+        patchNotifications.store(0);
+        GuestFlat::ReprotectExecutablePage(address);
+        *page = 0x7d;
+        if (patchNotifications.load() == 0 || mem1Physical[0x1000] != 0x7d) return 1;
+        std::thread rearm([&] {
+            for (unsigned i = 0; i < 1000; ++i) GuestFlat::ReprotectExecutablePage(address);
+        });
+        auto* volatilePage = static_cast<volatile uint8_t*>(page);
+        for (unsigned i = 0; i < 1000; ++i) *volatilePage = static_cast<uint8_t>(i);
+        rearm.join();
+        if (mem1Physical[0x1000] != static_cast<uint8_t>(999)) return 1;
+        if (sigaction(SIGSEGV, &previous, nullptr) != 0) return 1;
+
         GuestFlat::ReprotectExecutablePage(address);
         // Make the OS protection change fail, rather than mocking its return value.
         if (munmap(page, static_cast<size_t>(getpagesize())) != 0) return 1;
+        try {
+            GuestFlat::ReprotectExecutablePage(address);
+            std::cerr << "failed executable rearm silently ignored\n";
+            return 1;
+        } catch (const std::runtime_error&) {
+        }
         if (GuestFlat::HandleAccessViolation(page, true, reinterpret_cast<const void*>(&main))) {
             std::cerr << "failed protection recovery was reported as handled\n";
             return 1;

@@ -14,6 +14,7 @@
 #include <unordered_map>
 
 #include "memory.h"
+#include "guest_code_patch.h"
 #include "ppc_runtime.h"
 #include "recomp_mod_loader.h"
 #include "runtime_log.h"
@@ -155,13 +156,10 @@ static_assert(std::atomic<uint8_t>::is_always_lock_free);
 // Registration is published before OS protection and never cleared. Otherwise
 // a fault racing registration could mistake executable memory for sparse data.
 constexpr uint8_t kExecutableRegistered = 1;
-constexpr uint8_t kExecutableProtected = 2;
 std::atomic<uint8_t> g_executablePages[1u << 20]{};
-#if !defined(_WIN32)
-// mprotect is idempotent for simultaneous commits. Only the first successful
-// commit increments the distinct-region counter and emits a diagnostic.
+// OS commits are idempotent. Only the first successful commit increments the
+// distinct-region counter and emits a diagnostic.
 std::atomic<uint8_t> g_unmappedCommittedBlocks[1u << 16]{};
-#endif
 
 std::atomic<uint32_t> g_countMmio{0};
 std::atomic<uint32_t> g_countXGuard{0};
@@ -338,29 +336,47 @@ bool CommitPlaceholder(uint8_t* address, uint64_t size, ProtectionFlags protecti
 #endif
 }
 
+#if defined(_WIN32)
+void ReserveSparseStorage() {
+    // Convert each remaining placeholder span, not each 64 KiB block. Runtime
+    // recovery can then MEM_COMMIT without splitting/replacing any allocation.
+    for (uint64_t offset = 0; offset < kGuestSpaceSize;) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (VirtualQuery(g_base + offset, &mbi, sizeof(mbi)) == 0 || mbi.RegionSize == 0)
+            throw std::runtime_error(LastErrorText("querying sparse guest reservation"));
+        const uint64_t size = std::min<uint64_t>(mbi.RegionSize, kGuestSpaceSize - offset);
+        if (mbi.State == MEM_RESERVE) {
+            // The final placeholder includes the extra guard granule. Split it
+            // at 4 GiB so that guard stays a placeholder and can never commit.
+            if (size != mbi.RegionSize) SplitPlaceholder(g_base + offset, size);
+            if (g_virtualAlloc2(GetCurrentProcess(), g_base + offset, static_cast<SIZE_T>(size),
+                                MEM_RESERVE | kMemReplacePlaceholder, PAGE_NOACCESS, nullptr, 0) == nullptr)
+                throw std::runtime_error(LastErrorText("reserving sparse guest storage"));
+        }
+        offset += size;
+    }
+}
+#endif
+
 // One definition of the two windows lives in memory_access.h; these are the
 // names the fault handler below reads.
 bool IsMmio(uint32_t address) { return MemoryInline::IsMmioAddress(address); }
 bool IsGpuFifo(uint32_t address) { return MemoryInline::IsGpuFifoAddress(address); }
 
-void ApplyExecutableProtectionLocked() {
+void ProtectExecutableRange(uint32_t start, uint32_t end) {
     if (g_base == nullptr || RequiresCheckedAccess()) return;
-    auto& protectedPages = g_executablePages;
-    for (const auto& range : ExecutableRanges()) {
-        // Edge pages too (code and data): GuestCodePatch keeps one open after a data store until the next frame, so
-        // its data costs a fault a frame at most, and a mod's hook written there by a plain store is still seen.
-        const uint64_t first = static_cast<uint64_t>(range.start) & ~(kHostPageSize - 1u);
-        const uint64_t last = RoundUp(range.end, kHostPageSize);
-        if (last <= first) continue;
-        for (uint64_t page = first; page < last; page += kHostPageSize) {
-            const uint32_t pageIndex = static_cast<uint32_t>(page >> 12);
-            const auto flags = protectedPages[pageIndex].fetch_or(kExecutableRegistered, std::memory_order_release);
-            if (flags & kExecutableProtected) continue;
-            if (ProtectRange(g_base + page, kHostPageSize, kProtRead)) {
-                protectedPages[pageIndex].fetch_or(kExecutableProtected, std::memory_order_relaxed);
-            }
-        }
+    // Edge pages contain code and data; GuestCodePatch decides when they rearm.
+    const uint64_t first = static_cast<uint64_t>(start) & ~(kHostPageSize - 1u);
+    const uint64_t last = RoundUp(end, kHostPageSize);
+    for (uint64_t page = first; page < last; page += kHostPageSize) {
+        g_executablePages[page >> 12].store(kExecutableRegistered, std::memory_order_release);
+        if (!ProtectRange(g_base + page, kHostPageSize, kProtRead))
+            throw std::runtime_error(LastErrorText("protecting executable guest page"));
     }
+}
+
+void ApplyExecutableProtectionLocked() {
+    for (const auto& range : ExecutableRanges()) ProtectExecutableRange(range.start, range.end);
 }
 
 bool SameLayout(const std::vector<RegionRequest>& lhs, const std::vector<RegionRequest>& rhs) {
@@ -695,6 +711,9 @@ void Initialize(const std::vector<RegionRequest>& regions) {
         throw std::runtime_error(LastErrorText("committing the no-access MMIO window"));
     }
 
+#if defined(_WIN32)
+    ReserveSparseStorage();
+#endif
     ApplyExecutableProtectionLocked();
 #if defined(_WIN32)
     InstallVectoredHandler();
@@ -732,19 +751,17 @@ void RegisterExecutableRange(uint32_t start, uint32_t end) {
         return;
     }
     ranges.push_back(GuardedRange{start, end});
-    ApplyExecutableProtectionLocked();
+    ProtectExecutableRange(start, end);
 }
 
 void ReprotectExecutablePage(uint32_t address) {
     if (RequiresCheckedAccess() || g_base == nullptr) return;
-    std::lock_guard<std::mutex> lock(StateMutex());
     const uint64_t page = static_cast<uint64_t>(address) & ~(kHostPageSize - 1u);
-    const bool inside = std::any_of(ExecutableRanges().begin(), ExecutableRanges().end(), [&](const GuardedRange& range) {
-        return page < range.end && page + kHostPageSize > range.start;
-    });
-    const uint32_t pageIndex = static_cast<uint32_t>(page >> 12);
-    if (inside && (g_executablePages[pageIndex].load(std::memory_order_relaxed) & kExecutableProtected) == 0 && ProtectRange(g_base + page, kHostPageSize, kProtRead)) {
-        g_executablePages[pageIndex].fetch_or(kExecutableProtected, std::memory_order_relaxed);
+    if (g_executablePages[page >> 12].load(std::memory_order_acquire) & kExecutableRegistered) {
+        // Do not cache the current OS protection: a fault may reopen this page
+        // concurrently. The last OS protection operation determines access.
+        if (!ProtectRange(g_base + page, kHostPageSize, kProtRead))
+            throw std::runtime_error(LastErrorText("rearming executable guest page"));
     }
 }
 
@@ -802,15 +819,17 @@ bool HandleAccessViolation(void* faultAddress, bool isWrite, const void* instruc
             // width and value are not recoverable from the fault record, so the
             // report carries the exact address instead.
             if (!RecompMod::HandleExecutableWrite(guestAddress, 1, 0)) {
-                // A permitted write (the REL loader relocating its own text).
-                // Those arrive in bulk, so the page is opened permanently
-                // rather than trapping every relocation.
-                std::lock_guard<std::mutex> lock(StateMutex());
+                // Open the permitted store's page. GuestCodePatch rearms tracked
+                // code patches at its synchronization boundary.
                 if (!ProtectRange(g_base + (static_cast<uint64_t>(pageIndex) << 12), kHostPageSize,
                                   kProtReadWrite)) {
                     return false;  // Retrying an unchanged protection fault would loop forever.
                 }
-                g_executablePages[pageIndex].fetch_and(static_cast<uint8_t>(~kExecutableProtected), std::memory_order_relaxed);
+                // Sync may have consumed the policy check's notification and
+                // rearmed the page before we opened it. Publish again afterward.
+                // If Sync instead consumes this notification before the store
+                // retries, its subsequent read-only protection traps that store.
+                GuestCodePatch::NoteWrite(guestAddress);
             }
             return true;
         }
@@ -863,7 +882,6 @@ bool HandleAccessViolation(void* faultAddress, bool isWrite, const void* instruc
     bool committed = false;
     {
 #if defined(_WIN32)
-        std::lock_guard<std::mutex> lock(StateMutex());
         MEMORY_BASIC_INFORMATION mbi{};
         if (VirtualQuery(g_base + blockBase, &mbi, sizeof(mbi)) == 0) return false;
         if (mbi.State == MEM_COMMIT) {
@@ -877,15 +895,17 @@ bool HandleAccessViolation(void* faultAddress, bool isWrite, const void* instruc
                                                               PAGE_EXECUTE)) != 0;
             return isWrite ? writable : readable;
         }
-        if (!CommitPlaceholder(g_base + blockBase, kAllocationGranularity, kProtReadWrite)) return false;
-        committed = true;
+        // Initialization already replaced placeholders with private reservations.
+        // MEM_COMMIT is idempotent and never releases another thread's backing.
+        if (VirtualAlloc(g_base + blockBase, kAllocationGranularity, MEM_COMMIT, PAGE_READWRITE) == nullptr)
+            return false;
 #else
         // Re-establish access even after a previous commit: protection or the
         // mapping itself may have changed. Failed OS operations must propagate.
         if (!CommitPlaceholder(g_base + blockBase, kAllocationGranularity, kProtReadWrite)) return false;
+#endif
         const uint32_t blockIndex = static_cast<uint32_t>(blockBase / kAllocationGranularity);
         committed = g_unmappedCommittedBlocks[blockIndex].exchange(1, std::memory_order_relaxed) == 0;
-#endif
     }
     if (committed) {
         g_countUnmappedRegions.fetch_add(1, std::memory_order_relaxed);
