@@ -398,6 +398,11 @@ if(MKW_BUILD_PSQ_TESTS)
         -P "${CMAKE_CURRENT_LIST_DIR}/tests/psq_reserved_tests.cmake")
 endif()
 
+add_executable(mkw_cr_logical_tests EXCLUDE_FROM_ALL "${CMAKE_CURRENT_LIST_DIR}/tests/cr_logical_tests.cpp")
+target_include_directories(mkw_cr_logical_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+target_compile_features(mkw_cr_logical_tests PRIVATE cxx_std_17)
+add_test(NAME mkw_cr_logical_tests COMMAND mkw_cr_logical_tests)
+
 add_executable(mkw_platform_paths_tests "${CMAKE_CURRENT_LIST_DIR}/tests/platform_paths_tests.cpp")
 target_link_libraries(mkw_platform_paths_tests PRIVATE mkw_platform)
 target_compile_features(mkw_platform_paths_tests PRIVATE cxx_std_17)
