@@ -1,3 +1,6 @@
+using System.Collections.Generic;
+using Translator.Core.Ir;
+using Translator.Core.Lifting;
 using Translator.Core.Disassembly;
 using Xunit;
 
@@ -5,6 +8,49 @@ namespace Translator.Tests;
 
 public class PpcDecoderAdditionalTests
 {
+    // Independent opcode specification: Dolphin PPCTables.cpp, tables 59, 63 and 63_2.
+    // https://github.com/dolphin-emu/dolphin/blob/36982a2b32e8dec9107618d5db923e5b8aabcd87/Source/Core/Core/PowerPC/PPCTables.cpp
+    [Theory]
+    [InlineData(59u)]
+    [InlineData(63u)]
+    public void FloatingOpcodeSpaceMatchesDolphinReference(uint primary)
+    {
+        var single = new Dictionary<uint, string> {
+            [18] = "fdivs", [20] = "fsubs", [21] = "fadds", [24] = "fres", [25] = "fmuls",
+            [28] = "fmsubs", [29] = "fmadds", [30] = "fnmsubs", [31] = "fnmadds"
+        };
+        var doubleAForm = new Dictionary<uint, string> {
+            [18] = "fdiv", [20] = "fsub", [21] = "fadd", [23] = "fsel", [25] = "fmul",
+            [26] = "frsqrte", [28] = "fmsub", [29] = "fmadd", [30] = "fnmsub", [31] = "fnmadd"
+        };
+        var doubleXForm = new Dictionary<uint, string> {
+            [0] = "fcmpu", [32] = "fcmpo", [12] = "frsp", [14] = "fctiw", [15] = "fctiwz",
+            [40] = "fneg", [72] = "fmr", [136] = "fnabs", [264] = "fabs", [64] = "mcrfs",
+            [38] = "mtfsb1", [70] = "mtfsb0", [134] = "mtfsfi", [583] = "mffs", [711] = "mtfsf"
+        };
+        var lifter = new PpcLifter();
+        for (uint xo = 0; xo < 1024; ++xo)
+        for (uint record = 0; record < 2; ++record)
+        {
+            string? expected;
+            var known = primary == 59
+                ? single.TryGetValue(xo & 31, out expected)
+                : doubleAForm.TryGetValue(xo & 31, out expected) || doubleXForm.TryGetValue(xo, out expected);
+            var word = (primary << 26) | (4u << 21) | (1u << 16) | (2u << 11) | (xo << 1) | record;
+            var instruction = Decode(word);
+            var ir = Assert.Single(lifter.Lift(new[] { instruction }, allowUnsupported: true)).Ir;
+            if (!known)
+            {
+                Assert.IsType<IrUndefined>(Assert.Single(ir));
+                continue;
+            }
+            if (record != 0 && expected is not ("fcmpu" or "fcmpo" or "mcrfs"))
+                expected += ".";
+            Assert.Equal(expected, instruction.Mnemonic);
+            Assert.DoesNotContain(ir, operation => operation is IrUndefined);
+        }
+    }
+
     private static PpcInstruction Decode(uint word, uint address = 0x80000000u) => PpcDecoder.Decode(address, word);
 
     private static uint EncodeDForm(uint primary, uint rsOrRd, uint ra, int imm)
