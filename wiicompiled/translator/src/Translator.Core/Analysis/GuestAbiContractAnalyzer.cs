@@ -55,24 +55,6 @@ public sealed record GuestAbiContract(
 
 public static class GuestAbiContractAnalyzer
 {
-    private readonly record struct RegisterSet(
-        uint Gpr, uint Fpr, byte Cr, bool Xer, bool Ctr, bool Lr, bool Fpscr, byte Gqr, byte Hid)
-    {
-        public static RegisterSet Empty => default;
-        public RegisterSet Union(RegisterSet other) =>
-            new(Gpr | other.Gpr, Fpr | other.Fpr, (byte)(Cr | other.Cr),
-                Xer || other.Xer, Ctr || other.Ctr, Lr || other.Lr,
-                Fpscr || other.Fpscr, (byte)(Gqr | other.Gqr), (byte)(Hid | other.Hid));
-        public RegisterSet Intersect(RegisterSet other) =>
-            new(Gpr & other.Gpr, Fpr & other.Fpr, (byte)(Cr & other.Cr),
-                Xer && other.Xer, Ctr && other.Ctr, Lr && other.Lr,
-                Fpscr && other.Fpscr, (byte)(Gqr & other.Gqr), (byte)(Hid & other.Hid));
-        public RegisterSet Except(RegisterSet other) =>
-            new(Gpr & ~other.Gpr, Fpr & ~other.Fpr, (byte)(Cr & ~other.Cr),
-                Xer && !other.Xer, Ctr && !other.Ctr, Lr && !other.Lr,
-                Fpscr && !other.Fpscr, (byte)(Gqr & ~other.Gqr), (byte)(Hid & ~other.Hid));
-    }
-
     public static GuestAbiContract Analyze(
         IrFunction function,
         IReadOnlyDictionary<uint, GuestAbiContract>? calleeContracts = null)
@@ -99,11 +81,11 @@ public static class GuestAbiContractAnalyzer
                 predecessors[secondOrdinal].Add(index);
         }
 
-        var definiteWritesByBlock = new RegisterSet[blockCount];
+        var definiteWritesByBlock = new GuestStateMask[blockCount];
         for (var index = 0; index < blockCount; ++index)
         {
             var instructions = blockList[index].Instructions;
-            var set = RegisterSet.Empty;
+            var set = GuestStateMask.Empty;
             for (var position = 0; position < instructions.Count; ++position)
             {
                 Writes(instructions[position], calleeContracts, out _, out var definiteWrite);
@@ -112,8 +94,8 @@ public static class GuestAbiContractAnalyzer
             definiteWritesByBlock[index] = set;
         }
 
-        var definiteIn = new RegisterSet[blockCount];
-        var definiteOut = new RegisterSet[blockCount];
+        var definiteIn = new GuestStateMask[blockCount];
+        var definiteOut = new GuestStateMask[blockCount];
 
         bool changed;
         do
@@ -122,10 +104,10 @@ public static class GuestAbiContractAnalyzer
             for (var index = 0; index < blockCount; ++index)
             {
                 var blockPredecessors = predecessors[index];
-                RegisterSet incoming;
+                GuestStateMask incoming;
                 if (blockList[index].Label == function.EntryLabel || blockPredecessors.Count == 0)
                 {
-                    incoming = RegisterSet.Empty;
+                    incoming = GuestStateMask.Empty;
                 }
                 else
                 {
@@ -144,8 +126,8 @@ public static class GuestAbiContractAnalyzer
             }
         } while (changed);
 
-        var readBeforeWrite = RegisterSet.Empty;
-        var possibleWrites = RegisterSet.Empty;
+        var readBeforeWrite = GuestStateMask.Empty;
+        var possibleWrites = GuestStateMask.Empty;
         var directTargets = new SortedSet<uint>();
         var boundaryFlags = GuestCallBoundaryFlags.None;
         for (var index = 0; index < blockCount; ++index)
@@ -177,7 +159,7 @@ public static class GuestAbiContractAnalyzer
             }
         }
 
-        var definiteWrites = RegisterSet.Empty;
+        var definiteWrites = GuestStateMask.Empty;
         var sawExitBlock = false;
         for (var index = 0; index < blockCount; ++index)
         {
@@ -254,11 +236,11 @@ public static class GuestAbiContractAnalyzer
         return 0;
     }
 
-    private static RegisterSet Reads(
+    private static GuestStateMask Reads(
         IrInstruction instruction,
         IReadOnlyDictionary<uint, GuestAbiContract>? calleeContracts)
     {
-        var result = RegisterSet.Empty;
+        var result = GuestStateMask.Empty;
         switch (instruction)
         {
             case IrAssign value: AddValue(ref result, value.Value); break;
@@ -292,7 +274,7 @@ public static class GuestAbiContractAnalyzer
                 {
                     // A decoded call carries the volatile ABI registers as generic IR arguments;
                     // once the callee has a contract, only state it actually consumes is a real read.
-                    result = result.Union(ContractReads(callee));
+                    result = result.Union(GuestStateMask.FromContractReads(callee));
                 }
                 else if (GuestTargetParser.TryParseAddress(value.Target, out var readThunkAddress) &&
                     TryGetInlineThunk(readThunkAddress, out var readThunk, out var readStart) &&
@@ -346,12 +328,12 @@ public static class GuestAbiContractAnalyzer
     private static void Writes(
         IrInstruction instruction,
         IReadOnlyDictionary<uint, GuestAbiContract>? calleeContracts,
-        out RegisterSet possible,
-        out RegisterSet definite)
+        out GuestStateMask possible,
+        out GuestStateMask definite)
     {
-        var shared = RegisterSet.Empty;
-        var possibleOnly = RegisterSet.Empty;
-        var definiteOnly = RegisterSet.Empty;
+        var shared = GuestStateMask.Empty;
+        var possibleOnly = GuestStateMask.Empty;
+        var definiteOnly = GuestStateMask.Empty;
         switch (instruction)
         {
             case IrAssign value: Add(ref shared, value.Destination); break;
@@ -368,7 +350,7 @@ public static class GuestAbiContractAnalyzer
                 var helperEffect = !GuestTargetParser.TryParseAddress(value.Target, out _)
                     ? GuestHelperEffectCatalog.Analyze(value)
                     : null;
-                var destination = Register(value.Destination);
+                var destination = GuestStateMask.FromRegister(value.Destination);
                 // CR helpers return the complete packed CR only because that is
                 // the runtime helper ABI. Architecturally they change the fields
                 // described by the helper contract, not all eight fields.
@@ -377,8 +359,8 @@ public static class GuestAbiContractAnalyzer
                 if (GuestTargetParser.TryParseAddress(value.Target, out var directTarget) &&
                     calleeContracts?.TryGetValue(directTarget, out var callee) == true)
                 {
-                    possibleOnly = ContractWrites(callee);
-                    definiteOnly = ContractDefiniteWrites(callee);
+                    possibleOnly = GuestStateMask.FromContractWrites(callee);
+                    definiteOnly = GuestStateMask.FromContractDefiniteWrites(callee);
                 }
                 else if (GuestTargetParser.TryParseAddress(value.Target, out var writeThunkAddress) &&
                     TryGetInlineThunk(writeThunkAddress, out var writeThunk, out var writeStart) &&
@@ -414,7 +396,7 @@ public static class GuestAbiContractAnalyzer
     /// Unions <c>rN..r31</c> or <c>fN..f31</c>, the register window an inline
     /// save/restore thunk touches.
     /// </summary>
-    private static void AddRegisterRangeToTop(ref RegisterSet set, bool general, int startRegister)
+    private static void AddRegisterRangeToTop(ref GuestStateMask set, bool general, int startRegister)
     {
         var mask = uint.MaxValue << startRegister;
         set = general
@@ -422,104 +404,32 @@ public static class GuestAbiContractAnalyzer
             : set with { Fpr = set.Fpr | mask };
     }
 
-    private static void Add(ref RegisterSet set, string? name) => set = set.Union(Register(name));
+    private static void Add(ref GuestStateMask set, string? name) => set = set.Union(GuestStateMask.FromRegister(name));
 
-    private static void AddValue(ref RegisterSet set, IrValue value)
+    private static void AddValue(ref GuestStateMask set, IrValue value)
     {
         if (value.Kind == "register") Add(ref set, value.RegisterName);
     }
 
-    private static void AddGqr(ref RegisterSet set, uint index)
+    private static void AddGqr(ref GuestStateMask set, uint index)
     {
-        // Mirrors Register("gqr{index}"): only the eight architectural
+        // Mirrors GuestStateMask.FromRegister("gqr{index}"): only the eight architectural
         // quantization registers exist, anything else names nothing.
         if (index <= 7) set = set with { Gqr = (byte)(set.Gqr | (1 << (int)index)) };
     }
 
-    private static RegisterSet HiddenReads(GuestHelperEffect effect) =>
+    private static GuestStateMask HiddenReads(GuestHelperEffect effect) =>
         new(effect.GprReadMask, effect.FprReadMask, effect.CrReadMask,
             effect.ReadsXer, effect.ReadsCtr, effect.ReadsLr, false, 0, 0);
 
-    private static RegisterSet HiddenWrites(GuestHelperEffect effect) =>
+    private static GuestStateMask HiddenWrites(GuestHelperEffect effect) =>
         new(effect.GprWriteMask, effect.FprWriteMask, effect.CrWriteMask,
             effect.WritesXer, effect.WritesCtr, effect.WritesLr, false, 0, 0);
 
-    private static RegisterSet ContractReads(GuestAbiContract contract) =>
-        new(contract.GprReadBeforeWriteMask, contract.FprReadBeforeWriteMask,
-            contract.CrReadBeforeWriteMask, contract.ReadsXerBeforeWrite,
-            contract.ReadsCtrBeforeWrite, contract.ReadsLrBeforeWrite,
-            contract.ReadsFpscrBeforeWrite, contract.GqrReadBeforeWriteMask,
-            contract.HidReadBeforeWriteMask);
-
-    private static RegisterSet ContractWrites(GuestAbiContract contract) =>
-        new(contract.GprPossibleWriteMask, contract.FprPossibleWriteMask,
-            contract.CrPossibleWriteMask, contract.MayWriteXer,
-            contract.MayWriteCtr, contract.MayWriteLr,
-            contract.MayWriteFpscr, contract.GqrPossibleWriteMask,
-            contract.HidPossibleWriteMask);
-
-    private static RegisterSet ContractDefiniteWrites(GuestAbiContract contract) =>
-        new(contract.GprDefiniteWriteMask, contract.FprDefiniteWriteMask,
-            contract.CrDefiniteWriteMask, contract.DefinitelyWritesXer,
-            contract.DefinitelyWritesCtr, contract.DefinitelyWritesLr,
-            contract.DefinitelyWritesFpscr, contract.GqrDefiniteWriteMask,
-            contract.HidDefiniteWriteMask);
-
-    private static RegisterSet FullState =>
+    private static GuestStateMask FullState =>
         new(uint.MaxValue, uint.MaxValue, byte.MaxValue, true, true, true, true, byte.MaxValue, byte.MaxValue);
 
-    private static RegisterSet Register(string? name)
-    {
-        if (string.IsNullOrWhiteSpace(name)) return RegisterSet.Empty;
-        // Classification runs on a span: an SSA name such as "r3_12" used to
-        // cost two substrings and a LINQ digit scan before anything was decided.
-        var baseName = SsaBaseName(name.AsSpan());
-        if (baseName.Length >= 2 && baseName[0] == 'r' && int.TryParse(baseName[1..], out var gpr) && gpr is >= 0 and < 32)
-            return RegisterSet.Empty with { Gpr = 1u << gpr };
-        if (baseName.Length >= 2 && baseName[0] == 'f' && int.TryParse(baseName[1..], out var fpr) && fpr is >= 0 and < 32)
-            return RegisterSet.Empty with { Fpr = 1u << fpr };
-        if (baseName.Length == 3 && baseName.StartsWith("cr", StringComparison.OrdinalIgnoreCase) &&
-            baseName[2] is >= '0' and <= '7')
-            return RegisterSet.Empty with { Cr = (byte)(1 << (baseName[2] - '0')) };
-        if (baseName.Length is >= 4 and <= 5 && baseName.StartsWith("crb", StringComparison.OrdinalIgnoreCase) &&
-            int.TryParse(baseName[3..], out var crBit) && crBit is >= 0 and < 32)
-            return RegisterSet.Empty with { Cr = (byte)(1 << (crBit / 4)) };
-        if (baseName.Equals("cr", StringComparison.OrdinalIgnoreCase))
-            return RegisterSet.Empty with { Cr = byte.MaxValue };
-        if (baseName.Equals("xer", StringComparison.OrdinalIgnoreCase))
-            return RegisterSet.Empty with { Xer = true };
-        if (baseName.Equals("ctr", StringComparison.OrdinalIgnoreCase))
-            return RegisterSet.Empty with { Ctr = true };
-        if (baseName.Equals("lr", StringComparison.OrdinalIgnoreCase))
-            return RegisterSet.Empty with { Lr = true };
-        if (baseName.Equals("fpscr", StringComparison.OrdinalIgnoreCase))
-            return RegisterSet.Empty with { Fpscr = true };
-        if (baseName.Length == 4 && baseName.StartsWith("gqr", StringComparison.OrdinalIgnoreCase) &&
-            baseName[3] is >= '0' and <= '7')
-            return RegisterSet.Empty with { Gqr = (byte)(1 << (baseName[3] - '0')) };
-        if (baseName.Length == 4 && baseName.StartsWith("hid", StringComparison.OrdinalIgnoreCase) &&
-            baseName[3] is >= '0' and <= '2')
-            return RegisterSet.Empty with { Hid = (byte)(1 << (baseName[3] - '0')) };
-        return RegisterSet.Empty;
-    }
-
-    /// <summary>
-    /// Drops a trailing SSA version suffix: everything after the first
-    /// underscore is removed when it consists solely of digits.
-    /// </summary>
-    private static ReadOnlySpan<char> SsaBaseName(ReadOnlySpan<char> name)
-    {
-        var underscore = name.IndexOf('_');
-        if (underscore <= 0) return name;
-        for (var index = underscore + 1; index < name.Length; ++index)
-        {
-            if (!char.IsDigit(name[index])) return name;
-        }
-
-        return name[..underscore];
-    }
-
-    private static RegisterSet SpecialRegistersInRawExpression(string expression) =>
+    private static GuestStateMask SpecialRegistersInRawExpression(string expression) =>
         new(
             0,
             0,
