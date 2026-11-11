@@ -461,8 +461,11 @@ public class CodeGenTests
         Assert.Contains("MemoryInline::FlatWriteFloat32(r4, PPC_PsToScalarInline(f2.d));", code, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void CodeGenerator_EmitsDirectGpuFifoStoresForKnownGatherPipeAddress()
+    [Theory]
+    [InlineData(0xCC010000u)]
+    [InlineData(0xCC010100u)]
+    [InlineData(0xCC010FFCu)]
+    public void CodeGenerator_EmitsDirectGpuFifoStoresForKnownGatherPipeAddress(uint baseAddress)
     {
         var function = new IrFunction(
             "known_gx_fifo_stores",
@@ -471,8 +474,8 @@ public class CodeGenTests
             {
                 new IrBasicBlock("entry", new IrInstruction[]
                 {
-                    new IrAssign("r5", IrValue.Imm(unchecked((int)0xCC010000))),
-                    new IrAssign("r6", IrValue.Imm(unchecked((int)0xCC010100))),
+                    new IrAssign("r5", IrValue.Imm(unchecked((int)baseAddress))),
+                    new IrAssign("r6", IrValue.Imm(unchecked((int)0xCC011000))),
                     new IrStore(new IrAddress("r5", -32768), IrValue.Register("r3"), 1),
                     new IrStore(new IrAddress("r5", -32768), IrValue.Register("r4"), 2),
                     new IrStore(new IrAddress("r5", -32768), IrValue.Register("r7"), 4),

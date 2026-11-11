@@ -732,7 +732,7 @@ public sealed partial class CxxLinearCodeGenerator
     }
 
     private static bool IsGpuFifoAddress(uint address) =>
-        address >= 0xCC008000u && address < 0xCC008100u;
+        address >= 0xCC008000u && address < 0xCC009000u;
 
     private static void EmitNormalizeGuestCallFloatArguments(
         string target,
