@@ -487,6 +487,13 @@ if(MKW_TARGET_ARM64)
 endif()
 
 if(UNIX)
+    add_executable(mkw_executable_range_tests "${CMAKE_CURRENT_LIST_DIR}/tests/executable_range_tests.cpp")
+    target_include_directories(mkw_executable_range_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+    target_compile_features(mkw_executable_range_tests PRIVATE cxx_std_20)
+    target_link_libraries(mkw_executable_range_tests PRIVATE Threads::Threads mkw::toml11)
+    add_test(NAME mkw_executable_range_tests COMMAND mkw_executable_range_tests)
+    set_tests_properties(mkw_executable_range_tests PROPERTIES TIMEOUT 30)
+
     add_executable(mkw_guest_flat_memory_tests
         "${CMAKE_CURRENT_LIST_DIR}/tests/guest_flat_memory_tests.cpp")
     target_include_directories(mkw_guest_flat_memory_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")

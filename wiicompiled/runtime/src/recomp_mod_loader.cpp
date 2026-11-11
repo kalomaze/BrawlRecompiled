@@ -6,7 +6,7 @@
 #include <iomanip>
 #include <iostream>
 #include <mutex>
-#include <optional>
+#include <deque>
 #include <sstream>
 #include <filesystem>
 
@@ -22,7 +22,13 @@ struct ExecutableRange {
     uint32_t start = 0;
     uint32_t end = 0;
     std::string name;
+    const ExecutableRange* previous = nullptr;
 };
+
+// Records are immutable after publication. deque preserves their addresses as
+// registration grows; fault-time readers never touch the container itself.
+static_assert(std::atomic<const ExecutableRange*>::is_always_lock_free);
+std::atomic<const ExecutableRange*> g_executableRanges{nullptr};
 
 std::vector<RecompMod::InitializerFn>& MemoryInitializers() {
     static std::vector<RecompMod::InitializerFn> initializers;
@@ -69,8 +75,8 @@ bool& PostRelInitializersRan() {
     return ran;
 }
 
-std::vector<ExecutableRange>& ExecutableRanges() {
-    static std::vector<ExecutableRange> ranges;
+std::deque<ExecutableRange>& ExecutableRanges() {
+    static std::deque<ExecutableRange> ranges;
     return ranges;
 }
 
@@ -112,7 +118,8 @@ void AddExecutableRangeLocked(uint32_t start, uint32_t end, std::string name) {
         return;
     }
 
-    ranges.push_back({start, end, std::move(name)});
+    ranges.push_back({start, end, std::move(name), g_executableRanges.load(std::memory_order_relaxed)});
+    g_executableRanges.store(&ranges.back(), std::memory_order_release);
     MarkExecutableGuardPages(start, end);
     // Flat guest accesses never consult the guard tables, so the host pages
     // fully covered by the range become read-only in the guest view. Native
@@ -177,14 +184,13 @@ bool Intersects(uint32_t address, size_t length, const ExecutableRange& range) {
     return writeStart < range.end && writeEnd > range.start;
 }
 
-std::optional<ExecutableRange> FindExecutableRange(uint32_t address, size_t length) {
-    std::lock_guard<std::mutex> lock(ModMutex());
-    for (const auto& range : ExecutableRanges()) {
-        if (Intersects(address, length, range)) {
-            return range;
-        }
+const ExecutableRange* FindExecutableRange(uint32_t address, size_t length) {
+    const ExecutableRange* hit = nullptr;
+    for (auto* range = g_executableRanges.load(std::memory_order_acquire); range; range = range->previous) {
+        // Preserve registration order: the oldest intersecting range wins.
+        if (Intersects(address, length, *range)) hit = range;
     }
-    return std::nullopt;
+    return hit;
 }
 
 // MKW-only: executable ranges are registered solely by translated mods (Retro Rewind), so this
@@ -396,7 +402,7 @@ bool HandleExecutableWrite(uint32_t address, size_t length, uint64_t value) {
     }
 
     const auto hit = FindExecutableRange(address, length);
-    if (!hit.has_value()) {
+    if (!hit) {
         return false;
     }
 
@@ -416,7 +422,7 @@ void CheckExecutableWrite(uint32_t address, size_t length, uint64_t value) {
     }
 
     const auto hit = FindExecutableRange(address, length);
-    if (!hit.has_value()) {
+    if (!hit) {
         return;
     }
 
