@@ -419,22 +419,16 @@ inline double PpcPackIntegerWordInline(int32_t value)
         static_cast<uint64_t>(static_cast<uint32_t>(value)));
 }
 
-template <bool Subtract>
-inline float PpcAccuratePsMaddLaneInline(float a, float c, float b)
+// FMA computes A*C +/- B, but PowerPC selects NaNs in A, B, C order.
+// Use the original operands so subtraction does not change a NaN's sign.
+inline double PpcResolveFmaNanInline(double result, double a, double b, double c)
 {
-    const float signedB = Subtract ? -b : b;
-    // Paired values are stored as exact float32 lanes in this runtime.  An
-    // explicit float FMA therefore matches Gekko's single rounding point;
-    // multiplying and adding separately can differ by an ULP on ordinary
-    // vector and matrix workloads.
-    return PpcFlushSingleForNiInline(std::fma(a, c, signedB));
-}
-
-template <bool Subtract>
-inline float PpcAccuratePsMaddLaneNoNiInline(float a, float c, float b)
-{
-    const float signedB = Subtract ? -b : b;
-    return std::fma(a, c, signedB);
+    if (!std::isnan(result)) return result;
+    constexpr uint64_t quiet = 0x0008000000000000ull;
+    for (double operand : {a, b, c})
+        if (std::isnan(operand))
+            return PpcBitCastToDoubleInline(PpcBitCastToU64Inline(operand) | quiet);
+    return PpcBitCastToDoubleInline(0x7FF8000000000000ull);
 }
 
 template <bool Subtract>
@@ -445,7 +439,7 @@ inline double PpcAccurateSingleMaddIntermediateInline(double a, double c, double
     // to float32.  A double FMA is almost sufficient, but an exact result just
     // beyond a float32 halfway point can be rounded to a double tie first.
     // Recover the direction of that discarded error for those tie cases.
-    const double roundedC = PpcForce25BitInline(c);
+    const double roundedC = std::isnan(c) ? c : PpcForce25BitInline(c);
     const double signedB = Subtract ? -b : b;
     double result = std::fma(a, roundedC, signedB);
     const uint64_t resultBits = PpcBitCastToU64Inline(result);
@@ -464,7 +458,7 @@ inline double PpcAccurateSingleMaddIntermediateInline(double a, double c, double
                 (error > 0.0) == (result > 0.0) ? resultBits + 1 : resultBits - 1);
         }
     }
-    return result;
+    return PpcResolveFmaNanInline(result, a, b, c);
 }
 
 inline double PpcFmulsInline(double a, double c)
@@ -480,23 +474,23 @@ inline double PpcFmulsNoNiInline(double a, double c)
 
 inline double PpcFmaddInline(double a, double c, double b)
 {
-    return std::fma(a, c, b);
+    return PpcResolveFmaNanInline(std::fma(a, c, b), a, b, c);
 }
 
 inline double PpcFmsubInline(double a, double c, double b)
 {
-    return std::fma(a, c, -b);
+    return PpcResolveFmaNanInline(std::fma(a, c, -b), a, b, c);
 }
 
 inline double PpcFnmaddInline(double a, double c, double b)
 {
-    const double result = std::fma(a, c, b);
+    const double result = PpcFmaddInline(a, c, b);
     return std::isnan(result) ? result : -result;
 }
 
 inline double PpcFnmsubInline(double a, double c, double b)
 {
-    const double result = std::fma(a, c, -b);
+    const double result = PpcFmsubInline(a, c, b);
     return std::isnan(result) ? result : -result;
 }
 

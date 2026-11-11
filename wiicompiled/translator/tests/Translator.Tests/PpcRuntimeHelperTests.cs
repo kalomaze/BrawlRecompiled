@@ -9,6 +9,42 @@ namespace Translator.Tests;
 public class PpcRuntimeHelperTests
 {
     [NativeFact]
+    public void ScalarFmaPreservesGuestNanPriorityAndSign()
+    {
+        const string harness = """
+            #include "ppc_runtime.h"
+            #include <iostream>
+            #include <cstdlib>
+            extern "C" void GX_HLE_FIFO_Write8(uint8_t) {}
+            extern "C" void GX_HLE_FIFO_Write16(uint16_t) {}
+            extern "C" void GX_HLE_FIFO_Write32(uint32_t) {}
+            extern "C" void GX_HLE_FIFO_WriteFloat(float) {}
+            int main() {
+                using Op = double (*)(double, double, double);
+                const Op ops[] = {PpcFmaddInline, PpcFmsubInline, PpcFnmaddInline, PpcFnmsubInline,
+                                  PpcFmaddsInline, PpcFmsubsInline, PpcFnmaddsInline, PpcFnmsubsInline};
+                // Payloads survive the single-precision narrowing exactly.
+                const double a = PpcBitCastToDoubleInline(0xFFF82468A0000000ull);
+                const double b = PpcBitCastToDoubleInline(0x7FF0468AC0000000ull);
+                const double c = PpcBitCastToDoubleInline(0x7FF868ACE0000000ull);
+                for (Op op : ops) {
+                    const auto check = [](double got, uint64_t expected) {
+                        if (PpcBitCastToU64Inline(got) != expected) std::abort();
+                    };
+                    check(op(a, c, b), 0xFFF82468A0000000ull);
+                    check(op(2.0, c, b), 0x7FF8468AC0000000ull);
+                    check(op(2.0, 3.0, b), 0x7FF8468AC0000000ull);
+                    check(op(2.0, c, 1.0), 0x7FF868ACE0000000ull);
+                    check(op(0.0, std::numeric_limits<double>::infinity(), 1.0),
+                          0x7FF8000000000000ull);
+                }
+                std::cout << "ok";
+            }
+            """;
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness));
+    }
+
+    [NativeFact]
     public void GuestMemoryAliasesAndCheckedAccessPreserveSemantics()
     {
         const string harness = """
