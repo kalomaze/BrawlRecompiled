@@ -71,14 +71,6 @@ int32_t ComputeThreadEffectivePriority(uint32_t threadPtr)
     return priority;
 }
 
-bool IsThpVideoDecoderEntry(uint32_t entryFunc)
-{
-    // Mario Kart Wii's THP decoder threads (0x805529A8 / 0x80552A74) needed GQR presets.
-    // NSMBW ships no THP video and no THP player code, so no thread entry qualifies.
-    (void)entryFunc;
-    return false;
-}
-
 void InsertThreadIntoQueueByPriority(uint32_t queuePtr, uint32_t threadPtr, int32_t priority)
 {
     ::Memory::Write32(threadPtr + kThreadQueueOffset, queuePtr);
@@ -244,7 +236,7 @@ void TerminateThreadCommon(CpuContext* cpu, uint32_t threadPtr, bool publishExit
 // Fiber-based threading HLE: each guest OSThread gets a host fiber for cooperative
 // context switching without blocking the main thread.
 
-// OSCreateThread (0x801b5130)
+// OSCreateThread
 // Creates a new guest thread and associates a host fiber with it.
 extern "C" void OSCreateThread_HLE(CpuContext* ctx)
 {
@@ -311,17 +303,6 @@ extern "C" void OSCreateThread_HLE(CpuContext* ctx)
             InvokeIndirectCpu(0x801D8218u, cpu); // OSInitContext
         }
 
-        if (IsThpVideoDecoderEntry(entryFunc)) {
-            // Decoder threads restore their own context via OSLoadContext, so the saved
-            // context needs these GQR2-GQR5 values or paired-single THP decode breaks
-            // under the all-zero OSInitContext defaults.
-            ::Memory::Write32(threadPtr + 0x1ACu, 0x00040004u);
-            ::Memory::Write32(threadPtr + 0x1B0u, 0x00050005u);
-            ::Memory::Write32(threadPtr + 0x1B4u, 0x00060006u);
-            ::Memory::Write32(threadPtr + 0x1B8u, 0x00070007u);
-
-        }
-
         ::Memory::Write32(threadPtr + 0x84u, 0x801E0F68u); // LR = OSExitThread
         ::Memory::Write32(threadPtr + 0x0Cu, entryArg);    // r3 = argument
 
@@ -338,10 +319,10 @@ extern "C" void OSCreateThread_HLE(CpuContext* ctx)
         // Match the original OSCreateThread: when a floating-point exception handler is installed
         // (__OSErrorTable[OS_ERROR_FPE] != NULL) the new thread gets FE0|FE1 in SRR1, the FPSAVED
         // state bit and an FPSCR built from __OSFpscrEnableBits.
-        constexpr uint32_t kSchedulerInitFlagAddr = 0x804DD1D0u;  // SPM OSCreateThread 0x80274F64: __OSErrorTable + 0x40.
-        constexpr uint32_t kThreadAttrSourceAddr = 0x8059E9C0u;   // __OSFpscrEnableBits
-        if (Memory::Contains(kSchedulerInitFlagAddr, 4) &&
-            ::Memory::Read32(kSchedulerInitFlagAddr) != 0) {
+        constexpr uint32_t kFpExceptionHandlerAddr = 0x804DD1D0u;  // Brawl __OSErrorTable[OS_ERR_FP_EXCEPTION].
+        constexpr uint32_t kFpscrEnableBitsAddr = 0x8059E9C0u;   // __OSFpscrEnableBits
+        if (Memory::Contains(kFpExceptionHandlerAddr, 4) &&
+            ::Memory::Read32(kFpExceptionHandlerAddr) != 0) {
             uint32_t srr1 = ::Memory::Read32(threadPtr + 0x19Cu);
             srr1 |= 0x900u;
             ::Memory::Write32(threadPtr + 0x19Cu, srr1);
@@ -350,8 +331,8 @@ extern "C" void OSCreateThread_HLE(CpuContext* ctx)
             modeFlags = static_cast<uint16_t>(modeFlags | 0x1u);
             ::Memory::Write16(threadPtr + 0x1A2u, modeFlags);
 
-            if (Memory::Contains(kThreadAttrSourceAddr, 4)) {
-                const uint32_t attr = (::Memory::Read32(kThreadAttrSourceAddr) & 0xF8u) | 0x4u;
+            if (Memory::Contains(kFpscrEnableBitsAddr, 4)) {
+                const uint32_t attr = (::Memory::Read32(kFpscrEnableBitsAddr) & 0xF8u) | 0x4u;
                 ::Memory::Write32(threadPtr + 0x194u, attr);
             }
 
@@ -608,7 +589,7 @@ extern "C" void OSSuspendThread_HLE(CpuContext* ctx)
 }
 PPC_NATIVE_OVERRIDE_VOID(801E15FC, OSSuspendThread_HLE, (CpuContext* ctx), (ctx));
 
-// OSResumeThread (0x801b5860)
+// OSResumeThread
 // Resumes a suspended thread, making it eligible for scheduling.
 extern "C" void OSResumeThread_HLE(CpuContext* ctx)
 {
