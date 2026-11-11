@@ -697,36 +697,19 @@ void Run(CpuContext* ctx, uint32_t entry) {
             case 14: SetScalar(f, d, PPC_Fctiw(Scalar(f, b))); break;
             case 15: SetScalar(f, d, PPC_Fctiwz(Scalar(f, b))); break;
             case 26: SetScalar(f, d, PpcApproximateReciprocalSquareRootInline(Scalar(f, b))); break;  // frsqrte
-            case 38: c->fpscr |= 0x80000000u >> d; break;   // mtfsb1
-            case 70: c->fpscr &= ~(0x80000000u >> d); break; // mtfsb0
+            case 38: PPC_Mtfsb1(d); break;   // mtfsb1
+            case 70: PPC_Mtfsb0(d); break; // mtfsb0
             case 40: SetScalar(f, d, -Scalar(f, b)); break;  // fneg
-            case 64: {  // mcrfs
-                const uint32_t src = (c->fpscr >> ((7u - (a >> 2)) * 4u)) & 0xFu;
-                const uint32_t shift = (7u - (d >> 2)) * 4u;
-                c->cr = (c->cr & ~(0xFu << shift)) | (src << shift);
-                break;
-            }
+            case 64: c->cr = PPC_Mcrfs(d >> 2, a >> 2); break;
             case 72:  // fmr: copies whichever form the source holds
                 c->fpr[d] = c->fpr[b];
                 f.form[d] = f.form[b];
                 break;
-            case 134: {  // mtfsfi
-                const uint32_t shift = (7u - (d >> 2)) * 4u;
-                c->fpscr = (c->fpscr & ~(0xFu << shift)) | (Bits(w, 12, 4) << shift);
-                MkwApplyHostNiMode(c->fpscr);
-                break;
-            }
+            case 134: PPC_Mtfsfi(d >> 2, Bits(w, 12, 4)); break;
             case 136: SetScalar(f, d, -std::fabs(Scalar(f, b))); break;  // fnabs
             case 264: SetScalar(f, d, std::fabs(Scalar(f, b))); break;   // fabs
             case 583: c->fpr[d].raw = c->fpscr; f.form[d] = Form::Scalar; break;  // mffs
-            case 711: {  // mtfsf
-                const uint32_t fm = Bits(w, 17, 8);
-                uint32_t m = 0;
-                for (int k = 0; k < 8; ++k) if (fm & (0x80u >> k)) m |= 0xF0000000u >> (k * 4);
-                c->fpscr = (c->fpscr & ~m) | (static_cast<uint32_t>(c->fpr[b].raw) & m);
-                MkwApplyHostNiMode(c->fpscr);
-                break;
-            }
+            case 711: PPC_Mtfsf(Bits(w, 17, 8), c->fpr[b].d); break;
             default: Undefined(c, pc, w, "interpreter: opcode 63");
             }
             if (Rc(w)) SetCr1FromFpscr(c);

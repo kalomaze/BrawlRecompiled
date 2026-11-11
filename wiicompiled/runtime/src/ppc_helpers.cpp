@@ -59,33 +59,6 @@ uint64_t GetTimeBase() {
     return TimeBaseContract::NanosecondsToTicks(static_cast<uint64_t>(nanoseconds));
 }
 
-constexpr uint32_t kFpscrFx = 1u << 31;
-constexpr uint32_t kFpscrFex = 1u << 30;
-constexpr uint32_t kFpscrVx = 1u << 29;
-constexpr uint32_t kFpscrOx = 1u << 28;
-constexpr uint32_t kFpscrUx = 1u << 27;
-constexpr uint32_t kFpscrZx = 1u << 26;
-constexpr uint32_t kFpscrXx = 1u << 25;
-constexpr uint32_t kFpscrVxSnan = 1u << 24;
-constexpr uint32_t kFpscrVxIsi = 1u << 23;
-constexpr uint32_t kFpscrVxIdi = 1u << 22;
-constexpr uint32_t kFpscrVxZdz = 1u << 21;
-constexpr uint32_t kFpscrVxImz = 1u << 20;
-constexpr uint32_t kFpscrVxVc = 1u << 19;
-constexpr uint32_t kFpscrVxSoft = 1u << 10;
-constexpr uint32_t kFpscrVxSqrt = 1u << 9;
-constexpr uint32_t kFpscrVxCvi = 1u << 8;
-constexpr uint32_t kFpscrVe = 1u << 7;
-constexpr uint32_t kFpscrOe = 1u << 6;
-constexpr uint32_t kFpscrUe = 1u << 5;
-constexpr uint32_t kFpscrZe = 1u << 4;
-constexpr uint32_t kFpscrXe = 1u << 3;
-constexpr uint32_t kFpscrVxAny =
-    kFpscrVxSnan | kFpscrVxIsi | kFpscrVxIdi | kFpscrVxZdz | kFpscrVxImz |
-    kFpscrVxVc | kFpscrVxSoft | kFpscrVxSqrt | kFpscrVxCvi;
-constexpr uint32_t kFpscrAnyX = kFpscrOx | kFpscrUx | kFpscrZx | kFpscrXx | kFpscrVxAny;
-constexpr uint32_t kFpscrAnyE = kFpscrVe | kFpscrOe | kFpscrUe | kFpscrZe | kFpscrXe;
-
 template <size_t N>
 inline void WarnOnce(std::bitset<N>& warned, uint32_t spr, const char* op)
 {
@@ -100,33 +73,6 @@ inline void WarnOnce(std::bitset<N>& warned, uint32_t spr, const char* op)
     RT_LOG(RT_TAG_RUNTIME) << "PPC_" << op << " unhandled SPR " << spr << " (defaulting to 0)" << std::endl;
 }
 
-
-
-inline void UpdateFpscrSummary(CpuContext* cpu)
-{
-    if (!cpu)
-    {
-        return;
-    }
-
-    if ((cpu->fpscr & kFpscrVxAny) != 0)
-    {
-        cpu->fpscr |= kFpscrVx;
-    }
-    else
-    {
-        cpu->fpscr &= ~kFpscrVx;
-    }
-
-    if (((cpu->fpscr >> 22) & (cpu->fpscr & kFpscrAnyE)) != 0)
-    {
-        cpu->fpscr |= kFpscrFex;
-    }
-    else
-    {
-        cpu->fpscr &= ~kFpscrFex;
-    }
-}
 
 } // namespace
 
@@ -381,23 +327,6 @@ extern "C" uint32_t PPC_Stwcx(uint32_t addr, uint32_t value)
         cpu->cr = (cpu->cr & 0x0FFFFFFFu) | (cr0 << 28);
     }
     return success ? 1u : 0u;
-}
-
-extern "C" uint32_t PPC_Mcrfs(uint32_t dstField, uint32_t srcField)
-{
-    CpuContext* cpu = TryGetCpuContext();
-    if (!cpu)
-    {
-        return 0;
-    }
-
-    const uint32_t dst = dstField & 7u;
-    const uint32_t src = srcField & 7u;
-    const uint32_t value = (cpu->fpscr >> ((7u - src) * 4u)) & 0xFu;
-    cpu->cr = (cpu->cr & ~(0xFu << ((7u - dst) * 4u))) | (value << ((7u - dst) * 4u));
-    cpu->fpscr &= ~((0xFu << ((7u - src) * 4u)) & (kFpscrFx | kFpscrAnyX));
-    UpdateFpscrSummary(cpu);
-    return cpu->cr;
 }
 
 extern "C" uint32_t PPC_Eciwx(uint32_t addr)

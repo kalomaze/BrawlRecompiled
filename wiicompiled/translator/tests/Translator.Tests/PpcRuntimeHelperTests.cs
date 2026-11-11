@@ -9,6 +9,79 @@ namespace Translator.Tests;
 public class PpcRuntimeHelperTests
 {
     [NativeFact]
+    public void FpscrWritesMatchReferenceInHelpersAndInterpreter()
+    {
+        // Dolphin 36982a2b: Interpreter_SystemRegisters.cpp and UpdateFPExceptionSummary.
+        const string harness = """
+            #include "ppc_runtime.h"
+            #include "ppc_interpreter.h"
+            #include <iostream>
+            #include <cstdlib>
+            int main() {
+                enum Op { Fi, F, B1, B0, Cr };
+                struct Case { Op op; uint32_t before, arg, value, after, cr = 0x12345678; };
+                const Case cases[] = {
+                    {Fi, 0, 0, 6, 0}, // FEX/VX cannot be written independently.
+                    {Fi, 0x01000000, 6, 8, 0x61000080}, // Enable an existing invalid exception.
+                    {Fi, 0x80, 1, 1, 0x61000080}, // Field writes do not implicitly set FX.
+                    {F, 0, 0xFF, 0x60000000, 0},
+                    {F, 0, 0xFF, 0x01000080, 0x61000080},
+                    {F, 0x61000080, 0, 0, 0x61000080}, // Empty mask preserves state.
+                    {B1, 0x80, 7, 0, 0xE1000080}, // New exception sets sticky FX.
+                    {B1, 0x61000080, 7, 0, 0x61000080}, // Existing exception does not set FX again.
+                    {B0, 0xE1000080, 7, 0, 0x80000080},
+                    {B0, 0x61000080, 2, 0, 0x61000080}, // VX remains set while a cause exists.
+                    {B1, 0, 1, 0, 0},
+                    {B1, 0x40, 3, 0, 0xD0000040}, // Overflow enable/summary.
+                    {B1, 0x20, 4, 0, 0xC8000020}, // Underflow.
+                    {B1, 0x10, 5, 0, 0xC4000010}, // Divide by zero.
+                    {B1, 0x08, 6, 0, 0xC2000008}, // Inexact.
+                    {B1, 0x80, 21, 0, 0xE0000480}, // Software invalid cause in a different field.
+                    {Cr, 0xE0000480, 5, 0, 0x80000080},
+                    {Cr, 0xE1000080, 1, 0, 0x80000080, 0x12315678},
+                    {Cr, 0xE1000080, 0, 0, 0x61000080, 0x123E5678},
+                    {Fi, 0, 7, 7, 7}, // NI and rounding controls remain writable.
+                };
+                Memory::Init(0x10000);
+                constexpr uint32_t entry = 0x80003000;
+                Memory::Write32(entry + 4, 0x4E800020);
+                for (bool interpreted : {false, true}) for (const auto& t : cases) {
+                    CpuContext cpu{}; cpu.fpscr = t.before; cpu.cr = 0x12345678;
+                    cpu.lr = 0x80004000; cpu.gpr[1] = 0x80008000; cpu.fpr[2].raw = t.value;
+                    CpuContextScope scope(&cpu);
+                    if (interpreted) {
+                        uint32_t word = 63u << 26;
+                        switch (t.op) {
+                        case Fi: word |= (t.arg << 23) | (t.value << 12) | (134u << 1); break;
+                        case F: word |= (t.arg << 17) | (2u << 11) | (711u << 1); break;
+                        case B1: word |= (t.arg << 21) | (38u << 1); break;
+                        case B0: word |= (t.arg << 21) | (70u << 1); break;
+                        case Cr: word |= (3u << 23) | (t.arg << 18) | (64u << 1); break;
+                        }
+                        Memory::Write32(entry, word);
+                        PpcInterpreter::Run(&cpu, entry);
+                    } else {
+                        switch (t.op) {
+                        case Fi: PPC_Mtfsfi(t.arg, t.value); break;
+                        case F: PPC_Mtfsf(t.arg, cpu.fpr[2].d); break;
+                        case B1: PPC_Mtfsb1(t.arg); break;
+                        case B0: PPC_Mtfsb0(t.arg); break;
+                        case Cr: PPC_Mcrfs(3, t.arg); break;
+                        }
+                    }
+                    if (cpu.fpscr != t.after || cpu.cr != t.cr) {
+                        std::cerr << interpreted << ':' << t.op << " FPSCR " << std::hex << cpu.fpscr
+                                  << " expected " << t.after << " CR " << cpu.cr << " expected " << t.cr;
+                        std::abort();
+                    }
+                }
+                std::cout << "ok";
+            }
+            """;
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness, includeInterpreter: true));
+    }
+
+    [NativeFact]
     public void PairedArithmeticUsesGuestNanBits()
     {
         const string harness = """
