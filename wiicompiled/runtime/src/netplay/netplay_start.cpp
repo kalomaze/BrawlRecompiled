@@ -7,6 +7,7 @@
 #include "platform/host_platform.h"
 
 #include <cerrno>
+#include <climits>
 #include <cstring>
 #include <chrono>
 #include <cstdlib>
@@ -25,6 +26,10 @@
 #if !defined(_WIN32) && !defined(__ANDROID__)
 #include <fcntl.h>
 #include <unistd.h>
+#if defined(__linux__) && __has_include(<linux/close_range.h>)
+#include <linux/close_range.h>
+#include <sys/syscall.h>
+#endif
 void RuntimeShutdownProcessTranscript();  // main.cpp
 #endif
 
@@ -113,11 +118,38 @@ bool KeepSessionSave(const char* what) {
         std::_Exit(EXIT_FAILURE);
     }
 #else
-    // POSIX: the same executable again, in place of this process, with the console's own output back and none of
-    // this process's other descriptors (the guest RAM, sockets, the window) carried over.
+    // Restore console output before replacing this process.
     RuntimeShutdownProcessTranscript();
-    for (int fd = 3; fd < 4096; ++fd) {
-        fcntl(fd, F_SETFD, FD_CLOEXEC);
+    bool descriptorsReady = false;
+#if defined(SYS_close_range) && defined(CLOSE_RANGE_UNSHARE) && defined(CLOSE_RANGE_CLOEXEC)
+    // Isolate this thread's descriptor table so concurrent opens cannot leak through exec.
+    if (syscall(SYS_close_range, 3u, ~0u, CLOSE_RANGE_UNSHARE | CLOSE_RANGE_CLOEXEC) == 0) {
+        descriptorsReady = true;
+    } else if (errno != ENOSYS && errno != EINVAL) {
+        RT_LOGF(RT_TAG_RUNTIME, "netplay: could not isolate restart descriptors: %s\n", std::strerror(errno));
+        std::_Exit(EXIT_FAILURE);
+    }
+#endif
+    if (!descriptorsReady) {
+        // Older kernels and other POSIX hosts: use the reported limit, not a guessed cutoff.
+        // This scan still requires quiescent descriptor creation and an unchanged descriptor limit.
+        const long descriptorLimit = sysconf(_SC_OPEN_MAX);
+        if (descriptorLimit < 0) {
+            RT_LOGF(RT_TAG_RUNTIME, "netplay: could not determine descriptor limit for restart\n");
+            std::_Exit(EXIT_FAILURE);
+        }
+        for (int64_t fd = 3; fd < descriptorLimit && fd <= INT_MAX; ++fd) {
+            const int flags = fcntl(static_cast<int>(fd), F_GETFD);
+            if (flags < 0 && errno == EBADF) continue;
+            if (flags < 0 && errno == EINTR) { --fd; continue; }
+            if (flags >= 0 && ((flags & FD_CLOEXEC) != 0 ||
+                              fcntl(static_cast<int>(fd), F_SETFD, flags | FD_CLOEXEC) == 0)) continue;
+            if (errno == EBADF) continue;  // Another thread closed it between calls.
+            if (errno == EINTR) { --fd; continue; }
+            RT_LOGF(RT_TAG_RUNTIME, "netplay: could not mark descriptor %lld close-on-exec: %s\n",
+                    static_cast<long long>(fd), std::strerror(errno));
+            std::_Exit(EXIT_FAILURE);
+        }
     }
     char* argv[] = {const_cast<char*>(exe->c_str()), nullptr};
     execv(exe->c_str(), argv);
