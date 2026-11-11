@@ -61,6 +61,7 @@
 #include "game_folder.h"
 #include "abi_bridge.h"
 #include "guest_flat_memory.h"
+#include "fault_report.h"
 #include "gx_guest_write.h"
 #include "memory.h"
 #include "system_bridge.h"
@@ -1232,32 +1233,10 @@ void InstallPosixMemoryFaultHandler() {
 #endif
 
 void AbortSignalHandler(int signum) {
-    // Guard against re-entrancy if multiple aborts are raised in quick succession
-    if (g_abortSignalHandled.test_and_set()) {
-        std::_Exit(EXIT_FAILURE);
-    }
-
-    // abort() bypasses atexit, so the guest-memory fault summary has to be
-    // emitted here too. It is idempotent, so a later AtExitHandler is a no-op.
-    GuestFlat::LogFaultSummary();
-
-    ShowRuntimeFatalPopup("a fatal internal error occurred",
-                          "The process called abort while running the game or Aurora renderer.\n\n"
-                          "This usually means an unimplemented function, failed renderer assertion, "
-                          "or another unrecoverable runtime condition was reached.");
-
-    // Skip detailed dump if already reported by another handler
-    if (g_fatalErrorReported.load(std::memory_order_acquire)) {
-        std::fflush(stderr);
-        std::fflush(stdout);
-        std::_Exit(EXIT_FAILURE);
-    }
-
-    WriteFatalLogImpl("sigabrt");
-
-    std::fflush(stderr);
-    std::fflush(stdout);
-    std::_Exit(EXIT_FAILURE);
+    if (g_abortSignalHandled.test_and_set()) std::_Exit(EXIT_FAILURE);
+    FaultReport::Message message;
+    message.Text("[runtime] FATAL abort signal ").Decimal(signum);
+    message.Fatal();
 }
 
 } // namespace

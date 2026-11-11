@@ -19,8 +19,8 @@
 #endif
 
 // Fault recovery may interrupt the allocator, streams or the window system.
-// Keep diagnostics on the stack and bypass those subsystems, including the
-// runtime's SIGABRT handler (which itself opens a popup and flushes streams).
+// Keep diagnostics on the stack and bypass those subsystems. Fatal reports
+// terminate directly without invoking other handlers or flushing streams.
 namespace FaultReport {
 class Message {
 public:
