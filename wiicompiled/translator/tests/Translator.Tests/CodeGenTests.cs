@@ -31,7 +31,8 @@ public class CodeGenTests
     }
 
     [NativeFact]
-    public void ScalarArithmeticPreservesGuestNanBitsThroughCodegen()
+    // NaN results follow NI_add/sub/mul/div in Dolphin Interpreter_FPUtils.h (36982a2b).
+    public void ScalarArithmeticPreservesGuestNanBitsAcrossExecutionPaths()
     {
         var instructions = new List<IrInstruction>();
         var operations = new[] { "add", "sub", "mul", "fdiv" };
@@ -51,6 +52,7 @@ public class CodeGenTests
             new FunctionAbiClassification("scalar_nan", ValueRepresentation.Float64), types);
         const string harness = """
             #include "ppc_runtime.h"
+            #include "ppc_interpreter.h"
             #include <iostream>
             #include <cstdlib>
             extern "C" void scalar_nan(CpuContext*);
@@ -61,33 +63,49 @@ public class CodeGenTests
                 }
             }
             int main() {
-                CpuContext ctx{};
-                const auto run = [&](double a, double b) {
-                    ctx.fpr[1].d = a; ctx.fpr[2].d = b; scalar_nan(&ctx);
-                };
-                // NaN payloads here survive single-precision narrowing exactly.
-                const double a = PpcBitCastToDoubleInline(0xFFF82468A0000000ull);
-                const double b = PpcBitCastToDoubleInline(0x7FF0468AC0000000ull);
-                run(a, b);
-                for (unsigned i = 3; i <= 14; ++i) check(ctx.fpr[i].d, 0xFFF82468A0000000ull);
-                run(2.0, b);
-                for (unsigned i = 3; i <= 14; ++i) check(ctx.fpr[i].d, 0x7FF8468AC0000000ull);
-                const double inf = std::numeric_limits<double>::infinity();
-                const double lhs[] = {inf, inf, 0.0, 0.0};
-                const double rhs[] = {-inf, inf, inf, 0.0};
-                using Op = double (*)(double, double);
-                const Op native[] = {PPC_Fadds, PPC_Fsubs, PPC_Fmuls, PPC_Fdivs};
-                for (unsigned i = 0; i < 4; ++i) {
-                    run(lhs[i], rhs[i]);
-                    for (unsigned group = 0; group < 3; ++group)
-                        check(ctx.fpr[3 + i + 4 * group].d, 0x7FF8000000000000ull);
-                    check(native[i](lhs[i], rhs[i]), 0x7FF8000000000000ull);
-                    check(native[i](2.0, b), 0x7FF8468AC0000000ull);
+                Memory::Init(0x10000);
+                constexpr uint32_t entry = 0x80003000;
+                const unsigned xo[] = {21, 20, 25, 18};
+                for (unsigned group = 0; group < 3; ++group)
+                for (unsigned op = 0; op < 4; ++op) {
+                    const unsigned d = 3 + group * 4 + op;
+                    const uint32_t rhs = op == 2 ? (2u << 6) : (2u << 11);
+                    Memory::Write32(entry + 4 * (group * 4 + op),
+                        ((group == 0 ? 63u : 59u) << 26) | (d << 21) | (1u << 16) | rhs | (xo[op] << 1));
+                }
+                Memory::Write32(entry + 48, 0x4E800020); // blr
+                for (bool interpreted : {false, true}) {
+                    CpuContext ctx{};
+                    ctx.lr = 0x80004000;
+                    const auto run = [&](double a, double b) {
+                        ctx.fpr[1].d = a; ctx.fpr[2].d = b;
+                        if (interpreted) PpcInterpreter::Run(&ctx, entry);
+                        else scalar_nan(&ctx);
+                    };
+                    // NaN payloads here survive single-precision narrowing exactly.
+                    const double a = PpcBitCastToDoubleInline(0xFFF82468A0000000ull);
+                    const double b = PpcBitCastToDoubleInline(0x7FF0468AC0000000ull);
+                    run(a, b);
+                    for (unsigned i = 3; i <= 14; ++i) check(ctx.fpr[i].d, 0xFFF82468A0000000ull);
+                    run(2.0, b);
+                    for (unsigned i = 3; i <= 14; ++i) check(ctx.fpr[i].d, 0x7FF8468AC0000000ull);
+                    const double inf = std::numeric_limits<double>::infinity();
+                    const double lhs[] = {inf, inf, 0.0, 0.0};
+                    const double rhs[] = {-inf, inf, inf, 0.0};
+                    using Op = double (*)(double, double);
+                    const Op native[] = {PPC_Fadds, PPC_Fsubs, PPC_Fmuls, PPC_Fdivs};
+                    for (unsigned i = 0; i < 4; ++i) {
+                        run(lhs[i], rhs[i]);
+                        for (unsigned group = 0; group < 3; ++group)
+                            check(ctx.fpr[3 + i + 4 * group].d, 0x7FF8000000000000ull);
+                        check(native[i](lhs[i], rhs[i]), 0x7FF8000000000000ull);
+                        check(native[i](2.0, b), 0x7FF8468AC0000000ull);
+                    }
                 }
                 std::cout << "ok";
             }
             """;
-        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness, code));
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness, code, includeInterpreter: true));
     }
 
     [NativeFact]

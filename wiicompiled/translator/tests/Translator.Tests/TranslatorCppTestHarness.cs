@@ -19,7 +19,7 @@ internal static class TranslatorCppTestHarness
         throw new DirectoryNotFoundException("Could not find Brawl workspace.");
     }
 
-    public static string CompileAndRun(string harness, string? generated = null)
+    public static string CompileAndRun(string harness, string? generated = null, bool includeInterpreter = false)
     {
         var root = FindWorkspaceRoot();
         var temp = Directory.CreateTempSubdirectory("brawl-cpp-test-").FullName;
@@ -47,6 +47,12 @@ internal static class TranslatorCppTestHarness
             }
             foreach (var source in new[] { "abi_bridge.cpp", "fpu_helpers.cpp", "memory.cpp", "ppc_helpers.cpp", "ppc_quantized.cpp" })
                 arguments.Add(Path.Combine(root, "runtime", "src", source));
+            if (includeInterpreter)
+            {
+                arguments.Add("-DBRAWL_TEST_INTERPRETER=1");
+                arguments.Add(Path.Combine(root, "runtime", "src", "ppc_interpreter.cpp"));
+                arguments.Add(Path.Combine(root, "runtime", "src", "det_clock.cpp"));
+            }
             if (Environment.GetEnvironmentVariable("MKW_FLAT_MEMORY") == "1")
             {
                 arguments.Add("-DMKW_FLAT_MEMORY=1");
@@ -158,12 +164,20 @@ internal static class TranslatorCppTestHarness
                 std::abort();
             }
 
+            #ifndef BRAWL_TEST_INTERPRETER
             // Unexpected interpreter fallback must fail this isolated dispatch test.
             namespace PpcInterpreter {
             bool Enabled() { return false; }
             bool CanRun(uint32_t) { return false; }
             void Run(CpuContext*, uint32_t) { std::abort(); }
             }
+            #else
+            // CPU-only interpreter tests must not touch graphics hardware.
+            extern "C" void GX_HLE_FIFO_Write8(uint8_t) { std::abort(); }
+            extern "C" void GX_HLE_FIFO_Write16(uint16_t) { std::abort(); }
+            extern "C" void GX_HLE_FIFO_Write32(uint32_t) { std::abort(); }
+            extern "C" void GX_HLE_FIFO_WriteFloat(float) { std::abort(); }
+            #endif
             namespace RuntimeCrash {
             [[noreturn]] void FatalMissingGuestTarget(uint32_t, CpuContext*) noexcept { std::abort(); }
             }

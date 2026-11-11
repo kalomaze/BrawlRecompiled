@@ -658,9 +658,9 @@ void Run(CpuContext* ctx, uint32_t entry) {
         case 59: {  // single-precision arithmetic
             const uint32_t d = RD(w), a = RA(w), b = RB(w), cc = RC(w);
             switch (Bits(w, 1, 5)) {
-            case 18: SetScalar(f, d, PpcForceSingleValueInline(Scalar(f, a) / Scalar(f, b))); break;
-            case 20: SetScalar(f, d, PpcForceSingleValueInline(Scalar(f, a) - Scalar(f, b))); break;
-            case 21: SetScalar(f, d, PpcForceSingleValueInline(Scalar(f, a) + Scalar(f, b))); break;
+            case 18: SetScalar(f, d, PpcForceSingleValueInline(PpcFdivInline(Scalar(f, a), Scalar(f, b)))); break;
+            case 20: SetScalar(f, d, PpcForceSingleValueInline(PpcFsubInline(Scalar(f, a), Scalar(f, b)))); break;
+            case 21: SetScalar(f, d, PpcForceSingleValueInline(PpcFaddInline(Scalar(f, a), Scalar(f, b)))); break;
             case 24: SetScalar(f, d, PpcForceSingleValueInline(PpcApproximateReciprocalInline(Scalar(f, b)))); break;
             case 25: SetScalar(f, d, PpcFmulsInline(Scalar(f, a), Scalar(f, cc))); break;
             case 28: SetScalar(f, d, PpcFmsubsInline(Scalar(f, a), Scalar(f, cc), Scalar(f, b))); break;
@@ -677,11 +677,11 @@ void Run(CpuContext* ctx, uint32_t entry) {
             const uint32_t xo5 = Bits(w, 1, 5);
             if (xo5 >= 18 && xo5 != 22 && xo5 != 24 && xo5 != 26 && xo5 <= 31) {
                 switch (xo5) {
-                case 18: SetScalar(f, d, Scalar(f, a) / Scalar(f, b)); break;
-                case 20: SetScalar(f, d, Scalar(f, a) - Scalar(f, b)); break;
-                case 21: SetScalar(f, d, Scalar(f, a) + Scalar(f, b)); break;
+                case 18: SetScalar(f, d, PpcFdivInline(Scalar(f, a), Scalar(f, b))); break;
+                case 20: SetScalar(f, d, PpcFsubInline(Scalar(f, a), Scalar(f, b))); break;
+                case 21: SetScalar(f, d, PpcFaddInline(Scalar(f, a), Scalar(f, b))); break;
                 case 23: SetScalar(f, d, Scalar(f, a) >= 0.0 ? Scalar(f, cc) : Scalar(f, b)); break;  // fsel
-                case 25: SetScalar(f, d, Scalar(f, a) * Scalar(f, cc)); break;
+                case 25: SetScalar(f, d, PpcFmulInline(Scalar(f, a), Scalar(f, cc))); break;
                 case 28: SetScalar(f, d, PpcFmsubInline(Scalar(f, a), Scalar(f, cc), Scalar(f, b))); break;
                 case 29: SetScalar(f, d, PpcFmaddInline(Scalar(f, a), Scalar(f, cc), Scalar(f, b))); break;
                 case 30: SetScalar(f, d, PpcFnmsubInline(Scalar(f, a), Scalar(f, cc), Scalar(f, b))); break;
