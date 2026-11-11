@@ -138,15 +138,16 @@ set_target_properties(mkw_runtime_common PROPERTIES UNITY_BUILD ON UNITY_BUILD_M
 target_precompile_headers(mkw_runtime_common PRIVATE "${MKW_RUNTIME_SOURCE_DIR}/include/mkw_pch.h")
 mkw_apply_common_compile_options(mkw_runtime_common)
 
-# Host ISA guard. Windows and Linux x86_64 product targets use x86-64-v3, so
-# this object deliberately keeps the plain baseline ISA and checks the CPU
-# before any AVX2/FMA code can execute. AArch64 has no equivalent optional ISA
+# Host ISA guard. This object keeps baseline x86-64 and checks the selected
+# instruction floor before optimized product code executes. AArch64 has no equivalent optional ISA
 # floor to probe: NEON/FMA are architectural requirements.
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64)$")
     add_library(mkw_cpu_baseline OBJECT "${MKW_CPU_BASELINE_SOURCE}")
     target_compile_features(mkw_cpu_baseline PRIVATE cxx_std_17)
     set_target_properties(mkw_cpu_baseline PROPERTIES UNITY_BUILD OFF)
-    if(MKW_HOST_ISA STREQUAL "v2")
+    if(MKW_HOST_ISA STREQUAL "v1")
+        target_compile_definitions(mkw_cpu_baseline PRIVATE MKW_HOST_ISA_V1)
+    elseif(MKW_HOST_ISA STREQUAL "v2")
         target_compile_definitions(mkw_cpu_baseline PRIVATE MKW_HOST_ISA_V2)
     endif()
 endif()
@@ -164,7 +165,7 @@ target_precompile_headers(mkw_base_shared PRIVATE "${MKW_RUNTIME_SOURCE_DIR}/inc
 function(mkw_configure_product target)
     target_sources(${target} PRIVATE $<TARGET_OBJECTS:mkw_runtime_common>)
     # Startup CPU check. Must stay a separate object library so it keeps the
-    # plain baseline ISA while everything around it is built for x86-64-v3.
+    # plain baseline ISA independently of the selected product instruction floor.
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64)$")
         target_sources(${target} PRIVATE $<TARGET_OBJECTS:mkw_cpu_baseline>)
     endif()

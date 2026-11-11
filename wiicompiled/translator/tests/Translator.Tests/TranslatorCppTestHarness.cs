@@ -41,9 +41,9 @@ internal static class TranslatorCppTestHarness
             if (System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture == System.Runtime.InteropServices.Architecture.X64)
             {
                 var isa = Environment.GetEnvironmentVariable("MKW_HOST_ISA") ?? "v3";
-                if (isa is not ("v2" or "v3"))
-                    throw new ArgumentException("MKW_HOST_ISA must be v2 or v3");
-                arguments.Add($"-march=x86-64-{isa}");
+                if (isa is not ("v1" or "v2" or "v3"))
+                    throw new ArgumentException("MKW_HOST_ISA must be v1, v2, or v3");
+                arguments.Add(isa == "v1" ? "-march=x86-64" : $"-march=x86-64-{isa}");
             }
             foreach (var source in new[] { "abi_bridge.cpp", "fpu_helpers.cpp", "memory.cpp", "ppc_helpers.cpp", "ppc_quantized.cpp" })
                 arguments.Add(Path.Combine(root, "runtime", "src", source));

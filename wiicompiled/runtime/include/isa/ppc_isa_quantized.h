@@ -83,12 +83,16 @@ inline uint64_t PpcStorePairPsqFloatBitsPackedInline(uint64_t value)
 #if defined(__x86_64__)
 inline __m128i PpcPsqSwapPairBytesInline(__m128i lanes)
 {
+#if defined(__SSSE3__)
     const __m128i order = _mm_setr_epi8(
         static_cast<char>(7), static_cast<char>(6), static_cast<char>(5), static_cast<char>(4),
         static_cast<char>(3), static_cast<char>(2), static_cast<char>(1), static_cast<char>(0),
         static_cast<char>(0x80), static_cast<char>(0x80), static_cast<char>(0x80), static_cast<char>(0x80),
         static_cast<char>(0x80), static_cast<char>(0x80), static_cast<char>(0x80), static_cast<char>(0x80));
     return _mm_shuffle_epi8(lanes, order);
+#else
+    return _mm_cvtsi64_si128(__builtin_bswap64(static_cast<uint64_t>(_mm_cvtsi128_si64(lanes))));
+#endif
 }
 
 // Lane-local sNaN quieting; identical rule to PpcLoadPairPsqFloatBitsPackedInline.

@@ -65,7 +65,7 @@ def main():
     parser.add_argument('--jobs', type=int, default=4)
     parser.add_argument('--build-type', default='Release',
                         choices=('Debug', 'Release', 'RelWithDebInfo', 'MinSizeRel'))
-    parser.add_argument('--host-isa', choices=('v2', 'v3'))
+    parser.add_argument('--host-isa', choices=('v1', 'v2', 'v3'))
     parser.add_argument('--flat-memory', choices=('ON', 'OFF'))
     args = parser.parse_args()
     if args.jobs < 1:
