@@ -49,6 +49,10 @@ std::filesystem::path SessionNand() {
     return NetplayDirectory() / "SessionNAND";
 }
 
+std::filesystem::path HostMarker() {
+    return SessionNand() / ".host";
+}
+
 std::vector<std::string> g_names;
 bool g_isHost = false;
 
@@ -62,16 +66,24 @@ constexpr const char* kSaveFiles[] = {
 };
 
 // Copies the session's save over the player's own. Call with the NAND override cleared.
-void KeepSessionSave(const char* what) {
+bool KeepSessionSave(const char* what) {
+    bool complete = true;
     for (const char* file : kSaveFiles) {
         std::error_code ec;
         const auto played = SessionNand() / std::filesystem::u8path(file);
         const auto mine = RuntimeNandPath::ResolveNandRootPath() / std::filesystem::u8path(file);
-        if (!std::filesystem::exists(played, ec)) continue;
-        std::filesystem::create_directories(mine.parent_path(), ec);
-        std::filesystem::copy_file(played, mine, std::filesystem::copy_options::overwrite_existing, ec);
-        RT_LOGF(RT_TAG_RUNTIME, "netplay: kept %s %s (%s)\n", what, file, ec ? ec.message().c_str() : "ok");
+        const bool exists = std::filesystem::exists(played, ec);
+        if (!ec && !exists) continue;
+        if (!ec) std::filesystem::create_directories(mine.parent_path(), ec);
+        if (!ec) std::filesystem::copy_file(played, mine, std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec) {
+            complete = false;
+            RT_LOGF(RT_TAG_RUNTIME, "netplay: could not keep %s %s: %s\n", what, file, ec.message().c_str());
+        } else {
+            RT_LOGF(RT_TAG_RUNTIME, "netplay: kept %s %s\n", what, file);
+        }
     }
+    return complete;
 }
 
 [[noreturn]] void RestartProcess() {
@@ -119,6 +131,10 @@ void KeepSessionSave(const char* what) {
 
 bool Restart(const NetplayLobby::Plan& plan) {
     std::error_code ec;
+    if (std::filesystem::exists(HostMarker(), ec) || ec) {
+        RT_LOGF(RT_TAG_RUNTIME, "netplay: cannot replace session NAND while host-save recovery is pending or inaccessible\n");
+        return false;
+    }
     // A fresh NAND: the runtime's standard seeds (written at boot) plus the host's files.
     std::filesystem::remove_all(SessionNand(), ec);
     if (ec) {
@@ -167,10 +183,6 @@ bool Restart(const NetplayLobby::Plan& plan) {
     RestartProcess();
 }
 
-std::filesystem::path HostMarker() {
-    return SessionNand() / ".host";
-}
-
 // A host that closed the game during a session never went through EndSession: bring the session's
 // save back now, before anything reads the NAND.
 void RecoverHostSave() {
@@ -178,8 +190,9 @@ void RecoverHostSave() {
     if (!std::filesystem::exists(HostMarker(), ec)) {
         return;
     }
-    KeepSessionSave("from the last session you hosted:");
-    std::filesystem::remove(HostMarker(), ec);
+    if (KeepSessionSave("from the last session you hosted:")) {
+        std::filesystem::remove(HostMarker(), ec);
+    }
 }
 
 bool TakePendingSession(NetplaySession::Config& config, int& saveFile) {
@@ -226,11 +239,17 @@ bool TakePendingSession(NetplaySession::Config& config, int& saveFile) {
         config.inputDelay == 0 || (config.localSlot != 0 && config.host.empty())) {
         return false;
     }
+    if (config.localSlot == 0) {
+        std::ofstream marker(HostMarker());
+        marker << "1\n";
+        marker.close();
+        if (!marker) {
+            RT_LOGF(RT_TAG_RUNTIME, "netplay: could not create the host-save recovery marker\n");
+            return false;
+        }
+    }
     g_names = names;
     g_isHost = config.localSlot == 0;
-    if (g_isHost) {
-        std::ofstream(HostMarker()) << "1\n";
-    }
     RuntimeNandPath::NandRootOverride() = SessionNand();
     return true;
 }
@@ -243,9 +262,10 @@ void PrepareToLeave() {
     // The host keeps what was played: the session's save goes back over the player's own.
     if (g_isHost) {
         std::error_code markerError;
-        std::filesystem::remove(HostMarker(), markerError);
         RuntimeNandPath::NandRootOverride().clear();
-        KeepSessionSave("from the session:");
+        if (KeepSessionSave("from the session:")) {
+            std::filesystem::remove(HostMarker(), markerError);
+        }
     }
     std::error_code ec;
     std::filesystem::remove(SessionFile(), ec);
