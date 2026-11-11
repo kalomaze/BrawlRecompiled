@@ -59,7 +59,7 @@ sealed class MainForm : Form
         Gamepads.Init(play);
 
         Text = "Brawl Recompiled  v" + AppVersion;
-        Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!);  // the Smash Ball, embedded from smash.ico
+        Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!);  // the Smash Ball, embedded from the shared Brawl icon
         ballCursor = MakeBallCursor(clickable: false);
         ballHand = MakeBallCursor(clickable: true);
         Cursor = ballCursor;  // child controls without their own cursor inherit it

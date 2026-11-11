@@ -15,7 +15,7 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <DebugType>embedded</DebugType>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <ApplicationIcon>smash.ico</ApplicationIcon>
+    <ApplicationIcon>../wiicompiled/runtime/assets/icon/brawl.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <!-- linux\ is its own project -->

@@ -41,10 +41,6 @@ def main():
     sheet.save(os.path.join(OUT, "font.png"))
     open(os.path.join(OUT, "font.txt"), "w", newline="\n").write("\n".join(lines) + "\n")
 
-    ball = os.path.join(ROOT, "launcher", "smash_ball.png")
-    if os.path.exists(ball):
-        Image.open(ball).resize((256, 256), Image.LANCZOS).save(os.path.join(OUT, "smash_ball.png"))
-
     # The Linux launcher's labels, pre-drawn at twice their size (it has no System.Drawing to draw the font at run
     # time): the same look as GameArt.Text in the Windows launcher.
     night, snow, dim, gold, ink = (0x1A, 0x1E, 0x2C), (0xF2, 0xF2, 0xF6), (0xB8, 0xBC, 0xCB), (0xFF, 0xC4, 0x3A), (0x0B, 0x0D, 0x16)

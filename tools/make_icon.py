@@ -1,7 +1,7 @@
 """The Smash Ball icon (launcher, game exe and game window) from the game's own Smash Ball textures: the rainbow
 core wrapped round a sphere with the Smash emblem on its face, as the item looks in a match.
    python tools/make_icon.py [disc files dir, default Disc/DATA/files]
-Writes launcher/smash.ico, launcher/smash_ball.png, launcher/smash_preview.png and wiicompiled/runtime/assets/icon/brawl.ico."""
+Writes launcher/art/smash_ball.png and wiicompiled/runtime/assets/icon/brawl.ico."""
 import math
 import os
 import sys
@@ -88,10 +88,10 @@ def main():
     ball = smash_ball(files)
     sizes = [16, 24, 32, 48, 64, 128, 256]
     frames = [ball.resize((s, s), Image.LANCZOS) for s in sizes]
-    for path in ("launcher/smash.ico", "wiicompiled/runtime/assets/icon/brawl.ico"):
-        frames[-1].save(os.path.join(ROOT, path), sizes=[(s, s) for s in sizes], append_images=frames[:-1])
-    ball.resize((256, 256), Image.LANCZOS).save(os.path.join(ROOT, "launcher/smash_preview.png"))
-    ball.save(os.path.join(ROOT, "launcher/smash_ball.png"))
+    frames[-1].save(os.path.join(ROOT, "wiicompiled/runtime/assets/icon/brawl.ico"),
+                    sizes=[(s, s) for s in sizes], append_images=frames[:-1])
+    os.makedirs(os.path.join(ROOT, "launcher/art"), exist_ok=True)
+    ball.resize((256, 256), Image.LANCZOS).save(os.path.join(ROOT, "launcher/art/smash_ball.png"))
     print("icons written")
 
 
