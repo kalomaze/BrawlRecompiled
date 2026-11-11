@@ -611,12 +611,10 @@ void MemoryInline::Write32Slow(uint32_t addr, uint32_t val) {
 
 void MemoryInline::Write64Slow(uint32_t addr, uint64_t val) {
     if (IsGpuFifoAddress(addr)) {
-        // The gather pipe is a byte-stream FIFO; a 64-bit store is two big-endian
-        // 32-bit pushes, high word first. Without this arm the write fell through
-        // to WriteScalar, which found no mapped region behind 0xCC008000 and threw
-        // "no mapped region" instead of reaching GX.
+        // A 64-bit FIFO store emits the high word first. Dispatch the low word
+        // separately: it may cross out of the FIFO's address window.
         GX_HLE_FIFO_Write32(static_cast<uint32_t>(val >> 32));
-        GX_HLE_FIFO_Write32(static_cast<uint32_t>(val));
+        Write32Slow(addr + 4, static_cast<uint32_t>(val));
         return;
     }
     if (IsMmioAddress(addr)) {

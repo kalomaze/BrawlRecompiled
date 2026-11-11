@@ -94,7 +94,7 @@ constexpr bool IsDeviceMmioAddress(uint32_t addr) {
 }
 
 constexpr bool IsGpuFifoAddress(uint32_t addr) {
-    return addr >= 0xCC008000u && addr < 0xCC008100u;
+    return addr >= 0xCC008000u && addr < 0xCC009000u;
 }
 
 // Page protections can't cover this: an MMIO write must reach GX HLE with its value or be
