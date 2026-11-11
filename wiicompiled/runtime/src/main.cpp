@@ -1066,20 +1066,6 @@ LONG CALLBACK SehLogger(EXCEPTION_POINTERS* info) {
             info->ExceptionRecord->ExceptionAddress)) {
         return EXCEPTION_CONTINUE_EXECUTION;
     }
-    if (g_suppressSehReporting && g_sehJumpTarget) {
-        g_sehLastExceptionCode = info->ExceptionRecord->ExceptionCode;
-        g_sehLastExceptionAddress = reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress);
-        g_sehLastAccessType = 0;
-        g_sehLastAccessedAddress = 0;
-        if (g_sehLastExceptionCode == EXCEPTION_ACCESS_VIOLATION && info->ExceptionRecord->NumberParameters >= 2) {
-            g_sehLastAccessType = static_cast<uint32_t>(info->ExceptionRecord->ExceptionInformation[0]);
-            g_sehLastAccessedAddress = static_cast<uintptr_t>(info->ExceptionRecord->ExceptionInformation[1]);
-        }
-        longjmp(*g_sehJumpTarget, 1);
-    }
-    if (g_suppressSehReporting) {
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
     // Let C++ exceptions propagate to std::terminate so we can log their what().
     if (info->ExceptionRecord->ExceptionCode == kCppExceptionCodeGcc ||
         info->ExceptionRecord->ExceptionCode == kCppExceptionCodeMsvc) {
@@ -1199,21 +1185,6 @@ void PosixMemoryFaultHandler(int sig, siginfo_t* info, void* ucontextVoid) {
     // Unknown metadata and instruction fetches must never be treated as reads.
     if (faultAddress != nullptr && HostFault::MayRecoverDataFault(sig, info->si_code, fault) &&
         GuestFlat::HandleAccessViolation(faultAddress, fault.access == HostFault::Access::Write, fault.instruction)) {
-        return;
-    }
-
-    if (g_suppressSehReporting && g_sehJumpTarget) {
-        g_sehLastExceptionCode = static_cast<uint32_t>(sig);
-        g_sehLastExceptionAddress = reinterpret_cast<uintptr_t>(faultAddress);
-        g_sehLastAccessType = static_cast<uint32_t>(fault.access);
-        g_sehLastAccessedAddress = reinterpret_cast<uintptr_t>(faultAddress);
-        siglongjmp(*g_sehJumpTarget, 1);
-    }
-    if (g_suppressSehReporting) {
-        // Reporting suppressed but nobody armed a recovery jump: restore the default disposition
-        // and re-raise so the process still terminates, instead of returning into the same fault.
-        signal(sig, SIG_DFL);
-        raise(sig);
         return;
     }
 
