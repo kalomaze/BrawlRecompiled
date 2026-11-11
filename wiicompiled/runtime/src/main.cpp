@@ -982,56 +982,12 @@ void DumpAccessViolationReport(const Memory::AccessViolation& ex,
 }
 
 #if defined(_WIN32)
-PVOID g_vectoredSehHandle = nullptr;
 constexpr DWORD kCppExceptionCodeGcc = 0x20474343; // "GCC" exception code
 constexpr DWORD kCppExceptionCodeMsvc = 0xE06D7363;
 // AddressSanitizer uses STATUS_FATAL_APP_EXIT when it detects an error and wants to report it.
 // We must let ASan's handler run so it can print file/line information.
 constexpr DWORD kAsanFatalAppExit = 0x40000015; // STATUS_FATAL_APP_EXIT
 LONG ReportFatalSehAndExit(EXCEPTION_POINTERS* info);
-
-LONG CALLBACK SehLogger(EXCEPTION_POINTERS* info) {
-    // Guest-space faults are the flat memory interception mechanism (MMIO,
-    // deferred EFB reads, the executable-write guard, unmapped pages). The
-    // flat module registers its own handler first, but registration order is
-    // not guaranteed once another VEH is installed later, so consult it here
-    // too - resolving a fault twice is a no-op.
-    if (info->ExceptionRecord != nullptr &&
-        info->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
-        info->ExceptionRecord->NumberParameters >= 2 &&
-        GuestFlat::HandleAccessViolation(
-            reinterpret_cast<void*>(info->ExceptionRecord->ExceptionInformation[1]),
-            info->ExceptionRecord->ExceptionInformation[0] == 1,
-            info->ExceptionRecord->ExceptionAddress)) {
-        return EXCEPTION_CONTINUE_EXECUTION;
-    }
-    // Let C++ exceptions propagate to std::terminate so we can log their what().
-    if (info->ExceptionRecord->ExceptionCode == kCppExceptionCodeGcc ||
-        info->ExceptionRecord->ExceptionCode == kCppExceptionCodeMsvc) {
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    if (info->ExceptionRecord->ExceptionCode == 0x40010006 || // DBG_PRINTEXCEPTION_C
-        info->ExceptionRecord->ExceptionCode == 0x4001000A || // DBG_PRINTEXCEPTION_WIDE_C (OutputDebugStringW)
-        info->ExceptionRecord->ExceptionCode == 0x406D1388 || // SetThreadName
-        info->ExceptionRecord->ExceptionCode == kAsanFatalAppExit) { // ASan reporting - let it print first
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    // Software-raised exceptions (customer bit set) are used for internal control flow by
-    // system DLLs (e.g. msxml6 while mscms parses a display colour profile) and are caught
-    // by their own frame handlers. Only hardware faults are fatal at first chance; anything
-    // else that truly goes unhandled reaches UnhandledSehFilter.
-    if ((info->ExceptionRecord->ExceptionCode & 0x20000000u) != 0) {
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    // Likewise anything that isn't a processor fault: RPC raises its Win32 errors as exceptions and
-    // handles them itself (the folder picker's shell raises RPC_S_SERVER_UNAVAILABLE, 0x6BA, on
-    // some PCs). Faults are NTSTATUS errors of facility 0 (0xC000xxxx) or a misalignment.
-    const DWORD code = info->ExceptionRecord->ExceptionCode;
-    if ((code & 0xFFFF0000u) != 0xC0000000u && code != EXCEPTION_DATATYPE_MISALIGNMENT) {
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    return ReportFatalSehAndExit(info);
-}
 
 LONG WINAPI UnhandledSehFilter(EXCEPTION_POINTERS* info) {
     if (info == nullptr || info->ExceptionRecord == nullptr) {
@@ -1072,19 +1028,9 @@ LONG ReportFatalSehAndExit(EXCEPTION_POINTERS* info) {
     message.Fatal();
 }
 
-void InstallSehLogger() {
-    if (!g_vectoredSehHandle) {
-        g_vectoredSehHandle = AddVectoredExceptionHandler(1, SehLogger);
-        SetUnhandledExceptionFilter(UnhandledSehFilter);
-    }
-}
 #else
-// POSIX counterpart to SehLogger above. Unlike Windows' AddVectoredExceptionHandler, which lets
-// GuestFlat and this module each install their own handler and defensively re-check each other,
-// sigaction only allows one handler per signal - the second registration replaces the first
-// instead of chaining. So this is the single SIGSEGV/SIGBUS handler for the whole process, and it
-// owns checking GuestFlat's fault-interception logic first, exactly mirroring the order SehLogger
-// already uses on Windows.
+// POSIX has one process-wide signal handler. It attempts guest mapping recovery
+// before reporting an unhandled fault; Windows installs that recovery in GuestFlat.
 // Only async-signal-safe operations belong here: the interrupted thread may hold
 // allocator, logger, or window-system locks. Leave detailed inspection to the
 // debugger/core dump instead of risking another fault or deadlock while reporting.
@@ -1224,7 +1170,7 @@ int RuntimeMain(int argc, char** argv) {
     AttachParentConsoleForDiagnostics();
 #if defined(_WIN32)
     ConfigureWindowsFatalDialogBehavior();
-    InstallSehLogger();
+    SetUnhandledExceptionFilter(UnhandledSehFilter);
     WindowsTimerResolutionGuard timerResolutionGuard;
 #else
     InstallPosixMemoryFaultHandler();
