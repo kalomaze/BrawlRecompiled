@@ -47,9 +47,6 @@ extern PageEntry g_pageTable[kPageCount];
 // page is contiguous. This permits any native access up to 8 bytes without a
 // per-access mask/limit check. Zero retains the general PageEntry fallback.
 extern uintptr_t g_fullPageBias[kPageCount];
-// Runtime-active readable biases. Deferred-read pages clear these entries once
-// instead of paying a mode branch on every translated read.
-extern uintptr_t g_fullReadablePageBias[kPageCount];
 // Same encoding, but only for pages proven not to contain executable bytes.
 // Executable-range registration invalidates entries before guest execution.
 extern uintptr_t g_fullWritablePageBias[kPageCount];
@@ -62,12 +59,6 @@ struct SparseWritablePageTable {
     uintptr_t encodedBias[kWritableSubPagesPerPage]{};
 };
 extern const SparseWritablePageTable* g_sparseWritablePageTables[kPageCount];
-
-// Nonzero while any registered deferred read overlaps the page. Small
-// mappings (e.g. the 16 KiB locked cache) have no coarse bias entry, so a
-// zero readable bias alone cannot distinguish "deferred content pending"
-// from "small but plain memory"; range resolution needs the explicit flag.
-extern uint8_t g_deferredReadCoveredPages[kPageCount];
 
 MKW_MEMORY_NO_INLINE MKW_MEMORY_COLD uint8_t Read8Slow(uint32_t addr);
 MKW_MEMORY_NO_INLINE MKW_MEMORY_COLD uint16_t Read16Slow(uint32_t addr);
@@ -89,7 +80,6 @@ template <typename T>
 MKW_MEMORY_NO_INLINE MKW_MEMORY_COLD void WriteResolvedFallback(uint32_t addr, T value);
 MKW_MEMORY_NO_INLINE MKW_MEMORY_COLD void WriteResolvedFallbackFloat32(uint32_t addr, double val);
 MKW_MEMORY_NO_INLINE MKW_MEMORY_COLD void WriteResolvedFallbackFloat64(uint32_t addr, double val);
-bool ResolveDeferredReads(uint32_t addr, size_t length);
 
 constexpr bool IsMmioAddress(uint32_t addr) {
     return addr >= 0xCC000000u && addr < 0xCE000000u;
@@ -230,7 +220,7 @@ MKW_MEMORY_FORCE_INLINE bool TryGetWritablePointerFast(
     return true;
 }
 
-// Flat form: guest_flat_memory.h's page protections already answer mapped/non-deferred/non-executable, so resolving is pure address arithmetic.
+// Flat form: guest_flat_memory.h's page protections already answer mapped/non-executable, so resolving is pure address arithmetic.
 // Two checks stay inline: a wrapped guest address can't survive 64-bit `host + rangeOffset`, and an MMIO write's value isn't recoverable from a
 // fault record, so a write touching that window must resolve null and fall back to Memory::Write*. Checking both range endpoints is a complete
 // proof since length <= kPageSize (1 MiB) can't straddle the 32 MiB MMIO window.
@@ -250,7 +240,6 @@ MKW_MEMORY_FORCE_INLINE uint8_t* ResolveRangeHost(uint32_t base, int32_t minOffs
     const uint32_t page = guestStart >> kPageShift;
     if ((last >> kPageShift) != page || IsMmioAddress(guestStart) || IsMmioAddress(last))
         return nullptr;
-    if (needsRead && g_deferredReadCoveredPages[page]) return nullptr;
     if (needsWrite) {
         for (uint32_t p = guestStart >> kWritableSubPageShift; p <= (last >> kWritableSubPageShift); ++p)
             if (RecompMod::g_executableWriteGuardPages[p].load(std::memory_order_relaxed))
@@ -370,7 +359,7 @@ inline bool TryReadMappedScalar(uint32_t address, T& outValue) {
 
 template <typename T>
 MKW_MEMORY_FORCE_INLINE bool TryReadGuestScalar(uint32_t address, T& outValue) {
-    const uintptr_t encodedBias = g_fullReadablePageBias[address >> kPageShift];
+    const uintptr_t encodedBias = g_fullPageBias[address >> kPageShift];
     if (encodedBias == 0) [[unlikely]]
         return false;
     auto* ptr = reinterpret_cast<uint8_t*>((encodedBias - 1u) + address);
@@ -548,8 +537,7 @@ MKW_MEMORY_FORCE_INLINE void WriteResolvedFloat64(uint8_t* r, uint32_t o, uint32
 //
 // When a host VM page is larger than a 4 KiB Wii page, guest-view protections
 // cannot distinguish adjacent special Wii pages. The general FlatRead*/
-// FlatWrite* helpers then use the checked page-table path, which materializes
-// deferred reads and applies executable-write/MMIO policy before touching RAM.
+// FlatWrite* helpers then use the checked page-table path, which applies executable-write/MMIO policy before touching RAM.
 // FlatWriteRam* remains direct because the translator emits it only for
 // addresses it has proven are ordinary RAM.
 

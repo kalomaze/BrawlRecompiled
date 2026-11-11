@@ -30,11 +30,9 @@
 
 MemoryInline::PageEntry MemoryInline::g_pageTable[MemoryInline::kPageCount]{};
 uintptr_t MemoryInline::g_fullPageBias[MemoryInline::kPageCount]{};
-uintptr_t MemoryInline::g_fullReadablePageBias[MemoryInline::kPageCount]{};
 uintptr_t MemoryInline::g_fullWritablePageBias[MemoryInline::kPageCount]{};
 const MemoryInline::SparseWritablePageTable*
     MemoryInline::g_sparseWritablePageTables[MemoryInline::kPageCount]{};
-uint8_t MemoryInline::g_deferredReadCoveredPages[MemoryInline::kPageCount]{};
 template <typename T>
 T MemoryInline::ReadResolvedFallback(uint32_t addr) {
     if constexpr (sizeof(T) == 1) return Memory::Read8(addr);
@@ -62,48 +60,6 @@ template void MemoryInline::WriteResolvedFallback<uint64_t>(uint32_t, uint64_t);
 void MemoryInline::WriteResolvedFallbackFloat32(uint32_t addr, double val) { Memory::WriteFloat32(addr, val); }
 void MemoryInline::WriteResolvedFallbackFloat64(uint32_t addr, double val) { Memory::WriteFloat64(addr, val); }
 namespace {
-struct DeferredRead {
-    uint64_t token = 0;
-    uint32_t start = 0;
-    size_t length = 0;
-    Memory::DeferredReadCallback callback = nullptr;
-    void* user = nullptr;
-};
-
-std::mutex& DeferredReadMutex() {
-    static std::mutex mutex;
-    return mutex;
-}
-
-std::vector<DeferredRead>& DeferredReads() {
-    static std::vector<DeferredRead> reads;
-    return reads;
-}
-
-uint64_t& NextDeferredReadToken() {
-    static uint64_t token = 1;
-    return token;
-}
-
-bool RangesOverlap(uint32_t firstStart, size_t firstLength,
-                   uint32_t secondStart, size_t secondLength) {
-    const uint64_t firstEnd = static_cast<uint64_t>(firstStart) + firstLength;
-    const uint64_t secondEnd = static_cast<uint64_t>(secondStart) + secondLength;
-    return static_cast<uint64_t>(firstStart) < secondEnd &&
-           static_cast<uint64_t>(secondStart) < firstEnd;
-}
-
-void RefreshDeferredReadPage(uint32_t page) {
-    const uint32_t pageStart = page << MemoryInline::kPageShift;
-    const auto& reads = DeferredReads();
-    const bool covered = std::any_of(reads.begin(), reads.end(), [pageStart](const DeferredRead& read) {
-        return RangesOverlap(pageStart, MemoryInline::kPageSize, read.start, read.length);
-    });
-    MemoryInline::g_fullReadablePageBias[page] =
-        !covered ? MemoryInline::g_fullPageBias[page] : 0;
-    MemoryInline::g_deferredReadCoveredPages[page] = covered ? 1 : 0;
-}
-
 struct Region {
     Memory::RegionConfig config;
     std::shared_ptr<std::vector<uint8_t>> storage;
@@ -135,94 +91,13 @@ void ClearPageTable() {
         entry.base = nullptr;
         entry.limit = 0;
         MemoryInline::g_fullPageBias[i] = 0;
-        MemoryInline::g_fullReadablePageBias[i] = 0;
         MemoryInline::g_fullWritablePageBias[i] = 0;
-        MemoryInline::g_deferredReadCoveredPages[i] = 0;
         MemoryInline::g_sparseWritablePageTables[i] = nullptr;
         SparseWritablePageTableStorage()[i].reset();
     }
 }
 
 } // namespace
-
-uint64_t Memory::RegisterDeferredRead(uint32_t addr, size_t length,
-                                      DeferredReadCallback callback, void* user) {
-    if (length == 0 || callback == nullptr ||
-        static_cast<uint64_t>(addr) + length > (uint64_t{1} << 32)) {
-        return 0;
-    }
-
-    std::lock_guard lock{DeferredReadMutex()};
-    uint64_t token = NextDeferredReadToken()++;
-    if (token == 0) token = NextDeferredReadToken()++;
-    DeferredReads().push_back({token, addr, length, callback, user});
-    const uint32_t firstPage = addr >> MemoryInline::kPageShift;
-    const uint32_t lastPage = static_cast<uint32_t>(
-        (static_cast<uint64_t>(addr) + length - 1) >> MemoryInline::kPageShift);
-    for (uint32_t page = firstPage; page <= lastPage; ++page) {
-        MemoryInline::g_fullReadablePageBias[page] = 0;
-        MemoryInline::g_deferredReadCoveredPages[page] = 1;
-    }
-    // Clearing the readable bias only intercepts the checked path. A flat read
-    // needs the host pages themselves to trap, which is what PAGE_NOACCESS on
-    // the guest view does; the vectored handler materializes the copy, restores
-    // the protection and re-runs the access.
-    GuestFlat::ProtectDeferredRange(addr, length);
-    return token;
-}
-
-void Memory::ClearDeferredReads() {
-    std::lock_guard lock{DeferredReadMutex()};
-    auto& reads = DeferredReads();
-    std::vector<uint32_t> pages;
-    for (const auto& read : reads) {
-        const uint32_t firstPage = read.start >> MemoryInline::kPageShift;
-        const uint32_t lastPage = static_cast<uint32_t>(
-            (static_cast<uint64_t>(read.start) + read.length - 1) >> MemoryInline::kPageShift);
-        for (uint32_t page = firstPage; page <= lastPage; ++page) pages.push_back(page);
-        GuestFlat::UnprotectDeferredRange(read.start, read.length);
-    }
-    reads.clear();
-    std::sort(pages.begin(), pages.end());
-    pages.erase(std::unique(pages.begin(), pages.end()), pages.end());
-    for (uint32_t page : pages) RefreshDeferredReadPage(page);
-}
-
-bool MemoryInline::ResolveDeferredReads(uint32_t addr, size_t length) {
-    std::vector<DeferredRead> matches;
-    std::vector<uint32_t> affectedPages;
-    {
-        std::lock_guard lock{DeferredReadMutex()};
-        auto& reads = DeferredReads();
-        for (auto it = reads.begin(); it != reads.end();) {
-            if (!RangesOverlap(addr, length, it->start, it->length)) {
-                ++it;
-                continue;
-            }
-            const uint32_t firstPage = it->start >> kPageShift;
-            const uint32_t lastPage = static_cast<uint32_t>(
-                (static_cast<uint64_t>(it->start) + it->length - 1) >> kPageShift);
-            for (uint32_t page = firstPage; page <= lastPage; ++page) affectedPages.push_back(page);
-            matches.push_back(*it);
-            // Idempotent: the vectored handler already dropped the protection
-            // for the range whose trap brought us here.
-            GuestFlat::UnprotectDeferredRange(it->start, it->length);
-            it = reads.erase(it);
-        }
-        std::sort(affectedPages.begin(), affectedPages.end());
-        affectedPages.erase(std::unique(affectedPages.begin(), affectedPages.end()), affectedPages.end());
-        for (uint32_t page : affectedPages) RefreshDeferredReadPage(page);
-    }
-
-    // The range is removed before entering renderer code so any memory reads
-    // made while submitting the copy cannot recursively trigger it.
-    for (const auto& match : matches) {
-        if (!match.callback(match.user)) {
-            throw Memory::AccessViolation(addr, length, "deferred read materialization failed");
-        }
-    }
-    return true;
-}
 
 namespace {
 
@@ -271,8 +146,6 @@ void RefreshFastPathTables() {
     auto& sparseStorage = SparseWritablePageTableStorage();
     for (uint32_t page = 0; page < MemoryInline::kPageCount; ++page) {
         const uintptr_t bias = MemoryInline::g_fullPageBias[page];
-        MemoryInline::g_fullReadablePageBias[page] = bias;
-        MemoryInline::g_deferredReadCoveredPages[page] = 0;
         MemoryInline::g_sparseWritablePageTables[page] = nullptr;
         sparseStorage[page].reset();
 
@@ -304,16 +177,6 @@ void RefreshFastPathTables() {
         if (hasExecutableSubPage && hasWritableSubPage) {
             MemoryInline::g_sparseWritablePageTables[page] = sparse.get();
             sparseStorage[page] = std::move(sparse);
-        }
-    }
-    std::lock_guard lock{DeferredReadMutex()};
-    for (const auto& read : DeferredReads()) {
-        const uint32_t firstPage = read.start >> MemoryInline::kPageShift;
-        const uint32_t lastPage = static_cast<uint32_t>(
-            (static_cast<uint64_t>(read.start) + read.length - 1) >> MemoryInline::kPageShift);
-        for (uint32_t page = firstPage; page <= lastPage; ++page) {
-            MemoryInline::g_fullReadablePageBias[page] = 0;
-            MemoryInline::g_deferredReadCoveredPages[page] = 1;
         }
     }
 }
@@ -635,7 +498,6 @@ void Memory::Init(const Config& config) {
 }
 
 void Memory::Reset() {
-    ClearDeferredReads();
     std::lock_guard<std::mutex> lock(RegionMutex());
     Regions().clear();
     ClearPageTable();
@@ -662,7 +524,6 @@ uint8_t MemoryInline::Read8Slow(uint32_t addr) {
         if (!IsDeviceMmioAddress(addr)) return 0;  // nothing on the bus there: reads 0, writes dropped
         ThrowMmioReadBlocked(addr, sizeof(uint8_t));
     }
-    ResolveDeferredReads(addr, sizeof(uint8_t));
     return ReadScalar<uint8_t>(addr);
 }
 
@@ -671,7 +532,6 @@ uint16_t MemoryInline::Read16Slow(uint32_t addr) {
         if (!IsDeviceMmioAddress(addr)) return 0;  // nothing on the bus there: reads 0, writes dropped
         ThrowMmioReadBlocked(addr, sizeof(uint16_t));
     }
-    ResolveDeferredReads(addr, sizeof(uint16_t));
     return ReadScalar<uint16_t>(addr);
 }
 
@@ -680,7 +540,6 @@ uint32_t MemoryInline::Read32Slow(uint32_t addr) {
         if (!IsDeviceMmioAddress(addr)) return 0;  // nothing on the bus there: reads 0, writes dropped
         ThrowMmioReadBlocked(addr, sizeof(uint32_t));
     }
-    ResolveDeferredReads(addr, sizeof(uint32_t));
     const uint32_t value = ReadScalar<uint32_t>(addr);
     return value;
 }
@@ -690,7 +549,6 @@ uint64_t MemoryInline::Read64Slow(uint32_t addr) {
         if (!IsDeviceMmioAddress(addr)) return 0;  // nothing on the bus there: reads 0, writes dropped
         ThrowMmioReadBlocked(addr, sizeof(uint64_t));
     }
-    ResolveDeferredReads(addr, sizeof(uint64_t));
     return ReadScalar<uint64_t>(addr);
 }
 
@@ -699,7 +557,6 @@ float MemoryInline::ReadFloat32Slow(uint32_t addr) {
         if (!IsDeviceMmioAddress(addr)) return 0;  // nothing on the bus there: reads 0, writes dropped
         ThrowMmioReadBlocked(addr, sizeof(float));
     }
-    ResolveDeferredReads(addr, sizeof(uint32_t));
     const auto bits = ReadScalar<uint32_t>(addr);
     float value;
     std::memcpy(&value, &bits, sizeof(value));
@@ -711,7 +568,6 @@ double MemoryInline::ReadFloat64Slow(uint32_t addr) {
         if (!IsDeviceMmioAddress(addr)) return 0;  // nothing on the bus there: reads 0, writes dropped
         ThrowMmioReadBlocked(addr, sizeof(double));
     }
-    ResolveDeferredReads(addr, sizeof(uint64_t));
     const auto bits = ReadScalar<uint64_t>(addr);
     double value;
     std::memcpy(&value, &bits, sizeof(value));

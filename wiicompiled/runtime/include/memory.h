@@ -10,7 +10,6 @@
 
 class Memory {
 public:
-    using DeferredReadCallback = bool (*)(void* user);
 
     static constexpr size_t kMem1Size = 24u * 1024u * 1024u;
     static constexpr size_t kMem2Size = 128u * 1024u * 1024u;
@@ -101,10 +100,6 @@ public:
     static uint8_t* GetPointer(uint32_t addr);
     static uint8_t* GetPointer(uint32_t addr, size_t length);
     static bool Contains(uint32_t addr, size_t length = 1);
-
-    static uint64_t RegisterDeferredRead(uint32_t addr, size_t length,
-                                         DeferredReadCallback callback, void* user);
-    static void ClearDeferredReads();
 
     // sizeBytes reports the storage actually allocated, which is not always the
     // configured size (aliased MEM1/MEM2 windows are clamped to what is behind

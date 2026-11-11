@@ -3,7 +3,7 @@
 // Flat 4 GiB guest address space: a guest access is just `*(T*)(kFlatGuestBase + addr)` plus a
 // byte swap, no page-table load/branch. Two views alias the same physical memory: the GUEST
 // view at kFlatGuestBase has page protections as the interception mechanism (unmapped/MMIO/
-// executable/deferred-read pages are uncommitted or protected), while the HOST view is a plain
+// executable pages are uncommitted or protected), while the HOST view is a plain
 // alias native runtime code (image loading, DVD reads, HLE, GX) writes through unchecked.
 #include <cstddef>
 #include <cstdint>
@@ -62,7 +62,6 @@ struct RegionRequest {
 
 struct FaultCounters {
     uint32_t mmio = 0;      // MMIO access that reached the handler
-    uint32_t efb = 0;       // deferred (EFB) read materialized from a trap
     uint32_t xguard = 0;    // executable-page write trap
     uint32_t unmapped = 0;  // guest touches that landed outside every mapped region
     uint32_t unmappedRegions = 0;  // distinct 64 KiB blocks committed on demand
@@ -74,7 +73,7 @@ bool IsActive();
 
 // True when a host VM page covers more than one 4 KiB Wii page. In that
 // configuration, guest-view page protection cannot safely represent per-Wii-
-// page MMIO, deferred-read, or executable-write state, so general translated
+// page MMIO or executable-write state, so general translated
 // accesses must use the checked Memory::* path.
 // Windows user mode and x86-64 always use a 4 KiB base page, so those builds
 // fold this to a compile-time false: it appears in every flat access and must
@@ -101,11 +100,6 @@ void Initialize(const std::vector<RegionRequest>& regions);
 // outside every mapped region. This is what the page table and
 // Memory::GetPointer hand out.
 uint8_t* HostPointer(uint32_t guestAddress);
-
-// Deferred (EFB) reads: the covered guest pages are made PAGE_NOACCESS in the
-// guest view so a flat read traps and materializes the copy.
-void ProtectDeferredRange(uint32_t address, size_t length);
-void UnprotectDeferredRange(uint32_t address, size_t length);
 
 // Executable-write guard: pages fully covered by a registered executable range
 // become PAGE_READONLY in the guest view. Registration order does not matter -
@@ -138,8 +132,6 @@ bool HandleAccessViolation(void* faultAddress, bool isWrite) noexcept;
 // Protection hooks have no work here: the checked paths enforce their policy.
 inline constexpr bool IsActive() { return false; }
 inline constexpr bool RequiresCheckedAccess() noexcept { return true; }
-inline void ProtectDeferredRange(uint32_t, size_t) {}
-inline void UnprotectDeferredRange(uint32_t, size_t) {}
 inline void RegisterExecutableRange(uint32_t, uint32_t) {}
 inline void ReprotectExecutablePage(uint32_t) {}
 inline FaultCounters Counters() { return {}; }

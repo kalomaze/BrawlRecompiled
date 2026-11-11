@@ -37,7 +37,7 @@ void Worker(void*) {
 }
 }
 namespace MemoryInline {
-uintptr_t g_fullReadablePageBias[kPageCount]{};
+uintptr_t g_fullPageBias[kPageCount]{};
 uint32_t Read32Slow(uint32_t) { return 0; }
 }
 uint8_t* Memory::GetPointer(uint32_t address, size_t size) {

@@ -62,7 +62,7 @@ size_t HostPageSize()
 #endif
 
 // Named, platform-neutral protection modes so every fault-interception call site below (the
-// MMIO window, the executable-write guard, deferred-EFB-read protection, the on-demand
+// MMIO window, the executable-write guard, the on-demand
 // unmapped-block commit) can stay identical text on both platforms; only ProtectRange() and
 // CommitPlaceholder() below branch on VirtualProtect vs. mprotect.
 #if defined(_WIN32)
@@ -156,11 +156,6 @@ std::vector<uint8_t>& ExecutableProtectedPages() {
     return pages;
 }
 
-std::vector<GuardedRange>& DeferredRanges() {
-    static std::vector<GuardedRange> ranges;
-    return ranges;
-}
-
 #if !defined(_WIN32)
 // Windows disambiguates a racing "unmapped touch" fault via VirtualQuery (did some other thread
 // already commit this 64 KiB block, and is it actually accessible enough to satisfy this access).
@@ -174,7 +169,6 @@ std::vector<uint8_t>& UnmappedCommittedBlocks() {
 #endif
 
 std::atomic<uint32_t> g_countMmio{0};
-std::atomic<uint32_t> g_countEfb{0};
 std::atomic<uint32_t> g_countXGuard{0};
 std::atomic<uint32_t> g_countUnmapped{0};
 std::atomic<uint32_t> g_countUnmappedRegions{0};
@@ -623,14 +617,6 @@ void Initialize(const std::vector<RegionRequest>& regions) {
                 "The flat guest address space is mapped once per process; a second Memory::Init "
                 "requested a different region layout. Restart the process instead of remapping.");
         }
-        // Re-init keeps the mapping and restores the pristine interception
-        // state: deferred ranges are gone, executable pages stay protected.
-        for (const auto& range : DeferredRanges()) {
-            const uint64_t first = static_cast<uint64_t>(range.start) & ~(kHostPageSize - 1u);
-            const uint64_t last = RoundUp(range.end, kHostPageSize);
-            ProtectRange(g_base + first, last - first, kProtReadWrite);
-        }
-        DeferredRanges().clear();
         ZeroMappedStorage();
         ApplyExecutableProtectionLocked();
         return;
@@ -749,36 +735,6 @@ uint8_t* HostPointer(uint32_t guestAddress) {
     return nullptr;
 }
 
-void ProtectDeferredRange(uint32_t address, size_t length) {
-    if (RequiresCheckedAccess() || !g_initialized || length == 0) return;
-    const uint64_t end = static_cast<uint64_t>(address) + length;
-    if (end > kGuestSpaceSize) return;
-    std::lock_guard<std::mutex> lock(StateMutex());
-    const uint64_t first = static_cast<uint64_t>(address) & ~(kHostPageSize - 1u);
-    const uint64_t last = RoundUp(end, kHostPageSize);
-    if (!ProtectRange(g_base + first, last - first, kProtNone)) {
-        // An unmapped destination cannot be trapped; the checked path still
-        // clears the readable bias, so nothing silently reads stale bytes.
-        return;
-    }
-    DeferredRanges().push_back(GuardedRange{address, static_cast<uint32_t>(end)});
-}
-
-void UnprotectDeferredRange(uint32_t address, size_t length) {
-    if (RequiresCheckedAccess() || !g_initialized || length == 0) return;
-    std::lock_guard<std::mutex> lock(StateMutex());
-    auto& ranges = DeferredRanges();
-    const uint64_t end = static_cast<uint64_t>(address) + length;
-    const auto it = std::find_if(ranges.begin(), ranges.end(), [&](const GuardedRange& range) {
-        return range.start == address && range.end == static_cast<uint32_t>(end);
-    });
-    if (it == ranges.end()) return;
-    ranges.erase(it);
-    const uint64_t first = static_cast<uint64_t>(address) & ~(kHostPageSize - 1u);
-    const uint64_t last = RoundUp(end, kHostPageSize);
-    ProtectRange(g_base + first, last - first, kProtReadWrite);
-}
-
 void RegisterExecutableRange(uint32_t start, uint32_t end) {
     if (RequiresCheckedAccess() || end <= start) return;
     std::lock_guard<std::mutex> lock(StateMutex());
@@ -808,7 +764,6 @@ void ReprotectExecutablePage(uint32_t address) {
 FaultCounters Counters() {
     FaultCounters counters;
     counters.mmio = g_countMmio.load(std::memory_order_relaxed);
-    counters.efb = g_countEfb.load(std::memory_order_relaxed);
     counters.xguard = g_countXGuard.load(std::memory_order_relaxed);
     counters.unmapped = g_countUnmapped.load(std::memory_order_relaxed);
     counters.unmappedRegions = g_countUnmappedRegions.load(std::memory_order_relaxed);
@@ -820,8 +775,8 @@ void LogFaultSummary() noexcept {
     if (reported.exchange(true, std::memory_order_relaxed)) return;
     const FaultCounters counters = Counters();
     if (counters.unmapped == 0) {
-        RT_LOG(RT_TAG_MEMORY) << "shutdown summary: no unmapped guest touches (efb="
-                  << counters.efb << " xguard=" << counters.xguard << " mmio=" << counters.mmio
+        RT_LOG(RT_TAG_MEMORY) << "shutdown summary: no unmapped guest touches (xguard="
+                  << counters.xguard << " mmio=" << counters.mmio
                   << ")" << std::endl;
         std::cerr.flush();
         return;
@@ -832,8 +787,7 @@ void LogFaultSummary() noexcept {
                  "guest pointer that addressed nothing; search the log for "
                  "'[" RT_TAG_MEMORY "] WARNING unmapped guest touch' for the faulting addresses."
               << std::endl;
-    RT_LOG(RT_TAG_MEMORY) << "shutdown summary: efb=" << counters.efb
-              << " xguard=" << counters.xguard << " mmio=" << counters.mmio << std::endl;
+    RT_LOG(RT_TAG_MEMORY) << "shutdown summary: xguard=" << counters.xguard << " mmio=" << counters.mmio << std::endl;
     std::cerr.flush();
 }
 
@@ -846,47 +800,7 @@ bool HandleAccessViolation(void* faultAddress, bool isWrite) noexcept {
 
     const uint32_t guestAddress = static_cast<uint32_t>(fault - base);
 
-    // 1) Deferred (EFB) read: materialize the pending copy and drop the trap for the whole 4 KiB page span,
-    //    not just the registered range, since protection is page-granular. Leaving a range registered but
-    //    unprotected would serve stale bytes without ever faulting again.
-    {
-        bool covered = false;
-        uint32_t rangeStart = 0;
-        uint32_t rangeEnd = 0;
-        uint64_t spanFirst = 0;
-        uint64_t spanLast = 0;
-        {
-            std::lock_guard<std::mutex> lock(StateMutex());
-            auto& ranges = DeferredRanges();
-            const auto it = std::find_if(ranges.begin(), ranges.end(), [&](const GuardedRange& r) {
-                const uint64_t first = static_cast<uint64_t>(r.start) & ~(kHostPageSize - 1u);
-                const uint64_t last = RoundUp(r.end, kHostPageSize);
-                return guestAddress >= first && guestAddress < last;
-            });
-            if (it != ranges.end()) {
-                covered = true;
-                rangeStart = it->start;
-                rangeEnd = it->end;
-                ranges.erase(it);
-                spanFirst = static_cast<uint64_t>(rangeStart) & ~(kHostPageSize - 1u);
-                spanLast = RoundUp(rangeEnd, kHostPageSize);
-                ProtectRange(g_base + spanFirst, spanLast - spanFirst, kProtReadWrite);
-            }
-        }
-        if (covered) {
-            g_countEfb.fetch_add(1, std::memory_order_relaxed);
-            try {
-                MemoryInline::ResolveDeferredReads(
-                    static_cast<uint32_t>(spanFirst), static_cast<size_t>(spanLast - spanFirst));
-            } catch (const std::exception& error) {
-                ReportFatalGuestFault("deferred read materialization failed", guestAddress, isWrite,
-                                      error.what());
-            }
-            return true;
-        }
-    }
-
-    // 2) Executable-write guard. Only writes trap (the pages are PAGE_READONLY),
+    // 1) Executable-write guard. Only writes trap (the pages are PAGE_READONLY),
     //    so a fault here is exactly the event the guard exists to report.
     {
         const uint32_t pageIndex = guestAddress >> 12;
@@ -914,7 +828,7 @@ bool HandleAccessViolation(void* faultAddress, bool isWrite) noexcept {
         }
     }
 
-    // 3) MMIO. PAGE_NOACCESS makes both directions faults: a write has no backing device (including a GPU
+    // 2) MMIO. PAGE_NOACCESS makes both directions faults: a write has no backing device (including a GPU
     //    FIFO store the translator failed to lower), and a read would have to invent a register value;
     //    answering zero would turn a missing device into a silent hang, so both are reported instead.
     if (IsMmio(guestAddress)) {
@@ -957,7 +871,7 @@ bool HandleAccessViolation(void* faultAddress, bool isWrite) noexcept {
         return true;
     }
 
-    // 4) Unmapped address: commit the block on demand (reproducing the old zero-fill sparse-map behavior)
+    // 3) Unmapped address: commit the block on demand (reproducing the old zero-fill sparse-map behavior)
     //    and report it, since a commit here means a wild guest pointer that would otherwise walk over silently.
     const uint64_t blockBase = static_cast<uint64_t>(guestAddress) & ~(kAllocationGranularity - 1u);
     g_countUnmapped.fetch_add(1, std::memory_order_relaxed);

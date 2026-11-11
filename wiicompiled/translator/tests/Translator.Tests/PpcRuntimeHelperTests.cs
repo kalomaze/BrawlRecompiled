@@ -51,20 +51,16 @@ public class PpcRuntimeHelperTests
             #include "ppc_runtime.h"
             #include <iostream>
             #include <cstdlib>
-            static unsigned fifo = 0, materialized = 0;
+            static unsigned fifo = 0;
             extern "C" void GX_HLE_FIFO_Write8(uint8_t) {}
             extern "C" void GX_HLE_FIFO_Write16(uint16_t) {}
             extern "C" void GX_HLE_FIFO_Write32(uint32_t value) { fifo = value; }
             extern "C" void GX_HLE_FIFO_WriteFloat(float) {}
             static void require(bool value) { if (!value) std::abort(); }
-            static bool Materialize(void*) {
-                ++materialized;
-                Memory::Write32(0x80000100u, 0x12345678u);
-                return true;
-            }
             int main() {
                 auto config = Memory::Config::WiiDefaults();
                 Memory::Init(config);
+                require(GuestFlat::IsActive() == bool(MKW_FLAT_MEMORY));
                 require(Memory::Contains(0x817FFFFFu));
                 require(!Memory::Contains(0x81800000u));
                 for (uint32_t bank : {0u, 0x10000000u}) {
@@ -78,17 +74,6 @@ public class PpcRuntimeHelperTests
                     Memory::Write64(bank + 0xC0000100u, 0x123456789ABCDEF0ull);
                     require(Memory::Read64(bank + 0x80000100u) == 0x123456789ABCDEF0ull);
                 }
-                Memory::RegisterDeferredRead(0x80000100u, 4, Materialize, nullptr);
-            #if !MKW_FLAT_MEMORY
-                require(!GuestFlat::IsActive());
-                require(MemoryInline::ResolveRangeHost(0x80000100u, 0, 4, true, false) == nullptr);
-                require(MemoryInline::FlatRead32(0x80000100u) == 0x12345678u);
-            #else
-                // The standalone harness has no application's signal handler.
-                require(Memory::Read32(0x80000100u) == 0x12345678u);
-            #endif
-                require(materialized == 1);
-                require(Memory::Read32(0x80000100u) == 0x12345678u && materialized == 1);
                 require(MemoryInline::ResolveRangeHost(0x80000100u, 0, 4, true, true) != nullptr);
                 require(MemoryInline::ResolveRangeHost(0xFFFFFFFCu, 0, 8, true, true) == nullptr);
                 MemoryInline::FlatWrite32(0xCC008000u, 0xAABBCCDDu);
