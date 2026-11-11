@@ -25,6 +25,7 @@ extern "C" void* mkw_co_init(void* stackTop, void (*entry)(void*), void* argumen
 #include <libco.h>
 
 #include <cstdlib>
+#include <limits>
 #include <unordered_map>
 #else
 #error "HostContext needs a supported cooperative-context backend"
@@ -326,6 +327,9 @@ void ShutdownScheduler(Handle scheduler)
 
 Handle Create(std::size_t stackSize, Entry entry, void* argument)
 {
+    if (stackSize > std::numeric_limits<unsigned int>::max()) {
+        return nullptr;
+    }
     auto* context = new Context();
     context->entry = entry;
     context->argument = argument;
