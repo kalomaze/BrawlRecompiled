@@ -24,7 +24,6 @@ public sealed record IrResolveGuestMemoryRange(
     IrValue Base,
     int MinOffset,
     int Length,
-    bool NeedsReadAccess,
     bool NeedsWriteAccess) : IrInstruction("resolve_guest_memory_range");
 
 public sealed record IrResolvedLoad(

@@ -74,14 +74,14 @@ public class PpcRuntimeHelperTests
                     Memory::Write64(bank + 0xC0000100u, 0x123456789ABCDEF0ull);
                     require(Memory::Read64(bank + 0x80000100u) == 0x123456789ABCDEF0ull);
                 }
-                require(MemoryInline::ResolveRangeHost(0x80000100u, 0, 4, true, true) != nullptr);
-                require(MemoryInline::ResolveRangeHost(0xFFFFFFFCu, 0, 8, true, true) == nullptr);
+                require(MemoryInline::ResolveRangeHost(0x80000100u, 0, 4, true) != nullptr);
+                require(MemoryInline::ResolveRangeHost(0xFFFFFFFCu, 0, 8, true) == nullptr);
                 MemoryInline::FlatWrite32(0xCC008000u, 0xAABBCCDDu);
                 require(fifo == 0xAABBCCDDu);
             #if !MKW_FLAT_MEMORY
                 const uint32_t page = 0x80000100u >> RecompMod::kExecutableWriteGuardPageShift;
                 RecompMod::g_executableWriteGuardPages[page].store(1);
-                require(MemoryInline::ResolveRangeHost(0x80000100u, 0, 4, false, true) == nullptr);
+                require(MemoryInline::ResolveRangeHost(0x80000100u, 0, 4, true) == nullptr);
                 RecompMod::g_executableWriteGuardPages[page].store(0);
                 try { MemoryInline::FlatRead32(0x60000000u); return 1; }
                 catch (const Memory::AccessViolation&) {}
@@ -202,7 +202,7 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("    constexpr uint32_t base = 0x80010000u;");
         harness.AppendLine("    Memory::Write32(base, Bits(12.5f));");
         harness.AppendLine("    Memory::Write32(base + 4, Bits(-7.25f));");
-        harness.AppendLine("    auto* range = MemoryInline::ResolveRangeHost(base, 0, 2048, true, true);");
+        harness.AppendLine("    auto* range = MemoryInline::ResolveRangeHost(base, 0, 2048, true);");
         harness.AppendLine("    if (!range) return 20;");
         harness.AppendLine("    PPC_FPR loaded{};");
         harness.AppendLine("    loaded.d = PPC_PsqLInline<0u, 0u>(base);");
@@ -304,7 +304,7 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("    PPC_PsqStKnownInline<0u, 6u, 0x3D043D04u>(&ctx, base + 2, pair.d);");
         harness.AppendLine("    MemoryInline::g_fullWritablePageBias[page] = savedBias;");
         harness.AppendLine("    if (Memory::Read16(base + 2) != expected) return 5;");
-        harness.AppendLine("    uint8_t* range = MemoryInline::ResolveRangeHost(base, 0, 64, false, true);");
+        harness.AppendLine("    uint8_t* range = MemoryInline::ResolveRangeHost(base, 0, 64, true);");
         harness.AppendLine("    if (!range) return 6;");
         harness.AppendLine("    PPC_PsqStKnownResolvedInline<0u, 6u, 0x3D043D04u>(&ctx, range, 4, base + 4, pair.d);");
         harness.AppendLine("    if (Memory::Read16(base + 4) != expected) return 7;");

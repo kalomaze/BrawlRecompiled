@@ -225,11 +225,10 @@ MKW_MEMORY_FORCE_INLINE bool TryGetWritablePointerFast(
 // fault record, so a write touching that window must resolve null and fall back to Memory::Write*. Checking both range endpoints is a complete
 // proof since length <= kPageSize (1 MiB) can't straddle the 32 MiB MMIO window.
 MKW_MEMORY_FORCE_INLINE uint8_t* ResolveRangeHost(uint32_t base, int32_t minOffset, uint32_t length,
-                                                 bool needsRead, bool needsWrite) {
+                                                 bool needsWrite) {
     const uint32_t guestStart = base + static_cast<uint32_t>(minOffset);
     if (length == 0 || length > kPageSize || guestStart > UINT32_MAX - (length - 1)) return nullptr;
 #if MKW_FLAT_MEMORY
-    (void)needsRead;
     if (GuestFlat::RequiresCheckedAccess()) return nullptr;
     if (needsWrite &&
         (FlatWriteNeedsPolicy(guestStart) || FlatWriteNeedsPolicy(guestStart + (length - 1))))

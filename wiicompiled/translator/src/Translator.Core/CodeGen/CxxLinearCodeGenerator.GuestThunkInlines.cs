@@ -44,9 +44,8 @@ public sealed partial class CxxLinearCodeGenerator
             var firstOffset = (spec.StartRegister - 32) * bytesPerRegister;
             var length = (32 - spec.StartRegister) * bytesPerRegister;
             sb.AppendLine($"{pad}{{");
-            var needsRead = isStore ? "false" : "true";
             var needsWrite = isStore ? "true" : "false";
-            sb.AppendLine($"{pad}    uint8_t* const guest_thunk_stack = MemoryInline::ResolveRangeHost(({frameBase} + {firstOffset}), 0, {length}u, {needsRead}, {needsWrite});");
+            sb.AppendLine($"{pad}    uint8_t* const guest_thunk_stack = MemoryInline::ResolveRangeHost(({frameBase} + {firstOffset}), 0, {length}u, {needsWrite});");
             for (var reg = spec.StartRegister; reg <= 31; reg++)
             {
                 var offset = (reg - 32) * bytesPerRegister;

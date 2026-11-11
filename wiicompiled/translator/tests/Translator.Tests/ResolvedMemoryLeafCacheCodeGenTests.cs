@@ -24,7 +24,7 @@ public class ResolvedMemoryLeafCacheCodeGenTests
                 {
                     new IrResolveGuestMemoryRange(
                         "range", IrValue.Register("r13"), 0, 64,
-                        NeedsReadAccess: true, NeedsWriteAccess: false),
+                        NeedsWriteAccess: false),
                     new IrResolvedLoad(
                         "r3", "range", new IrAddress("r2", 4), 4, 4),
                     new IrReturn(IrValue.Register("r3"))

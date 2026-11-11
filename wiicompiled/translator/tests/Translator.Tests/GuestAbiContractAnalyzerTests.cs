@@ -12,7 +12,7 @@ public sealed class GuestAbiContractAnalyzerTests
         {
             new IrBasicBlock("entry", new IrInstruction[]
             {
-                new IrResolveGuestMemoryRange("range", IrValue.Register("r3"), 0, 64, true, true),
+                new IrResolveGuestMemoryRange("range", IrValue.Register("r3"), 0, 64, true),
                 new IrResolvedLoad("r4", "range", new IrAddress("r3", 0), 0, 4),
                 new IrResolvedStore("range", new IrAddress("r3", 4), 4, IrValue.Register("r5"), 4),
                 new IrResolvedPsqLoad("f1", "range", IrValue.Register("r6"), 8, 0, 0, 0),

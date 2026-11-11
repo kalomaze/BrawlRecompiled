@@ -165,7 +165,7 @@ public sealed partial class CxxLinearCodeGenerator
                     var start = RemapAddress(
                         new IrAddress(resolve.Base.RegisterName!, resolve.MinOffset),
                         types, localConstants, linkedAddressRemap);
-                    sb.AppendLine($"{pad}{resolve.Destination} = MemoryInline::ResolveRangeHost({start}, 0, {resolve.Length}u, {(resolve.NeedsReadAccess ? "true" : "false")}, {(resolve.NeedsWriteAccess ? "true" : "false")});");
+                    sb.AppendLine($"{pad}{resolve.Destination} = MemoryInline::ResolveRangeHost({start}, 0, {resolve.Length}u, {(resolve.NeedsWriteAccess ? "true" : "false")});");
                 }
                 break;
             case IrResolvedLoad load:
