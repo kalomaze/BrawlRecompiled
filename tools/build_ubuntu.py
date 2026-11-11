@@ -75,43 +75,50 @@ def build_game(args, disc, build):
     arch, checksum = SDK_HASHES[platform.machine()]
     dotnet_dir = build / 'dotnet'
     dotnet = dotnet_dir / 'dotnet'
-    if not dotnet.exists():
+    sdk_stamp = dotnet_dir / '.sdk-ready'
+    if not sdk_stamp.exists():
         archive = downloads / f'dotnet-sdk-{SDK}-{arch}.tar.gz'
         download(f'https://builds.dotnet.microsoft.com/dotnet/Sdk/{SDK}/dotnet-sdk-{SDK}-linux-{arch}.tar.gz', archive, checksum, 'sha512')
-        unpack(archive, dotnet_dir)
-    os.environ.update(DOTNET_ROOT=str(dotnet_dir), DOTNET_CLI_TELEMETRY_OPTOUT='1',
+        staging = build / 'dotnet.partial'
+        if staging.exists():
+            shutil.rmtree(staging)
+        unpack(archive, staging)
+        (staging / '.sdk-ready').write_text(SDK)
+        if dotnet_dir.exists():
+            shutil.rmtree(dotnet_dir)
+        staging.rename(dotnet_dir)
+    os.environ.update(DOTNET_ROOT=str(dotnet_dir), DOTNET_CLI_HOME=str(build / 'dotnet-home'),
+                      NUGET_PACKAGES=str(build / 'nuget'), DOTNET_CLI_TELEMETRY_OPTOUT='1',
                       DOTNET_SKIP_FIRST_TIME_EXPERIENCE='1', DOTNET_NOLOGO='1')
-    # Stage only source inputs. Upstream's generator writes beside runtime/ and projects/.
-    # Recreate on source changes so deleted source files cannot survive in a cached build.
+    # Track source hashes separately from staged files, which upstream generators modify.
+    # Preserve generated code and timestamps so Ninja can reuse unchanged objects.
     source_files = subprocess.check_output(['git', '-C', str(ROOT), 'ls-files', '-co', '--exclude-standard', '-z']).split(b'\0')
-    source_files = [raw for raw in source_files if raw and
+    source_files = [os.fsdecode(raw) for raw in source_files if raw and
                     not (ROOT / os.fsdecode(raw)).is_relative_to(build) and
                     (raw.startswith((b'wiicompiled/', b'tools/disc-extract/')) or
                      raw in (b'launcher/WiiDisc.cs', b'tools/build_ubuntu.py'))]
-    source_hash = hashlib.sha256()
-    for raw in sorted(filter(None, source_files)):
-        path = ROOT / os.fsdecode(raw)
-        if path.is_file():
-            source_hash.update(raw)
-            source_hash.update(path.read_bytes())
-    fingerprint = source_hash.hexdigest()
     work = build / 'source'
-    source_stamp = build / 'source.sha256'
-    if not source_stamp.exists() or source_stamp.read_text() != fingerprint:
-        if work.exists():
-            shutil.rmtree(work)
-        work.mkdir()
-        for raw in filter(None, source_files):
-            source = ROOT / os.fsdecode(raw)
-            if source.is_file():
-                target = work / os.fsdecode(raw)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, target)
-        source_stamp.write_text(fingerprint)
-        (build / 'translated.json').unlink(missing_ok=True)
+    source_stamp = build / 'sources.json'
+    previous = json.loads(source_stamp.read_text()) if source_stamp.exists() else {}
+    current = {}
+    for name in sorted(source_files):
+        source, target = ROOT / name, work / name
+        if not source.is_file():
+            continue
+        current[name] = hashlib.sha256(source.read_bytes()).hexdigest()
+        if current[name] != previous.get(name) or not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if not target.exists() or hashlib.sha256(target.read_bytes()).hexdigest() != current[name]:
+                # New content needs a new mtime: copying an older checkout timestamp
+                # can leave Ninja using a Clang precompiled header for stale contents.
+                shutil.copyfile(source, target)
+    for name in previous.keys() - current.keys():
+        (work / name).unlink(missing_ok=True)
+    source_stamp.write_text(json.dumps(current, sort_keys=True))
+    fingerprint = hashlib.sha256(source_stamp.read_bytes()).hexdigest()
     wc = work / 'wiicompiled'
     for project in ('tools/disc-extract/DiscExtract.csproj', 'wiicompiled/translator/src/Translator.Cli/Translator.Cli.csproj'):
-        run(dotnet, 'build', work / project, '-c', 'Release', '--nologo')
+        run(dotnet, 'build', work / project, '-c', 'Release', '--nologo', '--disable-build-servers')
     extractor = work / 'tools/disc-extract/bin/Release/net8.0/DiscExtract.dll'
     translator = wc / 'translator/src/Translator.Cli/bin/Release/net8.0/Translator.Cli.dll'
     images = [disc]
@@ -122,7 +129,7 @@ def build_game(args, disc, build):
             i += 1
     identity = [(str(p), p.stat().st_size, p.stat().st_mtime_ns) for p in images]
     extraction_stamp = build / 'extracted.json'
-    extraction_key = json.dumps(identity)
+    extraction_key = json.dumps([identity, current['launcher/WiiDisc.cs'], current['tools/disc-extract/Program.cs']])
     data = build / 'disc'
     if not extraction_stamp.exists() or extraction_stamp.read_text() != extraction_key:
         temporary = build / 'disc.partial'
@@ -133,15 +140,16 @@ def build_game(args, disc, build):
             shutil.rmtree(data)
         temporary.rename(data)
         extraction_stamp.write_text(extraction_key)
-        (build / 'translated.json').unlink(missing_ok=True)
     decomp = build / f'brawl-{DECOMP}'
-    if not decomp.exists():
+    if not (decomp / '.ready').exists():
         archive = downloads / f'brawl-{DECOMP}.tar.gz'
         download(f'https://codeload.github.com/doldecomp/brawl/tar.gz/{DECOMP}', archive,
                  '1ae548ca5d22859e9475d3af47bc2b63a33a63c16d9e0ad61d2579b70b9806b8')
         unpack(archive, build)
+        (decomp / '.ready').touch()
     translated_stamp = build / 'translated.json'
-    if not translated_stamp.exists():
+    translation_key = json.dumps([fingerprint, extraction_key])
+    if not translated_stamp.exists() or translated_stamp.read_text() != translation_key:
         game = work / 'game'
         game.mkdir(exist_ok=True)
         shutil.copy2(data / 'sys/main.dol', game / 'main.dol')
@@ -165,7 +173,7 @@ def build_game(args, disc, build):
         run(dotnet, translator, 'emit-build-shards', '--project', project,
             '--base-metadata', 'generated/base_translation_output.json', '--base-functions-dir', 'generated/functions',
             '--native-source-dir', 'runtime/src', '--out', 'generated/build_shards', '--base-shards', '600', cwd=wc)
-        translated_stamp.write_text(extraction_key)
+        translated_stamp.write_text(translation_key)
     run(args.cmake, '-S', wc / 'runtime', '-B', build / 'native', '-G', 'Ninja',
         '-DCMAKE_BUILD_TYPE=Release', f'-DCMAKE_C_COMPILER={shutil.which("clang")}',
         f'-DCMAKE_CXX_COMPILER={shutil.which("clang++")}', f'-DMKW_TRANSLATED_COMPILE_JOBS={args.jobs}')
