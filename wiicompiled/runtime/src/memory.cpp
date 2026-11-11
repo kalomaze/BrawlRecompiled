@@ -403,15 +403,11 @@ Memory::Config Memory::Config::WiiDefaults() {
         .sizeBytes = Memory::kMem2Size,
     });
 
-    // Locked cache (THP decoder fast RAM) is really 16KB at 0xE0000000, but a sub-page mapping can
-    // never enter the coarse 1MiB bias tables, forcing every THP load/store through the checked
-    // fallback (the dominant cost of THP-heavy screens). Back a full 1MiB page plus the successor
-    // page the bias builder needs, so locked-cache access stays on the two-instruction native path.
-    constexpr size_t lcSize = MemoryInline::kPageSize + 4096u;
+    // Preserve the guest extent independently of the host fast-access tables.
     config.regions.push_back(RegionConfig{
         .name = "LOCKED_CACHE",
-        .baseAddress = 0xE0000000,
-        .sizeBytes = lcSize,
+        .baseAddress = Memory::kLockedCacheBase,
+        .sizeBytes = Memory::kLockedCacheSize,
     });
 
     return config;

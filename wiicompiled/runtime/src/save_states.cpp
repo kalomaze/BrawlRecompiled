@@ -17,12 +17,12 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <csetjmp>
 #include <cstdlib>
 #include <cstring>
-#include <memory>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
@@ -42,8 +42,11 @@ extern std::unordered_set<uint32_t> gOutstandingParks;
 namespace SaveStates {
 namespace {
 
-constexpr uint32_t kMem1 = Memory::kMem1CachedBase, kMem1Size = Memory::kMem1Size;
-constexpr uint32_t kMem2 = Memory::kMem2CachedBase, kMem2Size = Memory::kMem2Size;
+constexpr std::pair<uint32_t, size_t> kMemoryRegions[] = {
+    {Memory::kMem1CachedBase, Memory::kMem1Size},
+    {Memory::kMem2CachedBase, Memory::kMem2Size},
+    {Memory::kLockedCacheBase, Memory::kLockedCacheSize},
+};
 constexpr size_t kPad = 64u << 10;    // see SwitchFiber
 constexpr size_t kBelow = 512;        // bytes kept below a thread's resume point (its switch frame's spills)
 
@@ -64,8 +67,8 @@ struct StackCopy {
 
 struct Snapshot {
     bool valid = false;
-    std::atomic<bool> packing{false};  // MEM1/MEM2 being compressed on a worker
-    std::vector<uint8_t> mem1, mem2;   // zstd frames (or raw without zstd)
+    std::atomic<bool> packing{false};  // guest memory being compressed on a worker
+    std::array<std::vector<uint8_t>, std::size(kMemoryRegions)> memory; // zstd frames or raw
     CpuContext cpu{};
     std::vector<std::pair<uint32_t, Fiber::GuestFiber>> threads;
     uint32_t currentThread = 0;
@@ -154,12 +157,16 @@ void TakeSnapshot(Snapshot& s) {
         s.stacks.push_back(std::move(copy));
     }
     // Copy guest memory raw now (the game moves on), compress it on a worker.
-    auto mem1 = std::make_shared<std::vector<uint8_t>>(Memory::GetPointer(kMem1, kMem1Size), Memory::GetPointer(kMem1, kMem1Size) + kMem1Size);
-    auto mem2 = std::make_shared<std::vector<uint8_t>>(Memory::GetPointer(kMem2, kMem2Size), Memory::GetPointer(kMem2, kMem2Size) + kMem2Size);
+    decltype(s.memory) memory;
+    for (size_t i = 0; i < memory.size(); ++i) {
+        const auto [base, size] = kMemoryRegions[i];
+        const auto* data = Memory::GetPointer(base, size);
+        memory[i].assign(data, data + size);
+    }
     s.packing = true;
-    g_packer = std::thread([&s, mem1, mem2] {
-        s.mem1 = Pack(mem1->data(), mem1->size());
-        s.mem2 = Pack(mem2->data(), mem2->size());
+    g_packer = std::thread([&s, memory = std::move(memory)] {
+        for (size_t i = 0; i < memory.size(); ++i)
+            s.memory[i] = Pack(memory[i].data(), memory[i].size());
         s.packing = false;
     });
     s.scene = SceneName();
@@ -180,8 +187,10 @@ void PutBack(const Snapshot& s) {
             return;
         }
     }
-    Unpack(s.mem1, Memory::GetPointer(kMem1, kMem1Size), kMem1Size);
-    Unpack(s.mem2, Memory::GetPointer(kMem2, kMem2Size), kMem2Size);
+    for (size_t i = 0; i < s.memory.size(); ++i) {
+        const auto [base, size] = kMemoryRegions[i];
+        Unpack(s.memory[i], Memory::GetPointer(base, size), size);
+    }
     for (const StackCopy& copy : s.stacks) {
         std::memcpy(copy.from, copy.bytes.data(), copy.bytes.size());
         g_fibers[copy.fiber] = copy.slot;

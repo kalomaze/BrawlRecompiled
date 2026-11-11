@@ -5,6 +5,7 @@
 #include "hle/os/os_internal.h"
 #include "guest_code_patch.h"
 #include <mutex>
+#include <algorithm>
 #include <unordered_set>
 #include <vector>
 #include <cstdio>
@@ -13,6 +14,7 @@
 namespace {
 // Lightweight stand-ins for the guest machine around the real save-state code.
 std::vector<uint8_t> mem1(Memory::kMem1Size), mem2(Memory::kMem2Size);
+std::vector<uint8_t> lockedCache(Memory::kLockedCacheSize);
 CpuContext cpu{};
 HostContext::Handle scheduler, worker;
 int observed = 0, phase = 0;
@@ -43,6 +45,7 @@ uint32_t Read32Slow(uint32_t) { return 0; }
 uint8_t* Memory::GetPointer(uint32_t address, size_t size) {
     if (address == 0x80000000u && size == mem1.size()) return mem1.data();
     if (address == 0x90000000u && size == mem2.size()) return mem2.data();
+    if (address == Memory::kLockedCacheBase && size == lockedCache.size()) return lockedCache.data();
     std::abort();
 }
 bool Memory::Contains(uint32_t, size_t) { return false; }
@@ -71,6 +74,7 @@ int main() {
     require(observed == 7);
     mem1[7] = 11;
     mem2[9] = 12;
+    std::fill(lockedCache.begin(), lockedCache.end(), 0x5a);
     cpu.gpr[3] = 42;
     SaveStates::RequestSave();
     SaveStates::FrameBoundary();
@@ -79,6 +83,7 @@ int main() {
         phase = 1;
         mem1[7] = 99;
         mem2[9] = 98;
+        std::fill(lockedCache.begin(), lockedCache.end(), 0xa5);
         cpu.gpr[3] = 100;
         SaveStates::SwitchFiber(worker);
         require(observed == 8);
@@ -87,6 +92,10 @@ int main() {
         std::abort(); // A load must resume at the saved FrameBoundary, not here.
     }
     require(mem1[7] == 11 && mem2[9] == 12 && cpu.gpr[3] == 42);
+    if (!std::all_of(lockedCache.begin(), lockedCache.end(), [](uint8_t byte) { return byte == 0x5a; })) {
+        std::fputs("Locked cache was not restored by the save state\n", stderr);
+        return 1;
+    }
     SaveStates::SwitchFiber(worker);
     require(observed == 8); // Restored worker's local value was 7, not 8.
     SaveStates::SetSlot(1);
