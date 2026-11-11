@@ -98,7 +98,9 @@ std::vector<uint8_t> Pack(const uint8_t* data, size_t size) {
 #ifdef SAVE_STATES_ZSTD
     std::vector<uint8_t> out(ZSTD_compressBound(size));
     const size_t n = ZSTD_compress(out.data(), out.size(), data, size, 1);
-    if (!ZSTD_isError(n)) {
+    // Unpack identifies raw storage by its original size, so equal-sized
+    // compressed output must also use the raw representation.
+    if (!ZSTD_isError(n) && n < size) {
         out.resize(n);
         out.shrink_to_fit();
         return out;
