@@ -42,15 +42,7 @@
 #include <dbghelp.h>
 #else
 #include <signal.h>
-// macOS exposes signal contexts without enabling the deprecated context APIs.
-#if defined(__APPLE__)
-#include <sys/ucontext.h>
-#if defined(__aarch64__)
-#include <mach/arm/thread_status.h>
-#endif
-#else
-#include <ucontext.h>
-#endif
+#include "host_fault_context.h"
 #include <unistd.h>
 #endif
 #if defined(__ANDROID__)
@@ -1198,38 +1190,21 @@ void ReportUnhandledSignalFault(int sig, void* faultAddress) {
 
 void PosixMemoryFaultHandler(int sig, siginfo_t* info, void* ucontextVoid) {
     void* faultAddress = info != nullptr ? info->si_addr : nullptr;
-    bool isWrite = false;
-    const void* instructionAddress = nullptr;
-    if (ucontextVoid != nullptr) {
-        auto* uc = static_cast<ucontext_t*>(ucontextVoid);
-#if defined(__APPLE__)
-        if (uc->uc_mcontext != nullptr) {
-#if defined(__x86_64__)
-            isWrite = (uc->uc_mcontext->__es.__err & 0x2) != 0;
-            instructionAddress = reinterpret_cast<const void*>(uc->uc_mcontext->__ss.__rip);
-#elif defined(__aarch64__)
-            instructionAddress = reinterpret_cast<const void*>(arm_thread_state64_get_pc(uc->uc_mcontext->__ss));
-#endif
-        }
-#elif defined(__x86_64__)
-        isWrite = (uc->uc_mcontext.gregs[REG_ERR] & 0x2) != 0;
-        instructionAddress = reinterpret_cast<const void*>(uc->uc_mcontext.gregs[REG_RIP]);
-#elif defined(__aarch64__)
-        instructionAddress = reinterpret_cast<const void*>(uc->uc_mcontext.pc);
-#endif
-    }
+    const auto fault = HostFault::Decode(ucontextVoid);
 
     // Guest-space faults are the flat memory interception mechanism (MMIO,
     // the executable-write guard, unmapped pages). Resolving one here means resuming the
     // faulting instruction, which just returning from the handler does.
-    if (faultAddress != nullptr && GuestFlat::HandleAccessViolation(faultAddress, isWrite, instructionAddress)) {
+    // Unknown metadata and instruction fetches must never be treated as reads.
+    if (faultAddress != nullptr && HostFault::MayRecoverDataFault(sig, info->si_code, fault.access) &&
+        GuestFlat::HandleAccessViolation(faultAddress, fault.access == HostFault::Access::Write, fault.instruction)) {
         return;
     }
 
     if (g_suppressSehReporting && g_sehJumpTarget) {
         g_sehLastExceptionCode = static_cast<uint32_t>(sig);
         g_sehLastExceptionAddress = reinterpret_cast<uintptr_t>(faultAddress);
-        g_sehLastAccessType = isWrite ? 1u : 0u;
+        g_sehLastAccessType = static_cast<uint32_t>(fault.access);
         g_sehLastAccessedAddress = reinterpret_cast<uintptr_t>(faultAddress);
         siglongjmp(*g_sehJumpTarget, 1);
     }

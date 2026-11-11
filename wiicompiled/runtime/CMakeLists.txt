@@ -487,6 +487,12 @@ if(MKW_TARGET_ARM64)
 endif()
 
 if(UNIX)
+    add_executable(mkw_host_fault_context_tests "${CMAKE_CURRENT_LIST_DIR}/tests/host_fault_context_tests.cpp")
+    target_include_directories(mkw_host_fault_context_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+    target_compile_features(mkw_host_fault_context_tests PRIVATE cxx_std_20)
+    add_test(NAME mkw_host_fault_context_tests COMMAND mkw_host_fault_context_tests)
+    set_tests_properties(mkw_host_fault_context_tests PROPERTIES TIMEOUT 30)
+
     add_executable(mkw_executable_range_tests "${CMAKE_CURRENT_LIST_DIR}/tests/executable_range_tests.cpp")
     target_include_directories(mkw_executable_range_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
     target_compile_features(mkw_executable_range_tests PRIVATE cxx_std_20)
