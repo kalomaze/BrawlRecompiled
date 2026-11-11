@@ -18,8 +18,6 @@
 #include "platform/host_platform.h"
 #include "runtime_log.h"
 #include "ppc_interpreter.h"
-#include "sampling_profiler.h"
-#include "guest_profiler.h"
 
 #include <dolphin/gx/GXAurora.h>
 #include <dolphin/vi.h>
@@ -510,7 +508,6 @@ void AdvanceRetrace(CpuContext* ctx, Clock::time_point retraceStamp, bool servic
         return;
     }
     StartStallWatchdogOnce();
-    GuestProfiler::OnFramePresented();  // Brawl bring-up: profile from the first retrace, frames or not
     LogGuestModulesOnce();
 
     uint32_t preCb = 0;
@@ -900,14 +897,12 @@ static void LogWatchedWords() {
 }
 
 void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
-    SamplingProfilerAttachCurrentThread();
     LogWatchedWords();
     GuestCodePatch::SyncFrame();  // code patches made outside the code handler (mod plugins)
     if (s_presentSequenceActive.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
     RequestScheduledCaptures();
-    GuestProfiler::OnFramePresented();
     static FrameTimes times;
     const Clock::time_point presentStart = Clock::now();
     const auto ms = [](Clock::duration d) { return std::chrono::duration<double, std::milli>(d).count(); };
@@ -1091,7 +1086,6 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
             const uint64_t instructions = PpcInterpreter::InstructionCount();
             RT_LOGF(RT_TAG_VI, "interpreter: %.2fM instructions per frame\n", (instructions - lastInstructions) / 1e6 / n);
             lastInstructions = instructions;
-            SamplingProfilerReport();
             if (aurora_get_frame_interpolation_fps() != 0) {  // what the screen shows vs the 60 Hz game
                 AuroraPresentTiming present{};
                 aurora_get_present_timing(&present);

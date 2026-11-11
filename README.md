@@ -123,6 +123,9 @@ This is a compilation workflow; it does not extract the full assets needed to pl
 The default configuration is Release. Add `-DCMAKE_BUILD_TYPE=Debug` for unoptimized
 native code with debug symbols, or `-DCMAKE_BUILD_TYPE=RelWithDebInfo` for optimized
 code with symbols. Changing configurations reuses the disc extraction and translation.
+Use an external native profiler with the matching executable and symbols; translated
+functions retain `func_<guest address>` names. The former Windows-only `BRAWL_PROFILE`
+and `profile.txt` samplers and their private stack-file resolver have been removed.
 On x86-64, add `-DMKW_HOST_ISA=v1` for baseline x86-64/SSE2, `v2` for
 SSE4.2/POPCNT, or `v3` for AVX2/FMA (the current default). The choice persists
 in the build directory. CPU instruction compatibility does not establish graphics-driver
