@@ -894,15 +894,11 @@ bool HandleAccessViolation(void* faultAddress, bool isWrite) noexcept {
             return isWrite ? writable : readable;
         }
 #else
-        // mprotect has no VirtualQuery counterpart to ask "is this block already committed and
-        // how", so this module tracks the same fact itself (UnmappedCommittedBlocks, checked and
-        // set under this same lock): once a block has been committed READ|WRITE by an earlier
-        // call here (this thread's or a racing one's), every subsequent fault on it is a no-op
-        // resume - there is no POSIX equivalent of "committed but insufficiently permissioned"
-        // for a block only this function ever touches.
+        // A recorded commit may predate a protection change or mapping loss.
+        // Re-establish access before retrying, and propagate OS failure.
         const uint32_t blockIndex = static_cast<uint32_t>(blockBase / kAllocationGranularity);
         if (UnmappedCommittedBlocks()[blockIndex] != 0) {
-            return true;
+            return ProtectRange(g_base + blockBase, kAllocationGranularity, kProtReadWrite);
         }
 #endif
         if (!CommitPlaceholder(g_base + blockBase, kAllocationGranularity, kProtReadWrite)) {

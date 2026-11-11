@@ -92,5 +92,17 @@ int main() {
             return 1;
         }
     }
+    // A past commit is not evidence that this fault can now be retried.
+    auto* sparse = guestWritable + 0x30000000u;
+    if (!GuestFlat::HandleAccessViolation(sparse, true)) return 1;
+    *sparse = 0x5c;
+    if (mprotect(sparse, 0x10000u, PROT_NONE) != 0) return 1;
+    if (!GuestFlat::HandleAccessViolation(sparse, true)) return 1;
+    *sparse = 0x7d;
+    if (munmap(sparse, 0x10000u) != 0) return 1;
+    if (GuestFlat::HandleAccessViolation(sparse, true)) {
+        std::cerr << "a past commit concealed a failed recovery\n";
+        return 1;
+    }
     return 0;
 }
