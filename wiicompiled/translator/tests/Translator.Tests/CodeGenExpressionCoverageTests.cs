@@ -41,12 +41,6 @@ public class CodeGenExpressionCoverageTests
             "~(ctx->gpr[3] ^ ctx->gpr[4])",
             FormatBinary(new IrBinary("r5", IrValue.Register("r3"), IrValue.Register("r4"), "eqv"), types));
         Assert.Equal(
-            "std::sqrt(ctx->fpr[1].d)",
-            FormatBinary(new IrBinary("f2", IrValue.Register("f1"), IrValue.Register("f3"), "fsqrt"), types));
-        Assert.Equal(
-            "(ctx->fpr[1].d - ctx->fpr[2].d)",
-            FormatBinary(new IrBinary("f3", IrValue.Register("f1"), IrValue.Register("f2"), "fcmp"), types));
-        Assert.Equal(
             "PPC_Divw(static_cast<int32_t>(ctx->gpr[7]), static_cast<int32_t>(ctx->gpr[8]))",
             FormatBinary(new IrBinary("r9", IrValue.Register("r7"), IrValue.Register("r8"), "div"), types));
         Assert.Equal(

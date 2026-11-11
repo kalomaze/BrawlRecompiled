@@ -103,7 +103,7 @@ public sealed partial class PpcLifter
             return pairedSingle;
         }
 
-        var floating = TryLiftFloating(ins, mnemonic, ops, operands);
+        var floating = TryLiftFloating(ins, mnemonic, operands);
         if (floating != null)
         {
             return floating;
@@ -2489,8 +2489,6 @@ public sealed partial class PpcLifter
                     return BinWithCrFlag($"r{rD}", IrValue.Register($"r{rA}"), IrValue.Register($"r{rB}"), "mulhw", rc);
                 }
 
-            // Catch-all for misidentified Double Precision instructions (Opcode 63)
-            // The disassembler often labels these as fp_{Value}, where Value = (rC << 5) | XO.
             case "nop":
             case "opc_0":
                 return new[] { new IrComment("nop") };

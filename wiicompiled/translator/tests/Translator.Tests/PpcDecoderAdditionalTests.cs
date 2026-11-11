@@ -232,7 +232,6 @@ public class PpcDecoderAdditionalTests
         Assert.Equal("fadd", Decode(EncodePrimary63(14, 15, 16, 0, 21)).Mnemonic);
         Assert.Equal("frsp", Decode(EncodePrimary63(14, 0, 16, 0, 12)).Mnemonic);
         Assert.Equal("fsel.", Decode(EncodePrimary63(14, 15, 16, 17, 23, rc: true)).Mnemonic);
-        Assert.Equal("fres", Decode(EncodePrimary63(14, 0, 16, 0, 24)).Mnemonic);
         Assert.Equal("fmul.", Decode(EncodePrimary63(17, 18, 19, 0, 25, rc: true)).Mnemonic);
         Assert.Equal("frsqrte", Decode(EncodePrimary63(17, 0, 19, 0, 26)).Mnemonic);
         Assert.Equal("fmsub", Decode(EncodePrimary63(17, 18, 19, 20, 28)).Mnemonic);

@@ -57,8 +57,6 @@ public sealed partial class CxxLinearCodeGenerator
             "fneg" => $"(-({left}))",
             "frsp" => $"static_cast<double>(PpcForceSingleValueInline({left}))",
             "frsp_noni" => $"static_cast<double>(static_cast<float>({left}))",
-            "fsqrt" => $"std::sqrt({left})",
-            "fcmp" => $"({left} - {right})",
             "fctiw" => $"PPC_Fctiw({left})",
             "fctiwz" => $"PPC_Fctiwz({left})",
             "fpr_low_word" => $"PPC_FprLowWordInline({left})",

@@ -61,7 +61,6 @@ public static class PpcFloatCallSemantics
     public static bool IsScalarFloatConsumerTarget(string target)
     {
         return target.Equals("PPC_Fctiwz", StringComparison.OrdinalIgnoreCase) ||
-               target.Equals("PPC_Fsqrt", StringComparison.OrdinalIgnoreCase) ||
                target.Equals("PPC_Frsqrte", StringComparison.OrdinalIgnoreCase) ||
                target.Equals("PPC_Fsel", StringComparison.OrdinalIgnoreCase) ||
                target.Equals("PPC_Fmadd", StringComparison.OrdinalIgnoreCase) ||

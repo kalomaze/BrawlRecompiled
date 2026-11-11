@@ -140,125 +140,87 @@ public class FloatingLifterTests
     }
 
     [Fact]
-    public void LiftsFloatingRawAliasesAndFallbacks()
+    public void DecodesAndLiftsMultiplyForEveryMultiplierRegister()
     {
-        var lifter = new PpcLifter();
-
-        var fp57 = FloatingInstruction((63u << 26) | (3u << 21) | (1u << 16) | (4u << 6), "fp_57");
-        var fp57Ir = Assert.Single(lifter.Lift(new[] { fp57 })).Ir;
-        var fp57Binary = Assert.IsType<IrBinary>(Assert.Single(fp57Ir));
-        Assert.Equal("f3", fp57Binary.Destination);
-        Assert.Equal("mul", fp57Binary.Op);
-        Assert.Equal("f1", fp57Binary.Left.RegisterName);
-        Assert.Equal("f4", fp57Binary.Right.RegisterName);
-
-        var fp12 = FloatingInstruction((63u << 26) | (6u << 21) | (9u << 11), "fp_12");
-        var fp12Ir = Assert.Single(lifter.Lift(new[] { fp12 })).Ir;
-        var fp12Binary = Assert.IsType<IrBinary>(Assert.Single(fp12Ir));
-        Assert.Equal("f6", fp12Binary.Destination);
-        Assert.Equal("frsp", fp12Binary.Op);
-        Assert.Equal("f9", fp12Binary.Left.RegisterName);
-
-        var fp281 = FloatingInstruction((63u << 26) | (8u << 21) | (2u << 16) | (5u << 6), "fp_281");
-        var fp281Ir = Assert.Single(lifter.Lift(new[] { fp281 })).Ir;
-        var fp281Binary = Assert.IsType<IrBinary>(Assert.Single(fp281Ir));
-        Assert.Equal("f8", fp281Binary.Destination);
-        Assert.Equal("mul", fp281Binary.Op);
-        Assert.Equal("f2", fp281Binary.Left.RegisterName);
-        Assert.Equal("f5", fp281Binary.Right.RegisterName);
-    }
-
-    [Fact]
-    public void LiftsFloatingCompareAndRawOpc59Forms()
-    {
-        var lifter = new PpcLifter();
-
-        var compare = FloatingInstruction(
-            0,
-            "fcmpu",
-            new PpcOperand[]
-            {
-                new PpcConditionRegisterOperand("cr6", 24),
-                Fpr(2),
-                Fpr(3)
-            });
-
-        var compareIr = Assert.Single(lifter.Lift(new[] { compare })).Ir;
-        var compareSet = Assert.IsType<IrSetCrField>(Assert.Single(compareIr));
-        Assert.Equal(6, compareSet.FieldIndex);
-        Assert.Equal("f2", compareSet.Left.RegisterName);
-        Assert.Equal("f3", compareSet.Right.RegisterName);
-
-        var opc59 = FloatingInstruction((59u << 26) | (4u << 21) | (1u << 16) | (2u << 11) | (3u << 6) | (23u << 1), "opc_59");
-        var opc59Ir = Assert.Single(lifter.Lift(new[] { opc59 })).Ir;
-        var opc59Call = Assert.IsType<IrCall>(Assert.Single(opc59Ir));
-        Assert.Equal("PPC_Fsel", opc59Call.Target);
-        Assert.Equal("f4", opc59Call.Destination);
-        Assert.Equal(new[] { "f1", "f2", "f3" }, opc59Call.Arguments.Select(a => a.RegisterName));
-
-        var fallback = FloatingInstruction((63u << 26) | (4u << 21) | (1u << 16) | (2u << 11) | (3u << 6) | (28u << 1), "fp_999");
-        var fallbackIr = Assert.Single(lifter.Lift(new[] { fallback })).Ir;
-        var fallbackCall = Assert.IsType<IrCall>(Assert.Single(fallbackIr));
-        Assert.Equal("PPC_Fmsub", fallbackCall.Target);
-        Assert.Equal("f4", fallbackCall.Destination);
-        Assert.Equal(new[] { "f1", "f3", "f2" }, fallbackCall.Arguments.Select(a => a.RegisterName));
+        for (uint c = 0; c < 32; ++c)
+        for (uint record = 0; record < 2; ++record)
+        {
+            var instruction = PpcDecoder.Decode(0x80000000,
+                (63u << 26) | (3u << 21) | (1u << 16) | (c << 6) | (25u << 1) | record);
+            var ir = Assert.Single(new PpcLifter().Lift(new[] { instruction })).Ir;
+            var multiply = Assert.IsType<IrBinary>(Assert.Single(ir));
+            Assert.Equal("mul", multiply.Op);
+            Assert.Equal("f3", multiply.Destination);
+            Assert.Equal("f1", multiply.Left.RegisterName);
+            Assert.Equal($"f{c}", multiply.Right.RegisterName);
+        }
     }
 
     [Theory]
-    [InlineData(22u, "PPC_Fsqrt", "f2")]
-    [InlineData(26u, "PPC_Frsqrte", "f2")]
-    [InlineData(29u, "PPC_Fmadds", "f1")]
-    [InlineData(30u, "PPC_Fnmsubs", "f1")]
-    [InlineData(31u, "PPC_Fnmadds", "f1")]
-    public void LiftsAdditionalOpc59Branches(uint xo, string target, string expectedFirstArgument)
+    [InlineData(18u, "fdiv")]
+    [InlineData(20u, "fsub")]
+    [InlineData(21u, "fadd")]
+    [InlineData(26u, "frsqrte")]
+    public void AFormDecodingDoesNotTreatUnusedCFieldAsOpcode(uint xo, string mnemonic)
     {
-        var instruction = FloatingInstruction(
-            (59u << 26) | (4u << 21) | (1u << 16) | (2u << 11) | (3u << 6) | (xo << 1),
-            "opc_59");
+        for (uint c = 0; c < 32; ++c)
+        {
+            var instruction = PpcDecoder.Decode(0x80000000,
+                (63u << 26) | (3u << 21) | (1u << 16) | (2u << 11) | (c << 6) | (xo << 1));
+            Assert.Equal(mnemonic, instruction.Mnemonic);
+            Assert.Single(Assert.Single(new PpcLifter().Lift(new[] { instruction })).Ir);
+        }
+    }
 
+    [Theory]
+    [InlineData(0u)]
+    [InlineData(32u)]
+    public void DecodesAndLiftsCompareIntoConditionRegister(uint xo)
+    {
+        var instruction = PpcDecoder.Decode(0x80000000,
+            (63u << 26) | (6u << 23) | (2u << 16) | (3u << 11) | (xo << 1));
+        var ir = Assert.Single(new PpcLifter().Lift(new[] { instruction })).Ir;
+        var compare = Assert.IsType<IrSetCrField>(Assert.Single(ir));
+        Assert.Equal(6, compare.FieldIndex);
+        Assert.Equal("f2", compare.Left.RegisterName);
+        Assert.Equal("f3", compare.Right.RegisterName);
+    }
+
+    [Theory]
+    [InlineData(59u, 28u, "PPC_Fmsubs")]
+    [InlineData(59u, 29u, "PPC_Fmadds")]
+    [InlineData(59u, 30u, "PPC_Fnmsubs")]
+    [InlineData(59u, 31u, "PPC_Fnmadds")]
+    [InlineData(63u, 28u, "PPC_Fmsub")]
+    [InlineData(63u, 29u, "PPC_Fmadd")]
+    [InlineData(63u, 30u, "PPC_Fnmsub")]
+    [InlineData(63u, 31u, "PPC_Fnmadd")]
+    public void DecodesAndLiftsFusedOperandOrder(uint primary, uint xo, string helper)
+    {
+        var instruction = PpcDecoder.Decode(0x80000000,
+            (primary << 26) | (4u << 21) | (1u << 16) | (2u << 11) | (3u << 6) | (xo << 1));
         var ir = Assert.Single(new PpcLifter().Lift(new[] { instruction })).Ir;
         var call = Assert.IsType<IrCall>(Assert.Single(ir));
-        Assert.Equal(target, call.Target);
+        Assert.Equal(helper, call.Target);
         Assert.Equal("f4", call.Destination);
-        Assert.Equal(expectedFirstArgument, call.Arguments[0].RegisterName);
-    }
-
-    [Fact]
-    public void RejectsUnknownOpc59Subop()
-    {
-        var instruction = FloatingInstruction((59u << 26) | (3u << 21) | (27u << 1), "opc_59");
-        Assert.Throws<NotImplementedException>(() => new PpcLifter().Lift(new[] { instruction }));
+        Assert.Equal(new[] { "f1", "f3", "f2" }, call.Arguments.Select(a => a.RegisterName));
     }
 
     [Theory]
-    [InlineData(18u, "binary", "fdiv")]
-    [InlineData(20u, "binary", "sub")]
-    [InlineData(21u, "binary", "add")]
-    [InlineData(22u, "call", "PPC_Fsqrt")]
-    [InlineData(23u, "call", "PPC_Fsel")]
-    [InlineData(24u, "call", "PPC_Fres")]
-    [InlineData(26u, "call", "PPC_Frsqrte")]
-    [InlineData(29u, "call", "PPC_Fmadd")]
-    [InlineData(30u, "call", "PPC_Fnmsub")]
-    [InlineData(31u, "call", "PPC_Fnmadd")]
-    [InlineData(12u, "binary", "frsp")]
-    [InlineData(8u, "binary", "fcmp")]
-    public void LiftsAdditionalFpFallbackBranches(uint xo, string kind, string opOrTarget)
+    [InlineData(59u, 22u)] // fsqrts is not a Gekko instruction.
+    [InlineData(59u, 23u)] // fsel belongs to primary 63.
+    [InlineData(59u, 26u)] // frsqrte belongs to primary 63.
+    [InlineData(63u, 22u)] // fsqrt is not a Gekko instruction.
+    [InlineData(63u, 24u)] // fres belongs to primary 59.
+    [InlineData(63u, 200u)] // Low five bits must not turn unknown X-form instructions into fcmp.
+    [InlineData(63u, 204u)] // Nor into frsp.
+    public void UnknownFloatingInstructionsRemainUndefined(uint primary, uint xo)
     {
-        var instruction = FloatingInstruction(
-            (63u << 26) | (6u << 21) | (1u << 16) | (2u << 11) | (3u << 6) | (xo << 1),
-            "fp_4242");
-
-        var ir = Assert.Single(new PpcLifter().Lift(new[] { instruction })).Ir;
-        if (kind == "call")
-        {
-            var call = Assert.IsType<IrCall>(Assert.Single(ir));
-            Assert.Equal(opOrTarget, call.Target);
-        }
-        else
-        {
-            var binary = Assert.IsType<IrBinary>(Assert.Single(ir));
-            Assert.Equal(opOrTarget, binary.Op);
-        }
+        var word = (primary << 26) | (4u << 21) | (2u << 11) | (xo << 1);
+        var instruction = PpcDecoder.Decode(0x80000000, word);
+        var lifter = new PpcLifter();
+        Assert.Throws<InvalidOperationException>(() => lifter.Lift(new[] { instruction }));
+        var ir = Assert.Single(lifter.Lift(new[] { instruction }, allowUnsupported: true)).Ir;
+        Assert.IsType<IrUndefined>(Assert.Single(ir));
     }
 }

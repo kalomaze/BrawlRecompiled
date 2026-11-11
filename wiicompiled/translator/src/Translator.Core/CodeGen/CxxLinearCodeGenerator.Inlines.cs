@@ -506,7 +506,6 @@ public sealed partial class CxxLinearCodeGenerator
             "PpcFmulsInline", "PpcFmulsNoNiInline", 0, 1);
         AddRoundedHelper(specs, "PPC_FDIVS", "PPC_FDIVSNONI", "PpcFdivInline");
 
-        AddHelper(specs, "PPC_FSQRT", "std::sqrt", 0);
         AddHelper(specs, "PPC_FMADD", "PpcFmaddInline", 0, 1, 2);
         AddHelper(specs, "PPC_FMSUB", "PpcFmsubInline", 0, 1, 2);
         AddHelper(specs, "PPC_FNMADD", "PpcFnmaddInline", 0, 1, 2);

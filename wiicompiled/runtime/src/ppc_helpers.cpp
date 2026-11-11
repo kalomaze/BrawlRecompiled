@@ -749,11 +749,6 @@ extern "C" double PPC_PsAbs(double value)
     return PPC_PsAbsInline(value);
 }
 
-extern "C" double PPC_Fsqrt(double value)
-{
-    return std::sqrt(value);
-}
-
 // PPC_Fres, PPC_Frsqrte and PPC_Fsel are now defined inline in ppc_runtime.h:
 // they are emitted at ~1,100 translated sites between them and an out-of-line
 // definition made each one a full caller-saved register barrier (there is no

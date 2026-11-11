@@ -991,7 +991,6 @@ extern "C" double PPC_PsMerge00(double a, double b);
 extern "C" double PPC_PsMerge01(double a, double b);
 extern "C" double PPC_PsMerge10(double a, double b);
 extern "C" double PPC_PsMerge11(double a, double b);
-extern "C" double PPC_Fsqrt(double value);
 
 // Hot scalar float helpers, defined inline so the compiler can see through them instead of
 // taking a cross-TU caller-saved register barrier at ~2,500 call sites in the hottest float

@@ -661,7 +661,6 @@ void Run(CpuContext* ctx, uint32_t entry) {
             case 18: SetScalar(f, d, PpcForceSingleValueInline(Scalar(f, a) / Scalar(f, b))); break;
             case 20: SetScalar(f, d, PpcForceSingleValueInline(Scalar(f, a) - Scalar(f, b))); break;
             case 21: SetScalar(f, d, PpcForceSingleValueInline(Scalar(f, a) + Scalar(f, b))); break;
-            case 22: SetScalar(f, d, PpcForceSingleValueInline(std::sqrt(Scalar(f, b)))); break;
             case 24: SetScalar(f, d, PpcForceSingleValueInline(PpcApproximateReciprocalInline(Scalar(f, b)))); break;
             case 25: SetScalar(f, d, PpcFmulsInline(Scalar(f, a), Scalar(f, cc))); break;
             case 28: SetScalar(f, d, PpcFmsubsInline(Scalar(f, a), Scalar(f, cc), Scalar(f, b))); break;
@@ -697,7 +696,6 @@ void Run(CpuContext* ctx, uint32_t entry) {
             case 12: SetScalar(f, d, PpcForceSingleValueInline(Scalar(f, b))); break;  // frsp
             case 14: SetScalar(f, d, PPC_Fctiw(Scalar(f, b))); break;
             case 15: SetScalar(f, d, PPC_Fctiwz(Scalar(f, b))); break;
-            case 22: SetScalar(f, d, std::sqrt(Scalar(f, b))); break;  // fsqrt (not on Gekko; harmless)
             case 26: SetScalar(f, d, PpcApproximateReciprocalSquareRootInline(Scalar(f, b))); break;  // frsqrte
             case 38: c->fpscr |= 0x80000000u >> d; break;   // mtfsb1
             case 70: c->fpscr &= ~(0x80000000u >> d); break; // mtfsb0
