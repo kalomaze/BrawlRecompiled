@@ -87,7 +87,10 @@ void KeepSessionSave(const char* what) {
     }
     TerminateProcess(GetCurrentProcess(), 0);
 #elif defined(__ANDROID__)
-    AndroidBridge::RestartGame();
+    if (!AndroidBridge::RestartGame()) {
+        RT_LOGF(RT_TAG_RUNTIME, "netplay: Android activity restart failed\n");
+        std::_Exit(EXIT_FAILURE);
+    }
 #else
     // Linux: the same executable again, in place of this process, with the console's own output back and none of
     // this process's other descriptors (the guest RAM, sockets, the window) carried over.

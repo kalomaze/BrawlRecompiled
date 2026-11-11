@@ -13,18 +13,22 @@ namespace AndroidBridge {
 // .restartForSession), then park this thread until Android ends the process.
 bool RestartGame() {
     auto* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
+    if (env == nullptr) return false;
     auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
-    if (env == nullptr || activity == nullptr) {
+    if (activity == nullptr) {
+        if (env->ExceptionCheck()) env->ExceptionDescribe();
         return false;
     }
     jclass type = env->GetObjectClass(activity);
     jmethodID restart = type != nullptr ? env->GetMethodID(type, "restartForSession", "()V") : nullptr;
-    if (restart == nullptr) {
-        env->ExceptionClear();
+    if (restart != nullptr) env->CallVoidMethod(activity, restart);
+    if (type != nullptr) env->DeleteLocalRef(type);
+    env->DeleteLocalRef(activity);
+    if (env->ExceptionCheck()) {
+        env->ExceptionDescribe();
         return false;
     }
-    env->CallVoidMethod(activity, restart);
-    env->DeleteLocalRef(activity);
+    if (restart == nullptr) return false;
     for (;;) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
