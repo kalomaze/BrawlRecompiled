@@ -336,16 +336,6 @@ uint64_t Upload(const Image& image) {
     return static_cast<uint64_t>(aurora_imgui_add_texture(image.width, image.height, image.rgba.data()));
 }
 
-uint64_t WhiteTexture() {
-    static const uint64_t id = [] {
-        Image white;
-        white.width = white.height = 1;
-        white.rgba = {255, 255, 255, 255};
-        return Upload(white);
-    }();
-    return id;
-}
-
 // ---------------------------------------------------------------- colours
 struct Rgba {
     float r = 1, g = 1, b = 1, a = 1;
@@ -357,7 +347,6 @@ ImU32 ToImU32(const Rgba& c) {
     const auto q = [](float v) { return static_cast<uint32_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
     return IM_COL32(q(c.r), q(c.g), q(c.b), q(c.a));
 }
-Rgba Mul(const Rgba& a, const Rgba& b) { return {a.r * b.r, a.g * b.g, a.b * b.b, a.a * b.a}; }
 
 // ---------------------------------------------------------------- caches
 std::mutex g_cacheMutex;
@@ -618,26 +607,6 @@ void PushQuad(ImDrawList* list, uint64_t texture, const ImVec2 p[4], const ImVec
 struct Mtx {
     float a = 1, b = 0, c = 0, d = 1, tx = 0, ty = 0;
 };
-Mtx Compose(const Mtx& p, float tx, float ty, float rotDeg, float sx, float sy) {
-    const float r = rotDeg * 3.14159265f / 180.0f;
-    const float cs = std::cos(r), sn = std::sin(r);
-    // local = T * R * S
-    Mtx l;
-    l.a = cs * sx;
-    l.b = -sn * sy;
-    l.c = sn * sx;
-    l.d = cs * sy;
-    l.tx = tx;
-    l.ty = ty;
-    Mtx o;
-    o.a = p.a * l.a + p.b * l.c;
-    o.b = p.a * l.b + p.b * l.d;
-    o.c = p.c * l.a + p.d * l.c;
-    o.d = p.c * l.b + p.d * l.d;
-    o.tx = p.a * l.tx + p.b * l.ty + p.tx;
-    o.ty = p.c * l.tx + p.d * l.ty + p.ty;
-    return o;
-}
 ImVec2 ToScreen(const View& view, const Mtx& m, float x, float y) {
     const float lx = m.a * x + m.b * y + m.tx;
     const float ly = m.c * x + m.d * y + m.ty;
@@ -1038,18 +1007,6 @@ bool Layout::Load(const std::string& arcPath, const std::string& brlytName) {
     return m_loaded;
 }
 
-bool Layout::PaneRect(const std::string& paneName, float& x, float& y, float& w, float& h) const {
-    const auto it = m_byName.find(paneName);
-    if (it == m_byName.end()) {
-        return false;
-    }
-    x = it->second->tx;
-    y = it->second->ty;
-    w = it->second->w * it->second->sx;
-    h = it->second->h * it->second->sy;
-    return true;
-}
-
 namespace {
 // Translation and scale (rotation ignored) accumulated from the root down to `target`.
 bool WorldOf(const Layout::Pane* pane, const Layout::Pane* target, float px, float py, float psx, float psy, float& x,
@@ -1094,242 +1051,6 @@ std::vector<std::string> Layout::PaneNames() const {
     return names;
 }
 
-void Layout::Draw(ImDrawList* list, const View& view, const std::string& paneName, const DrawParams& params) const {
-    if (!m_loaded || list == nullptr) {
-        return;
-    }
-    const auto it = m_byName.find(paneName);
-    if (it == m_byName.end()) {
-        return;
-    }
-    const float identity[6] = {1, 0, 0, 1, 0, 0};
-    DrawPane(list, view, *it->second, identity, params.alpha, true, params, true);
-}
-
-void Layout::DrawPane(ImDrawList* list, const View& view, const Pane& pane, const float* parentMtx, float parentAlpha,
-                      bool parentInfluences, const DrawParams& params, bool root) const {
-    bool visible = (pane.flags & 1) != 0;
-    if (const auto v = params.visible.find(pane.name); v != params.visible.end()) {
-        visible = v->second;
-    }
-    if (!visible) {
-        return;
-    }
-    float ownAlpha = pane.alpha / 255.0f;
-    if (const auto a = params.paneAlpha.find(pane.name); a != params.paneAlpha.end()) {
-        ownAlpha = a->second;
-    }
-    const float alpha = ownAlpha * (parentInfluences ? parentAlpha : 1.0f);
-    float sx = pane.sx, sy = pane.sy;
-    if (const auto s = params.paneScale.find(pane.name); s != params.paneScale.end()) {
-        sx = sy = s->second;
-    }
-    float tx = pane.tx, ty = pane.ty;
-    if (root) {
-        tx += params.offsetX;
-        ty += params.offsetY;
-        sx *= params.scale;
-        sy *= params.scale;
-    }
-    const Mtx parent{parentMtx[0], parentMtx[1], parentMtx[2], parentMtx[3], parentMtx[4], parentMtx[5]};
-    const Mtx m = Compose(parent, tx, ty, pane.rot, sx, sy);
-    float paneW = pane.w, paneH = pane.h;
-    if (const auto z = params.paneSize.find(pane.name); z != params.paneSize.end()) {
-        paneW = z->second.first;
-        paneH = z->second.second;
-    }
-    const int posH = pane.origin % 3;
-    const int posV = pane.origin / 3;
-    const float x0 = posH == 0 ? 0.0f : posH == 1 ? -paneW / 2 : -paneW;
-    const float y0 = posV == 0 ? 0.0f : posV == 1 ? paneH / 2 : paneH;
-
-    uint32_t tint = 0xFFFFFFFFu;
-    if (const auto t = params.vertexTint.find(pane.name); t != params.vertexTint.end()) {
-        tint = t->second;
-    }
-    const Rgba tintColor = FromRgba8(tint);
-
-    const auto quad = [&](const Material* mat, const uint32_t vtx[4], float ax0, float ay0, float ax1, float ay1,
-                          const float uvIn[4][2], uint8_t flip) {
-        // uvIn: TL, TR, BL, BR (nw4r order)
-        float uv[4][2];
-        std::memcpy(uv, uvIn, sizeof(uv));
-        if (mat != nullptr && (mat->srtSx != 1 || mat->srtSy != 1 || mat->srtTx != 0 || mat->srtTy != 0)) {
-            for (auto& c : uv) {
-                c[0] = (c[0] - 0.5f) * mat->srtSx + 0.5f + mat->srtTx;
-                c[1] = (c[1] - 0.5f) * mat->srtSy + 0.5f - mat->srtTy;
-            }
-        }
-        if (flip & 1) {  // horizontal
-            std::swap(uv[0], uv[1]);
-            std::swap(uv[2], uv[3]);
-        }
-        if (flip & 2) {  // vertical
-            std::swap(uv[0], uv[2]);
-            std::swap(uv[1], uv[3]);
-        }
-        Rgba colors[4];
-        for (int i = 0; i < 4; ++i) {
-            Rgba c = FromRgba8(vtx[i]);
-            if (mat != nullptr && mat->hasMatColor && mat->colorFromMaterial) {
-                c = mat->matColor;
-            }
-            c = Mul(c, tintColor);
-            c.a *= alpha;
-            colors[i] = c;
-        }
-        const uint64_t texture = mat != nullptr && mat->hasTexture ? mat->texture : WhiteTexture();
-        if (!(mat != nullptr && mat->hasTexture)) {
-            if (mat != nullptr) {
-                // No texture: the material's white colour (the TEV constant) shades the quad.
-                for (auto& c : colors) {
-                    c = Mul(c, mat->white);
-                }
-            }
-        }
-        // Tile repeating textures: the ImGui sampler clamps, so split the quad at whole texture
-        // repeats. Panes here are axis-aligned in texture space (no texture rotation).
-        const float u0 = uv[0][0], u1 = uv[1][0], v0 = uv[0][1], v1 = uv[2][1];
-        const float uMin = std::min(u0, u1), uMax = std::max(u0, u1);
-        const float vMin = std::min(v0, v1), vMax = std::max(v0, v1);
-        const bool tileU = mat != nullptr && mat->hasTexture && mat->wrapS != 0 && (uMin < -0.001f || uMax > 1.001f);
-        const bool tileV = mat != nullptr && mat->hasTexture && mat->wrapT != 0 && (vMin < -0.001f || vMax > 1.001f);
-        std::vector<float> us{0.0f, 1.0f}, vs{0.0f, 1.0f};  // fractions of the quad
-        if (tileU && u1 != u0) {
-            us.clear();
-            us.push_back(0.0f);
-            for (float k = std::floor(uMin) + 1; k < uMax; k += 1.0f) {
-                us.push_back((k - u0) / (u1 - u0));
-            }
-            us.push_back(1.0f);
-            std::sort(us.begin(), us.end());
-        }
-        if (tileV && v1 != v0) {
-            vs.clear();
-            vs.push_back(0.0f);
-            for (float k = std::floor(vMin) + 1; k < vMax; k += 1.0f) {
-                vs.push_back((k - v0) / (v1 - v0));
-            }
-            vs.push_back(1.0f);
-            std::sort(vs.begin(), vs.end());
-        }
-        const auto lerpC = [](const Rgba& a, const Rgba& b, float t) {
-            return Rgba{a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t};
-        };
-        const auto colorAt = [&](float fx, float fy) {
-            return lerpC(lerpC(colors[0], colors[1], fx), lerpC(colors[2], colors[3], fx), fy);
-        };
-        const auto wrap = [](float t, float tileStart, uint8_t mode) {
-            float f = t - std::floor(tileStart);
-            if (mode == 2 && (static_cast<int>(std::floor(tileStart)) & 1)) {  // mirror
-                f = 1.0f - f;
-            }
-            return f;
-        };
-        for (size_t yi = 0; yi + 1 < vs.size(); ++yi) {
-            for (size_t xi = 0; xi + 1 < us.size(); ++xi) {
-                const float fx0 = us[xi], fx1 = us[xi + 1], fy0 = vs[yi], fy1 = vs[yi + 1];
-                const float px0 = ax0 + (ax1 - ax0) * fx0, px1 = ax0 + (ax1 - ax0) * fx1;
-                const float py0 = ay0 + (ay1 - ay0) * fy0, py1 = ay0 + (ay1 - ay0) * fy1;
-                float tu0 = u0 + (u1 - u0) * fx0, tu1 = u0 + (u1 - u0) * fx1;
-                float tv0 = v0 + (v1 - v0) * fy0, tv1 = v0 + (v1 - v0) * fy1;
-                if (tileU) {
-                    const float start = std::min(tu0, tu1) + 0.0001f;
-                    tu0 = wrap(tu0, start, mat->wrapS);
-                    tu1 = wrap(tu1, start, mat->wrapS);
-                }
-                if (tileV) {
-                    const float start = std::min(tv0, tv1) + 0.0001f;
-                    tv0 = wrap(tv0, start, mat->wrapT);
-                    tv1 = wrap(tv1, start, mat->wrapT);
-                }
-                const ImVec2 p[4] = {ToScreen(view, m, px0, py0), ToScreen(view, m, px1, py0), ToScreen(view, m, px1, py1),
-                                     ToScreen(view, m, px0, py1)};
-                const ImVec2 t[4] = {ImVec2(tu0, tv0), ImVec2(tu1, tv0), ImVec2(tu1, tv1), ImVec2(tu0, tv1)};
-                const ImU32 c[4] = {ToImU32(colorAt(fx0, fy0)), ToImU32(colorAt(fx1, fy0)), ToImU32(colorAt(fx1, fy1)),
-                                    ToImU32(colorAt(fx0, fy1))};
-                PushQuad(list, texture, p, t, c);
-            }
-        }
-    };
-    const auto material = [&](int index) -> const Material* {
-        return index >= 0 && index < static_cast<int>(m_materials.size()) ? m_materials[index].get() : nullptr;
-    };
-
-    if (pane.kind == Pane::kPicture && alpha > 0.001f) {
-        quad(material(pane.material), pane.vtx, x0, y0, x0 + paneW, y0 - paneH, pane.uv, 0);
-    } else if (pane.kind == Pane::kWindow && alpha > 0.001f) {
-        // Content, grown by its overflow, then nw4r's frame: four strips laid round the border like a
-        // pinwheel (top from the left corner, right from the top, bottom from the right, left from the
-        // bottom), each showing its frame texture anchored at its own corner at a texel per unit and
-        // clamped past the texture's edge, which carries the border on along the side.
-        quad(material(pane.material), pane.vtx, x0 - pane.overflow[0], y0 + pane.overflow[2],
-             x0 + paneW + pane.overflow[1], y0 - paneH - pane.overflow[3], pane.uv, 0);
-        if (!pane.frames.empty()) {
-            const uint32_t white[4] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
-            const bool single = pane.frames.size() == 1;
-            const Material* mats[4];  // LT, RT, LB, RB, the order frames are stored in
-            uint8_t flips[4];         // bit 0 mirrors u, bit 1 mirrors v
-            for (int i = 0; i < 4; ++i) {
-                const auto& frame = pane.frames[single ? 0 : std::min<size_t>(i, pane.frames.size() - 1)];
-                mats[i] = material(frame.first);
-                if (single) {
-                    flips[i] = static_cast<uint8_t>(i == 0 ? 0 : i == 1 ? 1 : i == 2 ? 2 : 3);
-                } else {
-                    // BRLYT: 0 none, 1 flip H, 2 flip V, 4 rotate 180 (90/270 are not used by menus).
-                    flips[i] = static_cast<uint8_t>(frame.second == 1 ? 1 : frame.second == 2 ? 2 : frame.second == 4 ? 3 : 0);
-                }
-            }
-            const auto texW = [&](int i) { return mats[i] != nullptr && mats[i]->hasTexture ? static_cast<float>(mats[i]->textureWidth) : 16.0f; };
-            const auto texH = [&](int i) { return mats[i] != nullptr && mats[i]->hasTexture ? static_cast<float>(mats[i]->textureHeight) : 16.0f; };
-            const float L = x0, R = x0 + paneW, T = y0, B = y0 - paneH;
-            const float W = paneW, H = paneH;
-            const float t = std::min(texH(0), H), r = std::min(texW(1), W), l = std::min(texW(2), W), b = std::min(texH(3), H);
-            const auto draw = [&](int i, float qx0, float qy0, float qx1, float qy1, float u0, float u1, float v0, float v1) {
-                if ((flips[i] & 1) != 0) {
-                    u0 = 1.0f - u0;
-                    u1 = 1.0f - u1;
-                }
-                if ((flips[i] & 2) != 0) {
-                    v0 = 1.0f - v0;
-                    v1 = 1.0f - v1;
-                }
-                const float uv[4][2] = {{u0, v0}, {u1, v0}, {u0, v1}, {u1, v1}};
-                quad(mats[i], white, qx0, qy0, qx1, qy1, uv, 0);
-            };
-            // Top strip, anchored top-left; right strip, top-right; bottom strip, bottom-right;
-            // left strip, bottom-left.
-            draw(0, L, T, R - r, T - t, 0.0f, (W - r) / texW(0), 0.0f, t / texH(0));
-            draw(1, R - r, T, R, B + b, 1.0f - r / texW(1), 1.0f, 0.0f, (H - b) / texH(1));
-            draw(3, L + l, B + b, R, B, 1.0f - (W - l) / texW(3), 1.0f, 1.0f - b / texH(3), 1.0f);
-            draw(2, L, T - t, L + l, B, 0.0f, l / texW(2), 1.0f - (H - t) / texH(2), 1.0f);
-        }
-    } else if (pane.kind == Pane::kText && alpha > 0.001f && pane.font >= 0 &&
-               pane.font < static_cast<int>(m_fonts.size()) && m_fonts[pane.font]) {
-        const std::u16string* text = &pane.text;
-        if (const auto t = params.text.find(pane.name); t != params.text.end()) {
-            text = &t->second;
-        }
-        Rgba top = Mul(FromRgba8(pane.topColor), tintColor), bottom = Mul(FromRgba8(pane.bottomColor), tintColor);
-        if (const Material* mat = material(pane.material)) {
-            top = Mul(top, mat->white);
-            bottom = Mul(bottom, mat->white);
-            top.a = FromRgba8(pane.topColor).a * tintColor.a;
-            bottom.a = FromRgba8(pane.bottomColor).a * tintColor.a;
-        }
-        top.a *= alpha;
-        bottom.a *= alpha;
-        DrawTextLines(list, view, m, *m_fonts[pane.font], *text, x0, y0, paneW, paneH, pane.textPosition,
-                      pane.textAlignment, pane.fontW, pane.fontH, pane.charSpace, pane.lineSpace, top, bottom);
-    }
-
-    const float mtx[6] = {m.a, m.b, m.c, m.d, m.tx, m.ty};
-    const bool influences = (pane.flags & 2) != 0;
-    for (const Pane* child : pane.children) {
-        DrawPane(list, view, *child, mtx, alpha, influences, params, false);
-    }
-}
-
 View GameView() {
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     View view;
@@ -1354,8 +1075,6 @@ View GameView() {
     view.centerX = display.x / 2;
     view.centerY = display.y / 2;
     view.scale = h / 456.0f;
-    // The game's layouts keep square pixels on a widened canvas too (display_settings.cpp).
-    view.gameScaleX = view.scale;
     return view;
 }
 
