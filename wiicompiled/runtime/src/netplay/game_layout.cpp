@@ -84,24 +84,25 @@ std::map<std::string, std::pair<uint32_t, uint32_t>> ListU8(const std::vector<ui
     if (data.size() < 0x20 || BE32(data.data()) != 0x55AA382Du) {
         return files;
     }
-    const uint32_t rootOffset = BE32(&data[4]);
-    if (rootOffset + 12 > data.size()) {
+    const size_t rootOffset = BE32(&data[4]);
+    if (rootOffset > data.size() || data.size() - rootOffset < 12) {
         return files;
     }
     const uint32_t total = BE32(&data[rootOffset + 8]);
-    const uint32_t stringTable = rootOffset + total * 12;
-    if (stringTable > data.size()) {
+    if (total == 0 || total > (data.size() - rootOffset) / 12) {
         return files;
     }
+    const size_t stringTable = rootOffset + static_cast<size_t>(total) * 12;
     const auto name = [&](uint32_t offset) {
         std::string s;
-        for (uint32_t i = stringTable + offset; i < data.size() && data[i] != 0; ++i) {
+        if (offset >= data.size() - stringTable) return s;
+        for (size_t i = stringTable + offset; i < data.size() && data[i] != 0; ++i) {
             s.push_back(static_cast<char>(data[i]));
         }
         return s;
     };
     std::vector<std::pair<std::string, uint32_t>> dirs{{"", total}};
-    for (uint32_t i = 1; i < total; ++i) {
+    for (size_t i = 1; i < total; ++i) {
         while (dirs.size() > 1 && i >= dirs.back().second) {
             dirs.pop_back();
         }
@@ -118,7 +119,9 @@ std::map<std::string, std::pair<uint32_t, uint32_t>> ListU8(const std::vector<ui
         if ((typeName >> 24) == 1) {
             dirs.emplace_back(nodeName, BE32(node + 8));
         } else {
-            files[path] = {BE32(node + 4), BE32(node + 8)};
+            const uint32_t offset = BE32(node + 4), size = BE32(node + 8);
+            if (offset > data.size() || size > data.size() - offset) return {};
+            files[path] = {offset, size};
         }
     }
     return files;
@@ -693,8 +696,8 @@ bool Layout::Load(const std::string& arcPath, const std::string& brlytName) {
     size_t lytSize = 0;
     for (const auto& [path, where] : files) {
         if (path.size() > 6 && path.compare(path.size() - 6, 6, ".brlyt") == 0 &&
-            (brlytName.empty() || path.find(brlytName) != std::string::npos) && where.first + where.second <= arc.size()) {
-            lyt = &arc[where.first];
+            (brlytName.empty() || path.find(brlytName) != std::string::npos)) {
+            lyt = arc.data() + where.first;
             lytSize = where.second;
             break;
         }
@@ -706,13 +709,15 @@ bool Layout::Load(const std::string& arcPath, const std::string& brlytName) {
     Pane* last = nullptr;
     const uint16_t headerSize = BE16(lyt + 12);
     const uint16_t sections = BE16(lyt + 14);
+    if (headerSize < 16 || headerSize > lytSize) return false;
     size_t pos = headerSize;
-    for (uint16_t s = 0; s < sections && pos + 8 <= lytSize; ++s) {
+    for (uint16_t s = 0; s < sections; ++s) {
+        if (lytSize - pos < 8) return false;
         const uint8_t* sec = lyt + pos;
         const uint32_t kind = BE32(sec);
         const uint32_t secSize = BE32(sec + 4);
-        if (secSize < 8 || pos + secSize > lytSize) {
-            break;
+        if (secSize < 8 || secSize > lytSize - pos) {
+            return false;
         }
         const uint8_t* body = sec + 8;
         switch (kind) {
