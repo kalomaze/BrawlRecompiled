@@ -392,114 +392,10 @@ void ZeroMappedStorage() {
 }
 
 #if defined(_WIN32)
-// BRAWL_WATCH_WRITE=<hex guest address>[:<hex value>]: a debugging aid for mods. Each write to that word (that leaves
-// it holding <value>, when one is given) is logged with the guest state: its page stays read-only, and each write to
-// the page is single-stepped, checked, and the page protected again.
-uint32_t g_watchAddress = 0;  // start of the watched pages
-uint32_t g_watchWord = 0;     // the word itself
-bool g_watchHasValue = false;
-uint32_t g_watchValue = 0;
-bool g_watchAccess = false;  // BRAWL_WATCH_ACCESS=<start>-<end>: every access to those pages, the first ones logged
-uint32_t g_watchEnd = 0;
-thread_local uint8_t* t_watchPage = nullptr;
-thread_local bool t_watchRearm = false;
-thread_local bool t_watchHit = false;
-thread_local uint32_t t_watchBefore = 0;
-
-uint32_t WatchedWord() {
-    uint32_t value = 0;
-    std::memcpy(&value, g_base + g_watchWord, 4);
-    return __builtin_bswap32(value);
-}
-
-void ArmWriteWatch() {
-    const char* text = std::getenv("BRAWL_WATCH_WRITE");
-    if (text == nullptr) {
-        text = std::getenv("BRAWL_WATCH_ACCESS");
-        g_watchAccess = text != nullptr;
-    }
-    if (text == nullptr) return;
-    char* end = nullptr;
-    g_watchAddress = static_cast<uint32_t>(std::strtoul(text, &end, 16)) & ~3u;
-    if (g_watchAddress == 0) return;
-    g_watchWord = g_watchAddress;
-    if (*end == ':') {
-        g_watchHasValue = true;
-        g_watchValue = static_cast<uint32_t>(std::strtoul(end + 1, nullptr, 16));
-    }
-    if (g_watchAccess && *end == '-') {
-        g_watchEnd = static_cast<uint32_t>(std::strtoul(end + 1, nullptr, 16));
-    }
-    if (g_watchEnd <= g_watchAddress) g_watchEnd = g_watchAddress + 4;
-    g_watchAddress &= ~(kHostPageSize - 1);
-    g_watchEnd = (g_watchEnd + kHostPageSize - 1) & ~(kHostPageSize - 1);
-    ProtectRange(g_base + g_watchAddress, g_watchEnd - g_watchAddress, g_watchAccess ? kProtNone : kProtRead);
-    RT_LOGF(RT_TAG_MEMORY, "watching %s 0x%08X\n", g_watchAccess ? "every access to the page of" : "writes to",
-            g_watchAddress);
-}
-
-bool HandleWriteWatch(EXCEPTION_POINTERS* info) {
-    const auto* record = info->ExceptionRecord;
-    uint8_t* page = g_base + (g_watchAddress & ~(kHostPageSize - 1));
-    if (record->ExceptionCode == EXCEPTION_SINGLE_STEP && t_watchRearm) {
-        if (g_watchAccess) page = t_watchPage;
-        t_watchRearm = false;
-        static int logged = 0;
-        if (t_watchHit && (!g_watchHasValue || WatchedWord() == g_watchValue) && logged++ < 40) {
-            RT_LOGF(RT_TAG_MEMORY, "[watch] 0x%08X: 0x%08X -> 0x%08X, guest state:\n", g_watchWord, t_watchBefore,
-                    WatchedWord());
-            SystemBridge::DumpCpuState(TryGetCpuContext());
-        }
-        t_watchHit = false;
-        ProtectRange(page, kHostPageSize, g_watchAccess ? kProtNone : kProtRead);
-        return true;
-    }
-    if (record->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || record->NumberParameters < 2 ||
-        record->ExceptionInformation[0] > 1 ||
-        (record->ExceptionInformation[0] == 0 && !g_watchAccess)) {
-        return false;
-    }
-    const uintptr_t fault = static_cast<uintptr_t>(record->ExceptionInformation[1]);
-    if (g_watchAccess) {
-        if (fault < reinterpret_cast<uintptr_t>(g_base + g_watchAddress) || fault >= reinterpret_cast<uintptr_t>(g_base + g_watchEnd)) {
-            return false;
-        }
-        page = reinterpret_cast<uint8_t*>(fault & ~static_cast<uintptr_t>(kHostPageSize - 1));
-        t_watchPage = page;
-    } else if (fault < reinterpret_cast<uintptr_t>(page) || fault >= reinterpret_cast<uintptr_t>(page) + kHostPageSize) {
-        return false;
-    }
-    const uint32_t guestAddress = static_cast<uint32_t>(fault - reinterpret_cast<uintptr_t>(g_base));
-    t_watchHit = guestAddress + 8 > g_watchWord && guestAddress < g_watchWord + 4;
-    if (g_watchAccess) {
-        static int logged = 0;
-        if (logged == 30) {  // seen enough: let the game run at full speed again
-            ProtectRange(g_base + g_watchAddress, g_watchEnd - g_watchAddress, kProtReadWrite);
-            g_watchAccess = false;
-            g_watchAddress = 0;
-            return true;
-        }
-        if (logged++ < 30) {
-            RT_LOGF(RT_TAG_MEMORY, "[watch] %s 0x%08X, guest state:\n",
-                    record->ExceptionInformation[0] ? "write" : "read", guestAddress);
-            SystemBridge::DumpCpuState(TryGetCpuContext());
-        }
-        t_watchHit = false;
-    }
-    if (t_watchHit) t_watchBefore = WatchedWord();
-    ProtectRange(page, kHostPageSize, kProtReadWrite);
-    t_watchRearm = true;
-    info->ContextRecord->EFlags |= 0x100;  // trap after this one instruction
-    return true;
-}
-
 LONG CALLBACK FlatGuestVectoredHandler(EXCEPTION_POINTERS* info) {
-    const auto* record = info->ExceptionRecord;
-    if (g_watchAddress != 0 && record != nullptr && HandleWriteWatch(info)) {
-        return EXCEPTION_CONTINUE_EXECUTION;
-    }
+    const auto* record = info ? info->ExceptionRecord : nullptr;
     if (record == nullptr || record->ExceptionCode != EXCEPTION_ACCESS_VIOLATION ||
-        record->NumberParameters < 2) {
+        record->NumberParameters < 2 || record->ExceptionInformation[0] > 1) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
     void* faultAddress = reinterpret_cast<void*>(record->ExceptionInformation[1]);
@@ -547,6 +443,11 @@ bool IsActive() {
 }
 
 void Initialize(const std::vector<RegionRequest>& regions) {
+#if defined(_WIN32)
+    if (std::getenv("BRAWL_WATCH_WRITE") || std::getenv("BRAWL_WATCH_ACCESS"))
+        throw std::runtime_error("BRAWL_WATCH_WRITE/BRAWL_WATCH_ACCESS were removed: use debugger watchpoints.");
+#endif
+
     std::lock_guard<std::mutex> lock(StateMutex());
 
 #if !defined(MKW_GUEST_FLAT_FIXED_PAGE_SIZE)
@@ -653,7 +554,7 @@ void Initialize(const std::vector<RegionRequest>& regions) {
     ApplyExecutableProtectionLocked();
 #if defined(_WIN32)
     InstallVectoredHandler();
-    ArmWriteWatch();
+
 #endif
 
     // Freshly created section objects are demand-zero, so no explicit clear is
