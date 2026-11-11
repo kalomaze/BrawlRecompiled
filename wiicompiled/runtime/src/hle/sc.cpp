@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 #include "hle_stubs.h"
 
 #include "console_identity.h"

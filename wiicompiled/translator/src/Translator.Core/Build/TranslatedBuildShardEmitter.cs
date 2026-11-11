@@ -424,10 +424,11 @@ public static partial class TranslatedBuildShardEmitter
             var source = new StringBuilder();
             source.AppendLine("// Translator-owned content-addressed aggregate shard; do not edit.");
             source.AppendLine("#include \"abi_bridge.h\"");
+            source.AppendLine("#include \"brawl_rollback.h\"");
             // Quoted include resolves the sibling traits header on every toolchain and keeps
             // the shard text free of the emitting machine's absolute paths.
             source.AppendLine($"#include \"{Path.GetFileName(traitsPath)}\"");
-            source.AppendLine("#define MKW_STATIC_TRANSLATED_CALL(Target, Entry, Context) do { Entry(Context); } while (false)");
+            source.AppendLine("#define MKW_STATIC_TRANSLATED_CALL(Target, Entry, Context) do { Entry(Context); if constexpr ((Target) == 0x80029438u) BrawlRollback::AnchorPads(); } while (false)");
             foreach (var function in group
                          .OrderBy(static function => function.Address)
                          .ThenBy(static function => function.Symbol, StringComparer.Ordinal))
@@ -468,9 +469,10 @@ public static partial class TranslatedBuildShardEmitter
         GuardedEntryRegex().Replace(source, match =>
         {
             var address = ParseHexUInt32(match.Groups["address"].Value);
-            return guardIndex.TryGetValue(address, out var index)
+            var entry = guardIndex.TryGetValue(address, out var index)
                 ? $"{match.Value}\n    MKW_GUEST_CODE_GUARD({index}u, 0x{address:X8}u);"
                 : match.Value;
+            return address == 0x809435F0u ? entry + "\n    BrawlRollback::SeedCrossplayStage();" : entry;
         });
 
     [GeneratedRegex(@"extern ""C"" void func_(?<address>[0-9A-F]{8})\(CpuContext\* MKW_RESTRICT ctx\)\s*\{", RegexOptions.CultureInvariant)]
@@ -769,6 +771,7 @@ public static partial class TranslatedBuildShardEmitter
             var source = new StringBuilder();
             source.AppendLine("// Translator-owned bulk registration; do not edit.");
             source.AppendLine("#include \"abi_bridge.h\"");
+            source.AppendLine("#include \"brawl_rollback.h\"");
             source.AppendLine("#include <cstddef>");
             foreach (var symbol in group.Select(static record => record.Symbol).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
             {
@@ -815,6 +818,7 @@ public static partial class TranslatedBuildShardEmitter
         var source = new StringBuilder();
         source.AppendLine("// Translator-owned immutable indirect dispatch table; do not edit.");
         source.AppendLine("#include \"abi_bridge.h\"");
+            source.AppendLine("#include \"brawl_rollback.h\"");
         source.AppendLine("#include <iterator>");
         foreach (var symbol in entries.Select(static pair => pair.Value.WinnerSymbol!)
                      .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))

@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 #include <xxhash.h>
 #include <vector>
 #include <cstring>
@@ -94,7 +95,7 @@ PPC_NATIVE_OVERRIDE(801ed908, GX__Init_HLE, uint32_t, (uint32_t fifoBase, uint32
 // FIFO Management
 // ============================================================================
 
-extern "C" void GX__InitFifoBase_8016c7c8(uint32_t fa, uint32_t ba, uint32_t s) { GXInitFifoBase((GXFifoObj*)GuestToHostPtr(fa, sizeof(GXFifoObj)), GuestToHostPtr(ba, s), s); }
+extern "C" void GX__InitFifoBase_8016c7c8(uint32_t fa, uint32_t ba, uint32_t s) { BrawlDirtyMemory::Mark(fa,sizeof(GXFifoObj)); GXInitFifoBase((GXFifoObj*)GuestToHostPtr(fa, sizeof(GXFifoObj)), GuestToHostPtr(ba, s), s); }
 
 extern "C" void GX__SetCPUFifo_HLE(uint32_t fa) { GXSetCPUFifo((GXFifoObj*)GuestToHostPtr(fa, sizeof(GXFifoObj))); }
 PPC_NATIVE_OVERRIDE_VOID(801eea04, GX__SetCPUFifo_HLE, (uint32_t fa), (fa));
@@ -102,10 +103,10 @@ PPC_NATIVE_OVERRIDE_VOID(801eea04, GX__SetCPUFifo_HLE, (uint32_t fa), (fa));
 extern "C" void GX__SetGPFifo_HLE(uint32_t fa) { GXSetGPFifo((GXFifoObj*)GuestToHostPtr(fa, sizeof(GXFifoObj))); }
 PPC_NATIVE_OVERRIDE_VOID(801eebe4, GX__SetGPFifo_HLE, (uint32_t fa), (fa));
 
-extern "C" void __GX__SaveFifo_HLE(uint32_t fa) { GXSaveCPUFifo((GXFifoObj*)GuestToHostPtr(fa, sizeof(GXFifoObj))); }
+extern "C" void __GX__SaveFifo_HLE(uint32_t fa) { BrawlDirtyMemory::Mark(fa,sizeof(GXFifoObj)); GXSaveCPUFifo((GXFifoObj*)GuestToHostPtr(fa, sizeof(GXFifoObj))); }
 PPC_NATIVE_OVERRIDE_VOID(801eee74, __GX__SaveFifo_HLE, (uint32_t fa), (fa));
 
-extern "C" void GX__GetCPUFifo_HLE(uint32_t fa) { auto* d=(GXFifoObj*)GuestToHostPtr(fa, sizeof(GXFifoObj)); auto* s=GXGetCPUFifo(); if(d&&s) std::memcpy(d,s,sizeof(GXFifoObj)); }
+extern "C" void GX__GetCPUFifo_HLE(uint32_t fa) { auto* d=(GXFifoObj*)GuestToHostPtr(fa, sizeof(GXFifoObj)); auto* s=GXGetCPUFifo(); if(d&&s) {BrawlDirtyMemory::Mark(fa,sizeof(GXFifoObj));std::memcpy(d,s,sizeof(GXFifoObj));} }
 PPC_NATIVE_OVERRIDE_VOID(801eef7c, GX__GetCPUFifo_HLE, (uint32_t fa), (fa));
 
 extern "C" void __GX__FifoInit_8016d180()
@@ -218,7 +219,7 @@ extern "C" void GX__BeginDisplayList_HLE(uint32_t la, uint32_t s) {
         uint32_t gd = Memory::Read32(kGXDataPtrAddr);
         if (!gd) return;
         if (Memory::Read32(gd + 0x5FCu)) GX__SetDirtyState_HLE();
-        if (Memory::Read8(gd + 0x5F9u)) std::memcpy(Memory::GetPointer(0x804DF0B0, 0x600), Memory::GetPointer(gd, 0x600), 0x600);
+        if (Memory::Read8(gd + 0x5F9u)) {BrawlDirtyMemory::Mark(0x804DF0B0,0x600);std::memcpy(Memory::GetPointer(0x804DF0B0, 0x600), Memory::GetPointer(gd, 0x600), 0x600);}
         Memory::Write32(0x804DF034, la + s - 4u);
         Memory::Write32(0x804DF04C, 0);
         Memory::Write32(0x804DF030, la);
@@ -272,7 +273,7 @@ extern "C" uint32_t GX__EndDisplayList_HLE() {
             uint8_t stub[32] = {};
             std::memcpy(stub, kHostDlMagic, 8);
             stub[8] = uint8_t(id >> 24); stub[9] = uint8_t(id >> 16); stub[10] = uint8_t(id >> 8); stub[11] = uint8_t(id);
-            if (uint8_t* dst = static_cast<uint8_t*>(GuestToHostPtr(g_spmAuroraDlAddr, 32))) std::memcpy(dst, stub, 32);
+            if (uint8_t* dst = static_cast<uint8_t*>(GuestToHostPtr(g_spmAuroraDlAddr, 32))) {BrawlDirtyMemory::Mark(g_spmAuroraDlAddr,32);std::memcpy(dst, stub, 32);}
             auroraBytes = 32u;
             RegisterAuroraDisplayList(g_spmAuroraDlAddr, auroraBytes);
             static int s_dlLog = 0;
@@ -294,6 +295,7 @@ extern "C" uint32_t GX__EndDisplayList_HLE() {
             if (Memory::Read8(gd + 0x5F9u) != 0) {
                 const int32_t interruptLevel = OS__DisableInterrupts_HLE();
                 const uint32_t savedWord8 = Memory::Read32(gd + 0x08u);
+                BrawlDirtyMemory::Mark(gd,0x600);
                 std::memcpy(Memory::GetPointer(gd, 0x600),
                             Memory::GetPointer(0x804DF0B0, 0x600),
                             0x600);

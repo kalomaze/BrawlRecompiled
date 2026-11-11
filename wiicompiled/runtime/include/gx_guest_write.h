@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 #pragma once
 
 // Per-granule write-generation counters let GX cache consumers skip re-digesting unchanged
@@ -82,6 +83,7 @@ inline uint64_t GenerationForRange(uint32_t addr, uint32_t nbytes) noexcept {
 // this runs on every DC range op, including the ones that only ever touch
 // memory no GX cache has ever looked at.
 inline void NotifyWrite(uint32_t addr, uint32_t size) noexcept {
+    BrawlDirtyMemory::Mark(addr,size);
     if (size == 0) {
         return;
     }

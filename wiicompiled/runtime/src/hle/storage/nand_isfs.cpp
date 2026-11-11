@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 // NAND/ISFS HLE: the IOS_* device layer.
 //
 // Shared state and helpers live in nand_internal.h.
@@ -119,6 +120,7 @@ static bool WriteGuestBytes(uint32_t address, uint32_t size, const uint8_t* data
         return false;
     }
     uint8_t* out = Memory::GetPointer(address, dataSize);
+    BrawlDirtyMemory::Mark(address,dataSize);
     std::memcpy(out, data, dataSize);
     return true;
 }
@@ -484,6 +486,7 @@ extern "C" int32_t NAND_IOS_Read_HLE(uint32_t fd, uint32_t bufferPtr, uint32_t l
         return ISFS_EINVAL;
     }
     
+    BrawlDirtyMemory::Mark(bufferPtr,length);
     size_t bytesRead = std::fread(buffer, 1, length, handle->file);
     handle->position += static_cast<uint32_t>(bytesRead);
     
@@ -623,6 +626,7 @@ extern "C" int32_t NAND_IOS_Ioctl_HLE(
                 // Format: u32 ownerID, u16 groupID, u8 ownerPerm, u8 groupPerm, u8 otherPerm, u8 attrs
                 uint8_t* outBuf = (uint8_t*)Memory::GetPointer(outBufPtr);
                 if (outBuf && outLen >= 0x4c) {
+                    BrawlDirtyMemory::Mark(outBufPtr,outLen);
                     std::memset(outBuf, 0, outLen);
                     // Owner UID = 0
                     Memory::Write32(outBufPtr, 0);
@@ -999,6 +1003,7 @@ static int32_t HandleIsfsReadDir(uint32_t numIn, uint32_t numOut, uint32_t vecto
             break;
         }
         uint8_t* out = Memory::GetPointer(namesOut.address + cursor, kEntryWindow);
+        BrawlDirtyMemory::Mark(namesOut.address+cursor,kEntryWindow);
         std::memset(out, 0, kEntryWindow);
         std::memcpy(out, name.data(), name.size());
         cursor += static_cast<uint32_t>(name.size()) + 1;

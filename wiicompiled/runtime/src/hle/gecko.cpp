@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 // gecko.cpp - Gecko/Ocarina codes (.gct) for mods, installed as Project+'s Brawl Mod Loader (a USB Loader GX
 // derivative) installs them: its code handler at 0x80001800 (translated with the game: projects/brawl/gecko), the
 // code list at the address gc.txt names (default 0x800022A8), gc.txt's pokes, and a branch to the handler where
@@ -277,6 +278,7 @@ bool WriteCodeList() {
         push(0xF0000000u);
         push(0);
     }
+    BrawlDirtyMemory::Mark(g_listStart,list.size());
     std::memcpy(Memory::GetPointer(g_listStart, list.size()), list.data(), list.size());
     return g_cheatProblem.empty();
 }

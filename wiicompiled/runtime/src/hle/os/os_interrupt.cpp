@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 // Interrupt masking/dispatch plus the EXI/IPC hardware stubs that hang off it.
 
 #include <atomic>
@@ -98,6 +99,7 @@ extern "C" uint32_t OS____InterruptInit_HLE(uint32_t r3, uint32_t r4, uint32_t r
         // Initialize interrupt vector table pointer and clear the table (0x20 entries).
         ::Memory::Write32(kInterruptHandlerTablePtrAddr, kInterruptHandlerTableAddr);
         if (auto* table = ::Memory::GetPointer(kInterruptHandlerTableAddr, kInterruptHandlerTableBytes)) {
+            BrawlDirtyMemory::Mark(kInterruptHandlerTableAddr,kInterruptHandlerTableBytes);
             std::memset(table, 0, kInterruptHandlerTableBytes);
         } else {
             for (size_t offset = 0; offset < kInterruptHandlerTableBytes; offset += 4) {

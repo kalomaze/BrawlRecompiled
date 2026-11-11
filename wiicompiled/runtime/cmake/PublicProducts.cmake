@@ -72,6 +72,15 @@ function(mkw_configure_translated_target target)
 endfunction()
 
 add_library(mkw_runtime_common OBJECT ${SOURCES})
+# Validation branch: use the existing client's GekkoNet implementation.
+set(BRAWL_GEKKONET_SOURCE "" CACHE PATH "External GekkoLib source for rollback validation")
+if(NOT EXISTS "${BRAWL_GEKKONET_SOURCE}/CMakeLists.txt")
+    message(FATAL_ERROR "Set BRAWL_GEKKONET_SOURCE to the validation client's GekkoLib checkout")
+endif()
+set(NO_ASIO_BUILD ON CACHE BOOL "Use application transport" FORCE)
+add_subdirectory("${BRAWL_GEKKONET_SOURCE}" "${CMAKE_CURRENT_BINARY_DIR}/gekkonet")
+target_include_directories(GekkoNet PRIVATE "${MKW_RUNTIME_SOURCE_DIR}/third_party/gekkonet_compat")
+target_link_libraries(mkw_runtime_common PRIVATE GekkoNet)
 mkw_configure_object_target(mkw_runtime_common)
 target_compile_features(mkw_runtime_common PRIVATE cxx_std_20)
 target_compile_definitions(mkw_runtime_common PRIVATE
@@ -167,6 +176,7 @@ target_precompile_headers(mkw_base_shared PRIVATE "${MKW_RUNTIME_SOURCE_DIR}/inc
 
 
 function(mkw_configure_product target)
+    target_link_libraries(${target} PRIVATE GekkoNet)
     target_sources(${target} PRIVATE $<TARGET_OBJECTS:mkw_runtime_common>)
     # Startup CPU check. Must stay a separate object library so it keeps the
     # plain baseline ISA independently of the selected product instruction floor.

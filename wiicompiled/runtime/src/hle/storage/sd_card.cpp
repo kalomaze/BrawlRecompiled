@@ -30,6 +30,10 @@ extern "C" {
 #endif
 
 #include <algorithm>
+#include <array>
+#include <cstdlib>
+#include <cstring>
+#include <stdexcept>
 #include <chrono>
 #include <cstdio>
 #include <ctime>
@@ -57,6 +61,8 @@ std::mutex g_mutex;
 FILE* g_image = nullptr;
 uint64_t g_size = 0;
 bool g_tried = false;
+bool g_volatileWrites = false;
+std::map<uint64_t, std::array<unsigned char, kSector>> g_writeOverlay;
 fs::path g_imagePath;
 fs::path g_folder;  // empty: a plain image, nothing to sync back
 
@@ -565,6 +571,8 @@ void SyncBack(const fs::path& relative, const Manifest& built, int& copied) {
 bool OpenLocked() {
     if (g_tried) return g_image != nullptr;
     g_tried = true;
+    const char* volatileWrites = std::getenv("BRAWL_SD_VOLATILE_WRITES");
+    g_volatileWrites = volatileWrites && std::strcmp(volatileWrites, "1") == 0;
     // Online (deterministic mode) a vanilla game has no card at all, so an empty SD folder on one player's PC and none
     // on another's can't make their games differ.
     if (RuntimeConfigFile::ModsVanilla() || (DetClock::Enabled() && Gecko::BuildIdentity() == "vanilla")) {
@@ -574,6 +582,7 @@ bool OpenLocked() {
     const fs::path userData = RuntimeConfigFile::ApplicationDataDirectory();
     std::error_code ec;
     if (fs::is_directory(userData / "SD", ec)) {
+        if (g_volatileWrites) throw std::runtime_error("Volatile SD writes require an existing sd.raw image, not an SD folder");
         g_folder = userData / "SD";
         g_imagePath = userData / "Cache" / "sd_card.raw";
         fs::remove(fs::path(g_imagePath).concat(".fat32.manifest"), ec);  // a full-copy card from before 0.5.1: rebuilt
@@ -597,7 +606,8 @@ bool OpenLocked() {
     } else {
         return false;
     }
-    g_image = OpenFile(g_imagePath, "r+b");
+    g_image = OpenFile(g_imagePath, g_volatileWrites ? "rb" : "r+b");
+    if (g_volatileWrites) RT_LOGF(RT_TAG_NAND, "[sd] per-client volatile writes; base image is read-only\n");
     if (!g_image) {
         RT_LOGF(RT_TAG_NAND, "[sd] cannot open '%s'\n", Utf8(g_imagePath).c_str());
         return false;
@@ -656,12 +666,39 @@ uint64_t SizeBytes() {
 
 bool Read(uint64_t offset, void* destination, size_t length) {
     std::lock_guard<std::mutex> lock(g_mutex);
-    return OpenLocked() && offset + length <= g_size && ReadCard(g_image, offset, destination, length);
+    if (!OpenLocked() || offset > g_size || length > g_size - offset ||
+        !ReadCard(g_image, offset, destination, length)) return false;
+    if (g_volatileWrites && length) {
+        const uint64_t end = offset + length;
+        for (auto it = g_writeOverlay.lower_bound(offset / kSector);
+             it != g_writeOverlay.end() && it->first * kSector < end; ++it) {
+            const uint64_t begin = std::max(offset, it->first * kSector);
+            const uint64_t stop = std::min(end, (it->first + 1) * kSector);
+            std::memcpy(static_cast<unsigned char*>(destination) + begin - offset,
+                        it->second.data() + begin - it->first * kSector, stop - begin);
+        }
+    }
+    return true;
 }
 
 bool Write(uint64_t offset, const void* source, size_t length) {
     std::lock_guard<std::mutex> lock(g_mutex);
-    return OpenLocked() && offset + length <= g_size && WriteCard(g_image, offset, source, length);
+    if (!OpenLocked() || offset > g_size || length > g_size - offset) return false;
+    if (!g_volatileWrites) return WriteCard(g_image, offset, source, length);
+    const auto* bytes = static_cast<const unsigned char*>(source);
+    while (length) {
+        const uint64_t sector = offset / kSector;
+        auto it = g_writeOverlay.find(sector);
+        if (it == g_writeOverlay.end()) {
+            std::array<unsigned char, kSector> block;
+            if (!ReadCard(g_image, sector * kSector, block.data(), block.size())) return false;
+            it = g_writeOverlay.emplace(sector, block).first;
+        }
+        const size_t count = std::min(length, static_cast<size_t>(kSector - offset % kSector));
+        std::memcpy(it->second.data() + offset % kSector, bytes, count);
+        offset += count; bytes += count; length -= count;
+    }
+    return true;
 }
 
 void Shutdown() {
@@ -669,6 +706,7 @@ void Shutdown() {
     if (!g_image) return;
     std::fclose(g_image);
     g_image = nullptr;
+    g_writeOverlay.clear();
     if (g_folder.empty()) return;
     g_fatfsDisk = OpenFile(g_imagePath, "r+b");
     if (!g_fatfsDisk) return;
