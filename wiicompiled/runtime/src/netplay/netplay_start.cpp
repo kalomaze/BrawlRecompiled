@@ -121,12 +121,26 @@ bool Restart(const NetplayLobby::Plan& plan) {
     std::error_code ec;
     // A fresh NAND: the runtime's standard seeds (written at boot) plus the host's files.
     std::filesystem::remove_all(SessionNand(), ec);
+    if (ec) {
+        RT_LOGF(RT_TAG_RUNTIME, "netplay: could not clear the session NAND: %s\n", ec.message().c_str());
+        return false;
+    }
     std::filesystem::create_directories(SessionNand(), ec);
+    if (ec) {
+        RT_LOGF(RT_TAG_RUNTIME, "netplay: could not create the session NAND: %s\n", ec.message().c_str());
+        return false;
+    }
     for (const auto& [path, bytes] : plan.nandFiles) {
         const auto target = SessionNand() / std::filesystem::u8path(path);
         std::filesystem::create_directories(target.parent_path(), ec);
+        if (ec) {
+            RT_LOGF(RT_TAG_RUNTIME, "netplay: could not create the parent directory for %s: %s\n",
+                    path.c_str(), ec.message().c_str());
+            return false;
+        }
         std::ofstream out(target, std::ios::binary | std::ios::trunc);
         out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        out.close();  // Small writes may not reach the filesystem until close flushes the buffer.
         if (!out) {
             RT_LOGF(RT_TAG_RUNTIME, "netplay: could not write %s\n", path.c_str());
             return false;
