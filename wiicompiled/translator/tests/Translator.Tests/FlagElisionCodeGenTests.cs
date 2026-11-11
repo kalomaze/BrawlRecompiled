@@ -575,14 +575,14 @@ public class FlagElisionCodeGenTests
         });
 
     [Fact]
-    public void LinkRegisterStoreIsElidedForACalleeThatNeverReadsLr()
+    public void LinkRegisterStoreIsKeptForRuntimePatchesEvenWhenOriginalCalleeNeverReadsLr()
     {
         var code = Emit(
             CallWithLinkRegister("leaf_caller", 0x80002000u),
             guestAbiContracts: new Dictionary<uint, GuestAbiContract> { [0x80002000u] = Contract() });
 
         Assert.Contains("InvokeDirectCpu<0x80002000u>(ctx);", code, StringComparison.Ordinal);
-        Assert.DoesNotContain("ctx->lr = ", code, StringComparison.Ordinal);
+        Assert.Contains("ctx->lr = 2147487760;", code, StringComparison.Ordinal);
     }
 
     [Fact]
