@@ -103,7 +103,6 @@ struct Context {
     void* savedStackPointer = nullptr;
     void* stack = nullptr;
     std::size_t stackSize = 0;
-    bool arenaStack = false;  // Android: carved from the host thread's stack, recycled not unmapped
 };
 
 // Guest scheduling is confined to the initialized main host thread. Keeping
@@ -129,22 +128,24 @@ struct StackArena {
 StackArena g_arena;
 constexpr std::size_t kArenaSkipBytes = 2u * 1024 * 1024;
 
-void InitializeStackArena()
+bool InitializeStackArena()
 {
+    g_arena = {};
     pthread_attr_t attr;
     if (pthread_getattr_np(pthread_self(), &attr) != 0) {
-        return;
+        return false;
     }
     void* base = nullptr;
     std::size_t size = 0;
-    pthread_attr_getstack(&attr, &base, &size);
+    const int result = pthread_attr_getstack(&attr, &base, &size);
     pthread_attr_destroy(&attr);
-    if (size < 16u * 1024 * 1024) {
-        return;  // a small thread stack: fall back to separate mappings
+    if (result != 0 || base == nullptr || size < 16u * 1024 * 1024) {
+        return false;
     }
     const uintptr_t low = reinterpret_cast<uintptr_t>(base);
     g_arena.next = low + kArenaSkipBytes;
     g_arena.limit = low + size / 2;
+    return true;
 }
 
 void* AllocateArenaStack(std::size_t totalSize)
@@ -156,7 +157,7 @@ void* AllocateArenaStack(std::size_t totalSize)
             return stack;
         }
     }
-    if (g_arena.next == 0 || g_arena.next + totalSize > g_arena.limit) {
+    if (g_arena.next == 0 || totalSize > g_arena.limit - g_arena.next) {
         return nullptr;
     }
     void* stack = reinterpret_cast<void*>(g_arena.next);
@@ -168,12 +169,15 @@ void* AllocateArenaStack(std::size_t totalSize)
 
 bool InitializeScheduler(Handle* scheduler)
 {
+#if defined(__ANDROID__)
+    if (!InitializeStackArena()) {
+        *scheduler = nullptr;
+        return false;
+    }
+#endif
     auto* context = new Context();
     g_current = context;
     *scheduler = context;
-#if defined(__ANDROID__)
-    InitializeStackArena();
-#endif
     return true;
 }
 
@@ -198,21 +202,26 @@ Handle Create(std::size_t stackSize, Entry entry, void* argument)
     auto* context = new Context();
 #if defined(__ANDROID__)
     context->stack = AllocateArenaStack(totalSize);
-    context->arenaStack = context->stack != nullptr;
-#endif
+    // Separate mappings can violate ART's JNI stack checks.
     if (!context->stack) {
-        context->stack = mmap(nullptr, totalSize, PROT_READ | PROT_WRITE,
-                              MAP_ANON | MAP_PRIVATE, -1, 0);
-        if (context->stack == MAP_FAILED) {
-            delete context;
-            return nullptr;
-        }
+        delete context;
+        return nullptr;
     }
+#else
+    context->stack = mmap(nullptr, totalSize, PROT_READ | PROT_WRITE,
+                          MAP_ANON | MAP_PRIVATE, -1, 0);
+    if (context->stack == MAP_FAILED) {
+        delete context;
+        return nullptr;
+    }
+#endif
     // Fault on stack overflow instead of corrupting the preceding mapping.
     if (mprotect(context->stack, guardSize, PROT_NONE) != 0) {
-        if (!context->arenaStack) {
-            munmap(context->stack, totalSize);
-        }
+#if defined(__ANDROID__)
+        g_arena.freed.emplace_back(context->stack, totalSize);
+#else
+        munmap(context->stack, totalSize);
+#endif
         delete context;
         return nullptr;
     }
@@ -231,14 +240,13 @@ void Destroy(Handle context)
     }
     if (nativeContext->stack) {
 #if defined(__ANDROID__)
-        if (nativeContext->arenaStack) {
-            // Arena stacks are part of the host thread's stack: make the guard page ordinary
-            // memory again and keep the block for the next fiber.
-            mprotect(nativeContext->stack, static_cast<std::size_t>(getpagesize()), PROT_READ | PROT_WRITE);
+        // Arena stacks belong to the host thread, not to a separate mapping.
+        if (mprotect(nativeContext->stack, static_cast<std::size_t>(getpagesize()), PROT_READ | PROT_WRITE) == 0) {
             g_arena.freed.emplace_back(nativeContext->stack, nativeContext->stackSize);
-        } else
-#endif
+        }
+#else
         munmap(nativeContext->stack, nativeContext->stackSize);
+#endif
     }
     delete nativeContext;
 }
