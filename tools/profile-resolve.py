@@ -1,4 +1,4 @@
-# Resolve profile_stacks.txt (written by NSMBW_PROFILE runs, in the game's working dir) to function names.
+# Resolve profile_stacks.txt (written by BRAWL_PROFILE runs, in the game's working dir) to function names.
 # Usage: python tools\profile-resolve.py <profile_stacks.txt> [exe]   -> self and inclusive % per host function.
 import bisect, collections, subprocess, sys
 

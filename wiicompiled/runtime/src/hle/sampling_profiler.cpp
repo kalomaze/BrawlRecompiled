@@ -1,4 +1,4 @@
-// NSMBW_PROFILE=1: samples the game thread's instruction pointer every millisecond and logs the hottest engine
+// BRAWL_PROFILE=all: samples process threads every 2 ms and logs the hottest engine
 // addresses with each NSMBW_LOG_FPS window. Resolve them with llvm-symbolizer --obj=engine_usa.dll 0x<offset>.
 #include "sampling_profiler.h"
 
@@ -30,7 +30,10 @@ std::unordered_map<uint32_t, std::unordered_map<uint64_t, uint32_t>> g_hits;
 uint32_t g_gameThread = 0;
 
 bool Enabled() {
-    static const bool on = std::getenv("NSMBW_PROFILE") != nullptr;
+    static const bool on = [] {
+        const char* value = std::getenv("BRAWL_PROFILE");
+        return value != nullptr && std::strcmp(value, "all") == 0;
+    }();
     return on;
 }
 

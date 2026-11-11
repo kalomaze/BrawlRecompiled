@@ -1,5 +1,6 @@
 #pragma once
 
-// NSMBW_PROFILE=1 sampling of the game thread (sampling_profiler.cpp). Both are no-ops without the variable.
+// BRAWL_PROFILE=all samples process threads; reports accompany NSMBW_LOG_FPS windows.
+// Mutually exclusive with the timed game-thread sampler in guest_profiler.cpp.
 void SamplingProfilerAttachCurrentThread();
 void SamplingProfilerReport();
