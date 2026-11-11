@@ -11,6 +11,8 @@
 // prototypes establish a safe abstraction.
 namespace RuntimePlatform {
 
+// No executable path is exposed on Android, where the game is a shared library.
+std::optional<std::filesystem::path> ExecutablePath() noexcept;
 std::optional<std::filesystem::path> ExecutableDirectory() noexcept;
 
 // Returns the platform's conventional per-user application-data directory.

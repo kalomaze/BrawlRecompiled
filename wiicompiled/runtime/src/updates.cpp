@@ -5,6 +5,7 @@
 #include "brawl_version.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
+#include "platform/host_platform.h"
 
 #include <atomic>
 #include <cstdio>
@@ -18,8 +19,6 @@
 
 #if defined(_WIN32)
 #include <windows.h>
-#else
-#include <unistd.h>
 #endif
 
 namespace Updates {
@@ -31,21 +30,11 @@ std::mutex g_mutex;
 std::string g_newer;
 std::once_flag g_started;
 
-fs::path ExePath() {
-#if defined(_WIN32)
-    wchar_t exe[MAX_PATH] = {};
-    GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    return fs::path(exe);
-#else
-    char exe[4096] = {};
-    const ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-    return n > 0 ? fs::path(std::string(exe, static_cast<size_t>(n))) : fs::path();
-#endif
-}
-
 // The launcher beside engine/, in a packaged install; empty in the dev tree (Play/).
 fs::path Launcher() {
-    const fs::path engine = ExePath().parent_path();
+    const auto directory = RuntimePlatform::ExecutableDirectory();
+    if (!directory) return {};
+    const fs::path& engine = *directory;
     if (engine.filename() != "engine") return {};
 #if defined(_WIN32)
     const fs::path launcher = engine.parent_path() / "Brawl Recompiled.exe";

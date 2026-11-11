@@ -19,7 +19,7 @@
 
 namespace RuntimePlatform {
 
-std::optional<std::filesystem::path> ExecutableDirectory() noexcept {
+std::optional<std::filesystem::path> ExecutablePath() noexcept {
 #if defined(_WIN32)
     std::wstring buffer(MAX_PATH, L'\0');
     for (;;) {
@@ -29,7 +29,7 @@ std::optional<std::filesystem::path> ExecutableDirectory() noexcept {
         }
         if (length < buffer.size() - 1) {
             buffer.resize(length);
-            return std::filesystem::path(buffer).parent_path();
+            return std::filesystem::path(buffer);
         }
         buffer.resize(buffer.size() * 2);
     }
@@ -45,15 +45,9 @@ std::optional<std::filesystem::path> ExecutableDirectory() noexcept {
     path.resize(std::char_traits<char>::length(path.c_str()));
     std::error_code ec;
     const auto resolved = std::filesystem::weakly_canonical(path, ec);
-    return (ec ? std::filesystem::path(path) : resolved).parent_path();
+    return ec ? std::filesystem::path(path) : resolved;
 #elif defined(__ANDROID__)
-    // The game is a library inside an APK, so there is no executable directory. The app unpacks
-    // the files a desktop build keeps beside its executable (DSP ROM, pipeline cache, Wii
-    // bootstrap NAND, CA bundle) and names that directory before SDL starts the game.
-    if (const char* directory = std::getenv("WIICOMPILED_RUNTIME_DIR"); directory && *directory) {
-        return std::filesystem::path(directory);
-    }
-    return std::nullopt;
+    return std::nullopt;  // The game is a library inside an APK.
 #elif defined(__linux__)
     // readlink does not NUL-terminate and may truncate; grow until the path fits.
     std::string buffer(256, '\0');
@@ -64,11 +58,26 @@ std::optional<std::filesystem::path> ExecutableDirectory() noexcept {
         }
         if (static_cast<size_t>(length) < buffer.size()) {
             buffer.resize(static_cast<size_t>(length));
-            return std::filesystem::path(buffer).parent_path();
+            return std::filesystem::path(buffer);
         }
         buffer.resize(buffer.size() * 2);
     }
 #else
+    return std::nullopt;
+#endif
+}
+
+std::optional<std::filesystem::path> ExecutableDirectory() noexcept {
+#if defined(__ANDROID__)
+    // The game is a library inside an APK, so there is no executable directory. The app unpacks
+    // the files a desktop build keeps beside its executable (DSP ROM, pipeline cache, Wii
+    // bootstrap NAND, CA bundle) and names that directory before SDL starts the game.
+    if (const char* directory = std::getenv("WIICOMPILED_RUNTIME_DIR"); directory && *directory) {
+        return std::filesystem::path(directory);
+    }
+    return std::nullopt;
+#else
+    if (const auto executable = ExecutablePath()) return executable->parent_path();
     return std::nullopt;
 #endif
 }

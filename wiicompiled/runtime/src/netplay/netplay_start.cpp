@@ -4,7 +4,10 @@
 #include "nand_path.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
+#include "platform/host_platform.h"
 
+#include <cerrno>
+#include <cstring>
 #include <chrono>
 #include <cstdlib>
 #include <ctime>
@@ -72,18 +75,24 @@ void KeepSessionSave(const char* what) {
 }
 
 [[noreturn]] void RestartProcess() {
+#if !defined(__ANDROID__)
+    const auto exe = RuntimePlatform::ExecutablePath();
+    if (!exe) {
+        RT_LOGF(RT_TAG_RUNTIME, "netplay: could not resolve the executable for restart\n");
+        std::_Exit(EXIT_FAILURE);
+    }
+#endif
 #if defined(_WIN32)
-    wchar_t exe[MAX_PATH] = {};
-    GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    std::wstring command = L"\"" + std::wstring(exe) + L"\"";
+    std::wstring command = L"\"" + exe->native() + L"\"";
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
-    if (CreateProcessW(exe, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+    if (CreateProcessW(exe->c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
     } else {
         RT_LOGF(RT_TAG_RUNTIME, "netplay: could not start the game again (error %lu)\n", GetLastError());
+        std::_Exit(EXIT_FAILURE);
     }
     TerminateProcess(GetCurrentProcess(), 0);
 #elif defined(__ANDROID__)
@@ -92,19 +101,16 @@ void KeepSessionSave(const char* what) {
         std::_Exit(EXIT_FAILURE);
     }
 #else
-    // Linux: the same executable again, in place of this process, with the console's own output back and none of
+    // POSIX: the same executable again, in place of this process, with the console's own output back and none of
     // this process's other descriptors (the guest RAM, sockets, the window) carried over.
     RuntimeShutdownProcessTranscript();
     for (int fd = 3; fd < 4096; ++fd) {
         fcntl(fd, F_SETFD, FD_CLOEXEC);
     }
-    char exe[4096] = {};
-    const ssize_t length = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-    if (length > 0) {
-        char* argv[] = {exe, nullptr};
-        execv(exe, argv);
-    }
-    RT_LOGF(RT_TAG_RUNTIME, "netplay: could not start the game again\n");
+    char* argv[] = {const_cast<char*>(exe->c_str()), nullptr};
+    execv(exe->c_str(), argv);
+    RT_LOGF(RT_TAG_RUNTIME, "netplay: could not start the game again: %s\n", std::strerror(errno));
+    std::_Exit(EXIT_FAILURE);
 #endif
     std::_Exit(0);
 }
