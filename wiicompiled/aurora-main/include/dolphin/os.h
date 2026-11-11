@@ -126,10 +126,6 @@ void __OSPSInit(void);
 void __OSFPRInit(void);
 u32 __OSGetDIConfig(void);
 
-#if 0
-void OSDefaultExceptionHandler(__OSException exception, OSContext* context);
-#endif
-
 typedef struct OSCalendarTime {
     /* 0x00 */ int sec;
     /* 0x04 */ int min;

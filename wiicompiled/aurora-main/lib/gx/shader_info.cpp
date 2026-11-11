@@ -19,9 +19,6 @@
 #include <aurora/profiling.hpp>
 
 namespace aurora::gx {
-// TODO: remove, just for testing
-bool enableLodBias = true;
-
 namespace {
 Module Log("aurora::gx");
 
@@ -121,7 +118,7 @@ Vec4<float> texture_size_bias(const gfx::TextureBind& tex) {
   auto width = static_cast<float>(tex.texObj.width());
   auto height = static_cast<float>(tex.texObj.height());
   const auto vpBias =
-      enableLodBias && tex.ref && tex.ref->hasArbitraryMips
+      tex.ref && tex.ref->hasArbitraryMips
           ? log2(std::min(g_gxState.renderViewport.width / std::max(g_gxState.logicalViewport.width, 1.f),
                           g_gxState.renderViewport.height / std::max(g_gxState.logicalViewport.height, 1.f)))
           : 0.f;

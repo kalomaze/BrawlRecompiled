@@ -54,6 +54,20 @@ std::optional<std::filesystem::path> ExecutableDirectory() noexcept {
         return std::filesystem::path(directory);
     }
     return std::nullopt;
+#elif defined(__linux__)
+    // readlink does not NUL-terminate and may truncate; grow until the path fits.
+    std::string buffer(256, '\0');
+    for (;;) {
+        const ssize_t length = readlink("/proc/self/exe", buffer.data(), buffer.size());
+        if (length < 0) {
+            return std::nullopt;
+        }
+        if (static_cast<size_t>(length) < buffer.size()) {
+            buffer.resize(static_cast<size_t>(length));
+            return std::filesystem::path(buffer).parent_path();
+        }
+        buffer.resize(buffer.size() * 2);
+    }
 #else
     return std::nullopt;
 #endif
@@ -80,6 +94,13 @@ std::filesystem::path ApplicationDataDirectory(std::string_view applicationName)
     (void)applicationName;
     if (const char* directory = std::getenv("WIICOMPILED_DATA_DIR"); directory && *directory) {
         return std::filesystem::path(directory);
+    }
+#else
+    if (const char* xdgDataHome = std::getenv("XDG_DATA_HOME"); xdgDataHome && *xdgDataHome) {
+        return std::filesystem::path(xdgDataHome) / applicationName;
+    }
+    if (const char* home = std::getenv("HOME"); home && *home) {
+        return std::filesystem::path(home) / ".local" / "share" / applicationName;
     }
 #endif
     return std::filesystem::current_path() / applicationName;

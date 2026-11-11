@@ -304,24 +304,6 @@ public:
    */
   ECardResult setStatus(uint32_t fileNo, const CardStat& stat) override;
 
-#if 0 // TODO: Async-friendly implementations
-    /**
-     * @brief Copies a file from the current Card instance to a specified Card instance
-     * @param fh The file to copy
-     * @param dest The destination Card instance
-     * @return True if successful, false otherwise
-     */
-    bool copyFileTo(FileHandle& fh, CardRawFile& dest);
-
-    /**
-     * @brief moveFileTo
-     * @param fh
-     * @param dest
-     * @return
-     */
-    bool moveFileTo(FileHandle& fh, CardRawFile& dest);
-#endif
-
   /**
    * @brief Sets the current game, if not null any openFile requests will only return files that match this game
    *

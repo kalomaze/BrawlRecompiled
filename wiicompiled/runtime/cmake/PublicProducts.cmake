@@ -28,7 +28,8 @@ if(MKW_PLATFORM_MACOS)
 endif()
 
 function(mkw_apply_common_compile_options target)
-    target_compile_options(${target} PRIVATE -O3 -ffast-math -w -pipe)
+    # Runtime code relies on NaN/Inf checks; retain standard floating-point semantics.
+    target_compile_options(${target} PRIVATE -O3 -pipe)
 endfunction()
 
 function(mkw_apply_translated_compile_options target)
@@ -146,7 +147,6 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64)$")
     add_library(mkw_cpu_baseline OBJECT "${MKW_CPU_BASELINE_SOURCE}")
     target_compile_features(mkw_cpu_baseline PRIVATE cxx_std_17)
     set_target_properties(mkw_cpu_baseline PROPERTIES UNITY_BUILD OFF)
-    target_compile_options(mkw_cpu_baseline PRIVATE -w)
     if(MKW_HOST_ISA STREQUAL "v2")
         target_compile_definitions(mkw_cpu_baseline PRIVATE MKW_HOST_ISA_V2)
     endif()

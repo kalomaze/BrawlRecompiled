@@ -126,17 +126,17 @@ target_compile_features(mkw_toml11 INTERFACE cxx_std_17)
 # are disabled to keep the library portable and independent of the runtime's
 # x86-64-v3 policy; the static linker retains only the algorithms we reference.
 #
-# Crypto++ is by far the most expensive vendored library to compile (~150
-# translation units), and under the shipped fixed toolchain it is bit-for-bit
-# identical for every user, so the prebuilt package harvests its archive and
-# this block is skipped entirely in that mode (see cmake/NativePrebuilt.cmake).
+# Build the dependency closure of SHA-1, sect233r1 ECDSA and AutoSeededRandomPool.
+# Keep upstream sources intact, but do not compile unrelated ciphers and hashes.
+# This list also feeds native prebuilt exports; SIMD/assembly remain disabled.
 if(NOT MKW_NATIVE_PREBUILT_DIR)
-    file(GLOB MKW_CRYPTOPP_SOURCES CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_LIST_DIR}/third_party/cryptopp/*.cpp")
-    list(FILTER MKW_CRYPTOPP_SOURCES EXCLUDE REGEX
-        "/(adhoc|bench[123]|datatest|dlltest|fipsalgt|fipstest|pch|regtest[1234]|simple|test|validat[0-9]+)\\.cpp$")
-    list(FILTER MKW_CRYPTOPP_SOURCES EXCLUDE REGEX
-        "(_avx|_ppc|_simd|_sse)\\.cpp$")
+    set(MKW_CRYPTOPP_SOURCES
+        algparam.cpp allocate.cpp asn.cpp basecode.cpp cpu.cpp cryptlib.cpp dll.cpp
+        ec2n.cpp ecp.cpp filters.cpp fips140.cpp gf2n.cpp gfpcrypt.cpp hex.cpp
+        hmac.cpp hrtimer.cpp integer.cpp iterhash.cpp misc.cpp modes.cpp mqueue.cpp
+        nbtheory.cpp oaep.cpp osrng.cpp primetab.cpp pubkey.cpp queue.cpp randpool.cpp
+        rdtables.cpp rijndael.cpp rng.cpp sha.cpp)
+    list(TRANSFORM MKW_CRYPTOPP_SOURCES PREPEND "${CMAKE_CURRENT_LIST_DIR}/third_party/cryptopp/")
     add_library(mkw_cryptopp STATIC ${MKW_CRYPTOPP_SOURCES})
     add_library(mkw::cryptopp ALIAS mkw_cryptopp)
     target_include_directories(mkw_cryptopp SYSTEM PUBLIC third_party)
@@ -294,7 +294,7 @@ else()
     foreach(t ${AURORA_TARGETS})
         if(TARGET ${t})
             set_target_properties(${t} PROPERTIES UNITY_BUILD OFF)
-            target_compile_options(${t} PRIVATE -O3 -ffast-math -w -pipe)
+            target_compile_options(${t} PRIVATE -O3 -pipe)
             if(MKW_PLATFORM_WINDOWS)
                 target_include_directories(${t} PRIVATE ${MKW_DX_STUB_DIR})
             endif()
@@ -304,20 +304,6 @@ else()
             target_compile_definitions(${t} PRIVATE NOMINMAX)
         endif()
     endforeach()
-
-    # Frame interpolation filters guest NaN/Inf matrices out of a std::sort
-    # comparator, which makes its std::isfinite guards load-bearing for memory
-    # safety, not just match quality. -ffinite-math-only (part of -ffast-math
-    # above) folds those guards to constants and poisons NaN float arguments
-    # via nofpclass, so this one file opts back out of the finite-math
-    # assumption; the file #errors if built without this. Source-scoped
-    # COMPILE_OPTIONS append after the target options, so this overrides the
-    # target's -ffast-math for exactly this TU.
-    if(TARGET aurora_gx)
-        set_source_files_properties("${MKW_AURORA_DIR}/lib/gx/frame_interpolation.cpp"
-            TARGET_DIRECTORY aurora_gx
-            PROPERTIES COMPILE_OPTIONS "-fno-finite-math-only")
-    endif()
 
     if(MKW_NATIVE_PREBUILT_EXPORT_DIR)
         include("${CMAKE_CURRENT_LIST_DIR}/cmake/NativePrebuiltExport.cmake")
