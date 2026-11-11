@@ -34,12 +34,9 @@
 extern "C" {
 int g_spmDrawDump = 0;
 int g_spmSweepDump = 0;
-unsigned g_spmDrawIdx = 0;
-unsigned g_spmDrawLimit = ~0u;  // diagnostic: only the first N draws of each frame are rendered (env SPM_DRAW_LIMIT)  // set by spm_map_sweep for a couple of frames (env SPM_SWEEP_DUMP=<map>)
 int g_spmBBoxArmed = 0;
 unsigned g_spmAudit[8] = {};  // render audit for tools/sweep-spm-maps.py
 unsigned g_spmGameClear = 0;  // the game's own EFB clear colour (0xRRGGBB) while sweeping
-int g_spmCullOff = 0;
 }
 namespace aurora::gx {
 GXState::CopyTextureRef* find_copy_texture_for_texobj(const GXTexObj_& obj) noexcept;  // gx.cpp
@@ -911,11 +908,6 @@ static void handle_bp(u32 value, bool bigEndian) {
       g_gxState.cullMode = static_cast<GXCullMode>(hwCull);
       break;
     }
-    if (g_spmCullOff == 1) g_gxState.cullMode = GX_CULL_NONE;
-    if (g_spmCullOff == 3) {  // diagnostic: swap front/back culling
-      if (g_gxState.cullMode == GX_CULL_BACK) g_gxState.cullMode = GX_CULL_FRONT;
-      else if (g_gxState.cullMode == GX_CULL_FRONT) g_gxState.cullMode = GX_CULL_BACK;
-    }
     g_gxState.numIndStages = bp_get(value, 3, 16);
     mark_pipeline_state_dirty();
     break;
@@ -1082,17 +1074,8 @@ static void handle_bp(u32 value, bool bigEndian) {
 
   // Z mode (0x40)
   case 0x40: {
-    g_gxState.depthCompare = bp_get(value, 1, 0) != 0 && g_spmCullOff != 2;
+    g_gxState.depthCompare = bp_get(value, 1, 0) != 0;
     g_gxState.depthFunc = static_cast<GXCompare>(bp_get(value, 3, 1));
-    if (g_spmCullOff == 4) {  // diagnostic: invert the depth comparison direction
-      switch (g_gxState.depthFunc) {
-      case GX_LESS: g_gxState.depthFunc = GX_GREATER; break;
-      case GX_LEQUAL: g_gxState.depthFunc = GX_GEQUAL; break;
-      case GX_GREATER: g_gxState.depthFunc = GX_LESS; break;
-      case GX_GEQUAL: g_gxState.depthFunc = GX_LEQUAL; break;
-      default: break;
-      }
-    }
     g_gxState.depthUpdate = bp_get(value, 1, 4) != 0;
     mark_pipeline_state_dirty();
     break;
@@ -2331,7 +2314,7 @@ static const CachedPipelineState& resolve_pipeline_state(GXPrimitive prim, GXVtx
 }
 
 
-// SPM bring-up diagnostic: runtime sets g_spmDrawDump during the drawdump frame; g_spmCullOff forces GX_CULL_NONE.
+// SPM bring-up diagnostic: runtime sets g_spmDrawDump during the drawdump frame.
 static void spm_log_draw_extent(u8 prim, GXVtxFmt fmt, const u8* verts, u32 count, u32 vtxSize, bool be);
 static void spm_dump_draw(const char* path, u8 prim, u32 fmt, u32 count, u32 vtxSize, const u8* v, bool be) {
   static int n = 0;
@@ -2999,7 +2982,6 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
                                  HashType matrixTopologySignature,
                                  HashType geometrySignature, bool interpolationIdentityActive) {
   ZoneScoped;
-  if (g_spmDrawLimit != ~0u && g_spmDrawIdx++ >= g_spmDrawLimit) return;
   // GX_CULL_ALL rasterizes nothing on hardware - no color, no depth.
   if (g_gxState.cullMode == GX_CULL_ALL && prim != GX_LINES && prim != GX_LINESTRIP && prim != GX_POINTS)
       UNLIKELY {
