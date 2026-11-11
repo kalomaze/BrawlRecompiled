@@ -246,54 +246,23 @@ public sealed partial class CxxLinearCodeGenerator
         return string.Join(", ", parameters);
     }
 
-    private static string StateFreeCallArguments(GuestAbiContract contract, uint? callSiteLr = null)
+    private static string StateFreeCallArguments(
+        GuestAbiContract contract, uint? callSiteLr = null, RegisterResidency? residency = null)
     {
         var arguments = new List<string>();
         var gprInputs = StateFreeGprInputMask(contract);
         for (var gpr = 0; gpr < 32; ++gpr)
         {
             if ((gprInputs & (1u << gpr)) != 0)
-                arguments.Add($"ctx->gpr[{gpr}]");
+                arguments.Add(residency is null ? $"ctx->gpr[{gpr}]" : residency.Gpr(gpr, written: false));
         }
         for (var fpr = 0; fpr < 32; ++fpr)
             if (((contract.FprReadBeforeWriteMask | contract.FprPossibleWriteMask) & (1u << fpr)) != 0)
-                arguments.Add($"ctx->fpr[{fpr}]");
-        if (contract.CrReadBeforeWriteMask != 0 || contract.CrPossibleWriteMask != 0) arguments.Add("ctx->cr");
-        if (contract.ReadsXerBeforeWrite || contract.MayWriteXer) arguments.Add("ctx->xer");
-        if (contract.ReadsCtrBeforeWrite || contract.MayWriteCtr) arguments.Add("ctx->ctr");
-        if (contract.ReadsLrBeforeWrite || contract.MayWriteLr)
-            arguments.Add(callSiteLr.HasValue ? $"0x{callSiteLr.Value:X8}u" : "ctx->lr");
-        if (contract.ReadsFpscrBeforeWrite || contract.MayWriteFpscr) arguments.Add("ctx->fpscr");
-        for (var gqr = 0; gqr < 8; ++gqr)
-            if (((contract.GqrReadBeforeWriteMask | contract.GqrPossibleWriteMask) & (1 << gqr)) != 0)
-                arguments.Add($"ctx->gqr[{gqr}]");
-        for (var hid = 0; hid < 3; ++hid)
-            if (((contract.HidReadBeforeWriteMask | contract.HidPossibleWriteMask) & (1 << hid)) != 0)
-                arguments.Add($"ctx->hid{hid}");
-        return string.Join(", ", arguments);
-    }
-
-    // Resident marshalling: pass/receive the resident locals directly instead of naming ctx, which would
-    // force a full CpuContext spill/reload around every call even though residency already holds the
-    // values in host registers. The slow arm still flushes/reloads CpuContext; see EmitResidentStateFreeCall.
-
-    private static string StateFreeResidentCallArguments(
-        RegisterResidency residency, GuestAbiContract contract, uint? callSiteLr)
-    {
-        var arguments = new List<string>();
-        var gprInputs = StateFreeGprInputMask(contract);
-        for (var gpr = 0; gpr < 32; ++gpr)
-        {
-            if ((gprInputs & (1u << gpr)) != 0)
-                arguments.Add(residency.Gpr(gpr, written: false));
-        }
-        for (var fpr = 0; fpr < 32; ++fpr)
-            if (((contract.FprReadBeforeWriteMask | contract.FprPossibleWriteMask) & (1u << fpr)) != 0)
-                arguments.Add(residency.FprStorage(fpr, written: false));
+                arguments.Add(residency is null ? $"ctx->fpr[{fpr}]" : residency.FprStorage(fpr, written: false));
         if (contract.CrReadBeforeWriteMask != 0 || contract.CrPossibleWriteMask != 0)
-            arguments.Add(residency.Cr(written: false));
-        if (contract.ReadsXerBeforeWrite || contract.MayWriteXer) arguments.Add(residency.Xer(written: false));
-        if (contract.ReadsCtrBeforeWrite || contract.MayWriteCtr) arguments.Add(residency.Ctr(written: false));
+            arguments.Add(residency is null ? "ctx->cr" : residency.Cr(written: false));
+        if (contract.ReadsXerBeforeWrite || contract.MayWriteXer) arguments.Add(residency is null ? "ctx->xer" : residency.Xer(written: false));
+        if (contract.ReadsCtrBeforeWrite || contract.MayWriteCtr) arguments.Add(residency is null ? "ctx->ctr" : residency.Ctr(written: false));
         // LR, FPSCR, the GQRs and the HID registers are never localized, so they
         // keep their architectural spelling exactly as the ctx form uses.
         if (contract.ReadsLrBeforeWrite || contract.MayWriteLr)
@@ -377,7 +346,7 @@ public sealed partial class CxxLinearCodeGenerator
         AppendFlush(sb, pad, ResidencyBoundarySync.StateFreeResidentOuter);
         var inner = pad + "    ";
         sb.AppendLine($"{pad}if ({StateFreeAvailabilityCondition(address, stateFreeAbiContracts, stateFreeCallSymbols)}) {{");
-        var arguments = StateFreeResidentCallArguments(residency, contract, callSiteLr);
+        var arguments = StateFreeCallArguments(contract, callSiteLr, residency);
         if (StateFreeHasOutputs(contract))
         {
             // Uniquified by the call site's position in the translation unit,
