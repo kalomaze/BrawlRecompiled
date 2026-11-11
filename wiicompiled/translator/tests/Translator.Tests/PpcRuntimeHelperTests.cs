@@ -9,6 +9,44 @@ namespace Translator.Tests;
 public class PpcRuntimeHelperTests
 {
     [NativeFact]
+    public void PairedArithmeticUsesGuestNanBits()
+    {
+        const string harness = """
+            #include "ppc_runtime.h"
+            #include <iostream>
+            #include <cstdlib>
+            extern "C" void GX_HLE_FIFO_Write8(uint8_t) {}
+            extern "C" void GX_HLE_FIFO_Write16(uint16_t) {}
+            extern "C" void GX_HLE_FIFO_Write32(uint32_t) {}
+            extern "C" void GX_HLE_FIFO_WriteFloat(float) {}
+            static double pair(float x) { return PpcPackPairedInline(x, x); }
+            static void check(double value, uint32_t bits) {
+                const uint64_t expected = (uint64_t(bits) << 32) | bits;
+                if (PpcBitCastToU64Inline(value) != expected) {
+                    std::cerr << std::hex << PpcBitCastToU64Inline(value) << " != " << expected;
+                    std::abort();
+                }
+            }
+            int main() {
+                using Op = double (*)(double, double);
+                const Op ops[] = {PPC_PsMulInline, PPC_PsAddInline, PPC_PsSubInline, PPC_PsDivInline,
+                                  PPC_PsMulNoNiInline, PPC_PsAddNoNiInline, PPC_PsSubNoNiInline};
+                const double zero = pair(0.0f), inf = pair(std::numeric_limits<float>::infinity());
+                const double lhs[] = {zero, inf, inf, zero};
+                const double rhs[] = {inf, pair(-std::numeric_limits<float>::infinity()), inf, zero};
+                for (unsigned i = 0; i < sizeof(ops) / sizeof(ops[0]); ++i) {
+                    check(ops[i](lhs[i % 4], rhs[i % 4]), 0x7FC00000u);
+                    check(ops[i](pair(PpcBitCastToFloatInline(0xFFC12345u)),
+                                 pair(PpcBitCastToFloatInline(0x7F823456u))), 0xFFC12345u);
+                    check(ops[i](pair(2.0f), pair(PpcBitCastToFloatInline(0xFF823456u))), 0xFFC23456u);
+                }
+                std::cout << "ok";
+            }
+            """;
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness));
+    }
+
+    [NativeFact]
     public void ScalarFmaPreservesGuestNanPriorityAndSign()
     {
         const string harness = """

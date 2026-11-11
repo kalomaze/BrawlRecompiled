@@ -521,28 +521,9 @@ inline double PpcFnmsubsInline(double a, double c, double b)
 }
 
 #if defined(__aarch64__)
-// The two-operand NEON helpers below normalize exceptional results to the
-// existing x86 arithmetic path. FMA has a separate shared resolver because
-// neither host's instruction selection guarantees PowerPC NaN priority.
 inline uint64_t PpcPairNanLaneBitsInline(PpcPairVec value)
 {
     return vget_lane_u64(vreinterpret_u64_u32(vmvn_u32(vceq_f32(value, value))), 0);
-}
-
-inline PpcPairVec PpcQuietPairInline(PpcPairVec value)
-{
-    return vreinterpret_f32_u32(vorr_u32(vreinterpret_u32_f32(value), vdup_n_u32(0x00400000u)));
-}
-
-inline PpcPairVec PpcResolveNanLanesInline(PpcPairVec result, PpcPairVec op1, PpcPairVec op2)
-{
-    const uint32x2_t op1Nan = vmvn_u32(vceq_f32(op1, op1));
-    const uint32x2_t op2Nan = vmvn_u32(vceq_f32(op2, op2));
-    PpcPairVec replacement = vreinterpret_f32_u32(vdup_n_u32(0xFFC00000u));
-    replacement = vbsl_f32(op2Nan, PpcQuietPairInline(op2), replacement);
-    replacement = vbsl_f32(op1Nan, PpcQuietPairInline(op1), replacement);
-    const uint32x2_t resultNan = vmvn_u32(vceq_f32(result, result));
-    return vbsl_f32(resultNan, replacement, result);
 }
 
 #endif // defined(__aarch64__)
@@ -550,15 +531,18 @@ inline PpcPairVec PpcResolveNanLanesInline(PpcPairVec result, PpcPairVec op1, Pp
 #if defined(__x86_64__)
 inline uint64_t PpcPairNanLaneBitsInline(PpcPairVec value)
 {
-    return static_cast<uint64_t>(_mm_movemask_ps(_mm_cmpunord_ps(value, value)));
+    // Only the low two lanes represent guest values. In particular, the unused
+    // upper lanes of a division can be 0/0 without making the guest result NaN.
+    return static_cast<uint64_t>(_mm_movemask_ps(_mm_cmpunord_ps(value, value)) & 3);
 }
 #endif
 
-// PowerPC FMA selects NaNs in register order A, B, C even though it computes
-// A*C +/- B. Resolve exceptional lanes from the original operands: host FMA
-// encodings, compiler optimization, and libc otherwise choose different NaNs.
-inline PpcPairVec PpcResolveNanLanes3Inline(
-    PpcPairVec result, PpcPairVec a, PpcPairVec b, PpcPairVec c)
+// Select the first NaN in guest operand order, or positive canonical NaN for
+// an invalid operation without NaN inputs. Binary operations omit C; FMA passes
+// A, B, C even though it computes A*C +/- B. Host instructions and constant
+// folding can otherwise select different signs and payloads.
+inline PpcPairVec PpcResolveNanLanesInline(
+    PpcPairVec result, PpcPairVec a, PpcPairVec b, PpcPairVec c = {})
 {
     constexpr size_t lanes = sizeof(PpcPairVec) / sizeof(uint32_t);
     uint32_t r[lanes], x[lanes], y[lanes], z[lanes];
@@ -579,13 +563,13 @@ inline PpcPairVec PpcResolveNanLanes3Inline(
 inline PpcPairVec PpcMulPairInline(PpcPairVec lhs, PpcPairVec rhs)
 {
 #if defined(__x86_64__)
-    return _mm_mul_ps(lhs, rhs);
+    const PpcPairVec result = _mm_mul_ps(lhs, rhs);
 #elif defined(__aarch64__)
     const PpcPairVec result = vmul_f32(lhs, rhs);
+#endif
     if (PpcPairNanLaneBitsInline(result) != 0) [[unlikely]]
         return PpcResolveNanLanesInline(result, lhs, rhs);
     return result;
-#endif
 }
 
 inline double PPC_PsMulInline(double lhs, double rhs)
@@ -632,7 +616,7 @@ inline PpcPairVec PpcFmaddPairInline(PpcPairVec multiplicand, PpcPairVec multipl
     const PpcPairVec result = vfma_f32(addend, multiplicand, multiplier);
 #endif
     if (PpcPairNanLaneBitsInline(result) != 0) [[unlikely]]
-        return PpcResolveNanLanes3Inline(result, multiplicand, addend, multiplier);
+        return PpcResolveNanLanesInline(result, multiplicand, addend, multiplier);
     return result;
 }
 
@@ -646,7 +630,7 @@ inline PpcPairVec PpcFmsubPairInline(PpcPairVec multiplicand, PpcPairVec multipl
     const PpcPairVec result = vfma_f32(vneg_f32(subtractor), multiplicand, multiplier);
 #endif
     if (PpcPairNanLaneBitsInline(result) != 0) [[unlikely]]
-        return PpcResolveNanLanes3Inline(result, multiplicand, subtractor, multiplier);
+        return PpcResolveNanLanesInline(result, multiplicand, subtractor, multiplier);
     return result;
 }
 
@@ -792,37 +776,37 @@ inline double PPC_PsMerge11Inline(double aValue, double bValue)
 inline PpcPairVec PpcAddPairInline(PpcPairVec lhs, PpcPairVec rhs)
 {
 #if defined(__x86_64__)
-    return _mm_add_ps(lhs, rhs);
+    const PpcPairVec result = _mm_add_ps(lhs, rhs);
 #elif defined(__aarch64__)
     const PpcPairVec result = vadd_f32(lhs, rhs);
+#endif
     if (PpcPairNanLaneBitsInline(result) != 0) [[unlikely]]
         return PpcResolveNanLanesInline(result, lhs, rhs);
     return result;
-#endif
 }
 
 inline PpcPairVec PpcSubPairInline(PpcPairVec lhs, PpcPairVec rhs)
 {
 #if defined(__x86_64__)
-    return _mm_sub_ps(lhs, rhs);
+    const PpcPairVec result = _mm_sub_ps(lhs, rhs);
 #elif defined(__aarch64__)
     const PpcPairVec result = vsub_f32(lhs, rhs);
+#endif
     if (PpcPairNanLaneBitsInline(result) != 0) [[unlikely]]
         return PpcResolveNanLanesInline(result, lhs, rhs);
     return result;
-#endif
 }
 
 inline PpcPairVec PpcDivPairInline(PpcPairVec lhs, PpcPairVec rhs)
 {
 #if defined(__x86_64__)
-    return _mm_div_ps(lhs, rhs);
+    const PpcPairVec result = _mm_div_ps(lhs, rhs);
 #elif defined(__aarch64__)
     const PpcPairVec result = vdiv_f32(lhs, rhs);
+#endif
     if (PpcPairNanLaneBitsInline(result) != 0) [[unlikely]]
         return PpcResolveNanLanesInline(result, lhs, rhs);
     return result;
-#endif
 }
 
 inline double PPC_PsAddInline(double aValue, double bValue)
