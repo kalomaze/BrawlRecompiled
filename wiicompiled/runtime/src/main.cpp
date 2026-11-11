@@ -812,9 +812,9 @@ void ShowRuntimeFatalPopup(std::string_view category, std::string_view details) 
     if (g_fatalPopupShown.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
-    // Unattended runs (map sweeps, test scripts): the log has it; a dialog would only block the exit.
-    if (std::getenv("SPM_MAP_SWEEP_FILE") || std::getenv("WIICOMPILED_NO_POPUP")) {
-        RT_LOGF(RT_TAG_RUNTIME, "[spmsweep] fatal %.*s: %.*s\n", static_cast<int>(category.size()), category.data(),
+    // Unattended runs: the log has it; a dialog would only block the exit.
+    if (std::getenv("WIICOMPILED_NO_POPUP")) {
+        RT_LOGF(RT_TAG_RUNTIME, "fatal %.*s: %.*s\n", static_cast<int>(category.size()), category.data(),
                 static_cast<int>(details.size()), details.data());
         return;
     }
@@ -840,8 +840,7 @@ void ShowRuntimeFatalPopup(std::string_view category, std::string_view details) 
         ::MessageBoxA(nullptr, message.c_str(), "WiiCompiled - Fatal Error",
                       MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TASKMODAL);
 #else
-        // The shipped product is Windows-first. Keep non-Windows builds safe
-        // and retain the console diagnostic when no native dialog is available.
+        // Retain the console diagnostic when no native dialog is available.
         RT_LOGF(RT_TAG_RUNTIME, "fatal dialog: %s\n", message.c_str());
 #endif
     } catch (...) {

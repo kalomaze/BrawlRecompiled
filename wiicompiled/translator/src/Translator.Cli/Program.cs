@@ -150,11 +150,6 @@ return command switch
     _ => ShowHelp(command)
 };
 
-/// <summary>
-/// May the workspace's completed base translation be reused for the Code.pul about to build?
-/// Exit 0 = yes, 3 = no, anything else = error (also treat as no). Answering wrong in the permissive
-/// direction bakes vanilla code into a modded product, so every uncertainty exits non-zero.
-/// </summary>
 int RunEmitBuildShards(string[] argsTail)
 {
     var baseMetadata = OptionValue(argsTail, "--base-metadata") ?? Path.Combine(root, "generated", "base_translation_output.json");
