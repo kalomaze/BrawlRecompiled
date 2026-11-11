@@ -78,7 +78,12 @@ int main() {
         constexpr uint32_t address = 0x80001000u;
         auto* page = guestWritable + address;
         GuestFlat::RegisterExecutableRange(address, address + 0x1000u);
-        if (!GuestFlat::HandleAccessViolation(page, true)) {
+        if (GuestFlat::HandleAccessViolation(page, true, page) ||
+            GuestFlat::HandleAccessViolation(page, true, nullptr)) {
+            std::cerr << "invalid host instruction pointer passed write-guard recovery\n";
+            return 1;
+        }
+        if (!GuestFlat::HandleAccessViolation(page, true, reinterpret_cast<const void*>(&main))) {
             std::cerr << "permitted executable write was not recovered\n";
             return 1;
         }
@@ -87,20 +92,28 @@ int main() {
         GuestFlat::ReprotectExecutablePage(address);
         // Make the OS protection change fail, rather than mocking its return value.
         if (munmap(page, static_cast<size_t>(getpagesize())) != 0) return 1;
-        if (GuestFlat::HandleAccessViolation(page, true)) {
+        if (GuestFlat::HandleAccessViolation(page, true, reinterpret_cast<const void*>(&main))) {
             std::cerr << "failed protection recovery was reported as handled\n";
             return 1;
         }
     }
+    // Guest RAM is data, never native host instructions. Retrying an execution
+    // fault after granting read/write permission would fault forever.
+    auto* executionFault = guestWritable + 0x40000000u;
+    if (GuestFlat::HandleAccessViolation(executionFault, false, executionFault) ||
+        GuestFlat::HandleAccessViolation(executionFault, true, executionFault)) {
+        std::cerr << "native execution in guest RAM was reported as recovered\n";
+        return 1;
+    }
     // A past commit is not evidence that this fault can now be retried.
     auto* sparse = guestWritable + 0x30000000u;
-    if (!GuestFlat::HandleAccessViolation(sparse, true)) return 1;
+    if (!GuestFlat::HandleAccessViolation(sparse, true, reinterpret_cast<const void*>(&main))) return 1;
     *sparse = 0x5c;
     if (mprotect(sparse, 0x10000u, PROT_NONE) != 0) return 1;
-    if (!GuestFlat::HandleAccessViolation(sparse, true)) return 1;
+    if (!GuestFlat::HandleAccessViolation(sparse, true, reinterpret_cast<const void*>(&main))) return 1;
     *sparse = 0x7d;
     if (munmap(sparse, 0x10000u) != 0) return 1;
-    if (GuestFlat::HandleAccessViolation(sparse, true)) {
+    if (GuestFlat::HandleAccessViolation(sparse, true, reinterpret_cast<const void*>(&main))) {
         std::cerr << "a past commit concealed a failed recovery\n";
         return 1;
     }

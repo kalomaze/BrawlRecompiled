@@ -42,16 +42,14 @@
 #include <dbghelp.h>
 #else
 #include <signal.h>
-#if defined(__x86_64__)
-// Only the x86 POSIX fault path inspects ucontext_t to recover the page-fault
-// write bit. macOS exposes the signal-handler context through sys/ucontext.h;
-// avoid ucontext.h itself because its deprecated user-context APIs require
-// _XOPEN_SOURCE. The arm64 handler does not inspect a host context at all.
+// macOS exposes signal contexts without enabling the deprecated context APIs.
 #if defined(__APPLE__)
 #include <sys/ucontext.h>
+#if defined(__aarch64__)
+#include <mach/arm/thread_status.h>
+#endif
 #else
 #include <ucontext.h>
-#endif
 #endif
 #include <unistd.h>
 #endif
@@ -1071,7 +1069,8 @@ LONG CALLBACK SehLogger(EXCEPTION_POINTERS* info) {
         info->ExceptionRecord->NumberParameters >= 2 &&
         GuestFlat::HandleAccessViolation(
             reinterpret_cast<void*>(info->ExceptionRecord->ExceptionInformation[1]),
-            info->ExceptionRecord->ExceptionInformation[0] != 0)) {
+            info->ExceptionRecord->ExceptionInformation[0] == 1,
+            info->ExceptionRecord->ExceptionAddress)) {
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     if (g_suppressSehReporting && g_sehJumpTarget) {
@@ -1200,23 +1199,30 @@ void ReportUnhandledSignalFault(int sig, void* faultAddress) {
 void PosixMemoryFaultHandler(int sig, siginfo_t* info, void* ucontextVoid) {
     void* faultAddress = info != nullptr ? info->si_addr : nullptr;
     bool isWrite = false;
-#if defined(__x86_64__)
-    // Standard glibc technique for a POSIX fastmem-style handler: bit 1 (0x2) of the hardware
-    // error code x86 pushes on a page fault records whether it was a write.
+    const void* instructionAddress = nullptr;
     if (ucontextVoid != nullptr) {
         auto* uc = static_cast<ucontext_t*>(ucontextVoid);
 #if defined(__APPLE__)
-        isWrite = uc->uc_mcontext != nullptr && (uc->uc_mcontext->__es.__err & 0x2) != 0;
-#else
+        if (uc->uc_mcontext != nullptr) {
+#if defined(__x86_64__)
+            isWrite = (uc->uc_mcontext->__es.__err & 0x2) != 0;
+            instructionAddress = reinterpret_cast<const void*>(uc->uc_mcontext->__ss.__rip);
+#elif defined(__aarch64__)
+            instructionAddress = reinterpret_cast<const void*>(arm_thread_state64_get_pc(uc->uc_mcontext->__ss));
+#endif
+        }
+#elif defined(__x86_64__)
         isWrite = (uc->uc_mcontext.gregs[REG_ERR] & 0x2) != 0;
+        instructionAddress = reinterpret_cast<const void*>(uc->uc_mcontext.gregs[REG_RIP]);
+#elif defined(__aarch64__)
+        instructionAddress = reinterpret_cast<const void*>(uc->uc_mcontext.pc);
 #endif
     }
-#endif
 
     // Guest-space faults are the flat memory interception mechanism (MMIO,
     // the executable-write guard, unmapped pages). Resolving one here means resuming the
     // faulting instruction, which just returning from the handler does.
-    if (faultAddress != nullptr && GuestFlat::HandleAccessViolation(faultAddress, isWrite)) {
+    if (faultAddress != nullptr && GuestFlat::HandleAccessViolation(faultAddress, isWrite, instructionAddress)) {
         return;
     }
 

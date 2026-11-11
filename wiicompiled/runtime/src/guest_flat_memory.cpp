@@ -477,6 +477,7 @@ bool HandleWriteWatch(EXCEPTION_POINTERS* info) {
         return true;
     }
     if (record->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || record->NumberParameters < 2 ||
+        record->ExceptionInformation[0] > 1 ||
         (record->ExceptionInformation[0] == 0 && !g_watchAccess)) {
         return false;
     }
@@ -524,8 +525,8 @@ LONG CALLBACK FlatGuestVectoredHandler(EXCEPTION_POINTERS* info) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
     void* faultAddress = reinterpret_cast<void*>(record->ExceptionInformation[1]);
-    const bool isWrite = record->ExceptionInformation[0] != 0;
-    if (HandleAccessViolation(faultAddress, isWrite)) {
+    const bool isWrite = record->ExceptionInformation[0] == 1;
+    if (HandleAccessViolation(faultAddress, isWrite, record->ExceptionAddress)) {
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     return EXCEPTION_CONTINUE_SEARCH;
@@ -791,12 +792,16 @@ void LogFaultSummary() noexcept {
     std::cerr.flush();
 }
 
-bool HandleAccessViolation(void* faultAddress, bool isWrite) noexcept {
-    if (!g_initialized || faultAddress == nullptr) return false;
+bool HandleAccessViolation(void* faultAddress, bool isWrite, const void* instructionAddress) noexcept {
+    if (!g_initialized || faultAddress == nullptr || instructionAddress == nullptr) return false;
 
     const uintptr_t fault = reinterpret_cast<uintptr_t>(faultAddress);
     const uintptr_t base = reinterpret_cast<uintptr_t>(g_base);
     if (fault < base || fault - base >= kGuestSpaceSize) return false;
+    // PPC instructions are translated/interpreted, never executed in this mapping.
+    // Opening data permissions cannot repair a native instruction-fetch fault.
+    const uintptr_t pc = reinterpret_cast<uintptr_t>(instructionAddress);
+    if (pc >= base && pc - base < kGuestSpaceSize) return false;
 
     const uint32_t guestAddress = static_cast<uint32_t>(fault - base);
 

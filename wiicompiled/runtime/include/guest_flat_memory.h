@@ -122,10 +122,12 @@ void LogFaultSummary() noexcept;
 // resolved; the caller must then resume execution. `faultAddress` is the raw
 // host pointer the access violation trapped on (Windows: ExceptionInformation[1];
 // POSIX: siginfo_t::si_addr) and `isWrite` is whether it was a write access
-// (Windows: ExceptionInformation[0] != 0; POSIX: derived from the ucontext).
+// (Windows: ExceptionInformation[0] == 1; POSIX: derived from the ucontext).
 // The platform-specific handler that calls this is expected to have already
-// done that extraction - this function only ever works with the parsed pair.
-bool HandleAccessViolation(void* faultAddress, bool isWrite) noexcept;
+// done that extraction. instructionAddress is the faulting host PC, not a guest
+// PPC address. Missing PCs and native execution inside guest RAM are rejected:
+// data-page recovery cannot resolve an instruction-fetch fault.
+bool HandleAccessViolation(void* faultAddress, bool isWrite, const void* instructionAddress) noexcept;
 
 #else
 // The baseline uses Memory's allocated backing and explicit access checks.
@@ -136,7 +138,7 @@ inline void RegisterExecutableRange(uint32_t, uint32_t) {}
 inline void ReprotectExecutablePage(uint32_t) {}
 inline FaultCounters Counters() { return {}; }
 inline void LogFaultSummary() noexcept {}
-inline bool HandleAccessViolation(void*, bool) noexcept { return false; }
+inline bool HandleAccessViolation(void*, bool, const void*) noexcept { return false; }
 #endif
 
 } // namespace GuestFlat
