@@ -643,21 +643,10 @@ void MemoryInline::WriteFloat32Slow(uint32_t addr, double val) {
 }
 
 void MemoryInline::WriteFloat64Slow(uint32_t addr, double val) {
-    // stfd stores the full 64-bit FPR bit pattern - load-bearing for the
-    // fctiwz->stfd->lwz idiom, where the integer result lives in the low word.
+    // stfd stores the full FPR bit pattern, including packed integer/float data.
     uint64_t bits;
     std::memcpy(&bits, &val, sizeof(bits));
-
-    if (IsGpuFifoAddress(addr)) {
-        GX_HLE_FIFO_WriteFloat(static_cast<float>(val));
-        return;
-    }
-    if (IsMmioAddress(addr)) {
-        if (!IsDeviceMmioAddress(addr)) return;  // nothing on the bus there: reads 0, writes dropped
-        throw Memory::AccessViolation(addr, sizeof(double), "MMIO write blocked (non-GPU)");
-    }
-
-    WriteScalar(addr, bits);
+    Write64Slow(addr, bits);
 }
 
 uint8_t* Memory::GetPointer(uint32_t addr) {
