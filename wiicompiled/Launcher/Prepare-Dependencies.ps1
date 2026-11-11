@@ -1,9 +1,7 @@
-# Populates Launcher/artifacts/dependencies: the pinned, unpatched upstream source trees (plus the
-# prebuilt Dawn package and generated C++/WinRT headers) that Build-Installer.ps1 ships inside the
-# installer so the user's build runs with FETCHCONTENT_FULLY_DISCONNECTED=ON. Every pin is the one
-# aurora-main's own CMake declares; the Pin fields below are asserted against those files so the
-# two cannot drift apart silently. native_prebuilt is not fetched here - Prepare-NativePrebuilt.ps1
-# compiles it from these trees.
+# Fetches the pinned dependencies used by the standard Windows Brawl build.
+# Pin fields are checked against Aurora's CMake declarations. Optional Tracy profiling
+# is fetched by CMake only when enabled. Prepare-NativePrebuilt.ps1 can compile these
+# trees into a reusable native dependency bundle.
 [CmdletBinding()]
 param(
     [string]$Destination,
@@ -77,11 +75,6 @@ $packages = @(
         Pins = @(@{ File = $auroraExtern; Text = 'https://sqlite.org/2026/sqlite-amalgamation-3510300.zip' })
     },
     [pscustomobject]@{
-        Name = 'tracy'; File = 'tracy-a64b9a20294d59421a2f57aeca3c6383d8c48169.tar.gz'
-        Uris = @('https://github.com/wolfpld/tracy/archive/a64b9a20294d59421a2f57aeca3c6383d8c48169.tar.gz')
-        Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/wolfpld/tracy/archive/a64b9a20294d59421a2f57aeca3c6383d8c48169.tar.gz' })
-    },
-    [pscustomobject]@{
         Name = 'xxhash'; File = 'xxHash-0.8.4.tar.gz'
         Uris = @('https://github.com/Cyan4973/xxHash/archive/refs/tags/v0.8.4.tar.gz')
         Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/Cyan4973/xxHash/archive/refs/tags/v0.8.4.tar.gz' })
@@ -145,7 +138,7 @@ function Get-Archive($Package) {
 }
 
 function Expand-Package([string]$Archive, [string]$Target) {
-    # Release archives wrap everything in one versioned directory (SDL3-3.4.4/, tracy-<sha>/) while
+    # Release archives wrap everything in one versioned directory (for example SDL3-3.4.4/) while
     # dawn-build's package is flat; either way the tree lands directly under the target.
     $extract = Join-Path (Split-Path -Parent $Target) ('.extract-' + (Split-Path -Leaf $Target))
     if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }

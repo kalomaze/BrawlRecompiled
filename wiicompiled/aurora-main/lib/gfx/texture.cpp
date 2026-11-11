@@ -14,7 +14,7 @@
 
 #include <fmt/format.h>
 #include <magic_enum.hpp>
-#include <tracy/Tracy.hpp>
+#include <aurora/profiling.hpp>
 #include <webgpu/webgpu_cpp.h>
 
 namespace aurora::gfx {

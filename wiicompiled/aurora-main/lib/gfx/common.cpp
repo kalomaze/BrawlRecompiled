@@ -27,7 +27,7 @@
 #include <absl/container/flat_hash_map.h>
 #include <magic_enum.hpp>
 
-#include "tracy/Tracy.hpp"
+#include "aurora/profiling.hpp"
 
 namespace aurora::gfx {
 static Module Log("aurora::gfx");

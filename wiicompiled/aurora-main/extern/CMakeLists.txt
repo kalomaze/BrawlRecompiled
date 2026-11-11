@@ -247,7 +247,6 @@ if (AURORA_ENABLE_GX)
 
     add_library(imgui STATIC
       ${imgui_SOURCE_DIR}/imgui.cpp
-      ${imgui_SOURCE_DIR}/imgui_demo.cpp
       ${imgui_SOURCE_DIR}/imgui_draw.cpp
       ${imgui_SOURCE_DIR}/imgui_tables.cpp
       ${imgui_SOURCE_DIR}/imgui_widgets.cpp
@@ -339,11 +338,9 @@ if (AURORA_ENABLE_GX)
   endif ()
 endif ()
 
-if (NOT TARGET TracyClient)
+option(TRACY_ENABLE "Enable Tracy profiling" OFF)
+if (TRACY_ENABLE AND NOT TARGET TracyClient)
   message(STATUS "aurora: Fetching Tracy")
-
-  # Default to off, users can enable the cache variable if they want to use it.
-  set(TRACY_ENABLE OFF CACHE BOOL "Enable Tracy profiling")
 
   FetchContent_Declare(
           tracy

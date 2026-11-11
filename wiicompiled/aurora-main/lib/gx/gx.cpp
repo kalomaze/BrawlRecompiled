@@ -17,7 +17,7 @@ extern "C" unsigned g_spmAudit[8];
 
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
-#include <tracy/Tracy.hpp>
+#include <aurora/profiling.hpp>
 
 #include <algorithm>
 #include <cfloat>

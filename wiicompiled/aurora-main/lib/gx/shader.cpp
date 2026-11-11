@@ -16,7 +16,7 @@
 #include <string_view>
 #include <utility>
 
-#include "tracy/Tracy.hpp"
+#include "aurora/profiling.hpp"
 
 namespace aurora::gx {
 using namespace fmt::literals;

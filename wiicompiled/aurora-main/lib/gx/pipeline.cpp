@@ -3,7 +3,7 @@
 #include "../webgpu/gpu.hpp"
 #include "gx_fmt.hpp"
 #include "shader_info.hpp"
-#include "tracy/Tracy.hpp"
+#include "aurora/profiling.hpp"
 
 #include <condition_variable>
 #include <memory>

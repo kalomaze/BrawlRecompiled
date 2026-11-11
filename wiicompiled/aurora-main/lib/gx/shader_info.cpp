@@ -16,7 +16,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <tracy/Tracy.hpp>
+#include <aurora/profiling.hpp>
 
 namespace aurora::gx {
 // TODO: remove, just for testing

@@ -17,7 +17,7 @@
 #include "../internal.hpp"
 
 #include <absl/container/flat_hash_map.h>
-#include <tracy/Tracy.hpp>
+#include <aurora/profiling.hpp>
 
 #include <algorithm>
 #include <atomic>
