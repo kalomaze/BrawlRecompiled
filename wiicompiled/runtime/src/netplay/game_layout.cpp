@@ -676,7 +676,6 @@ void DrawText(ImDrawList* list, const View& view, const Font& font, const std::u
 struct Layout::Pane {
     std::string name;
     float tx = 0, ty = 0, sx = 1, sy = 1, w = 0, h = 0;
-    std::vector<const Pane*> children;
 };
 
 Layout::Layout() = default;
@@ -687,6 +686,9 @@ bool FontReady(const Font* font) {
 }
 
 bool Layout::Load(const std::string& arcPath, const std::string& brlytName) {
+    m_loaded = false;
+    m_byName.clear();
+    m_panes.clear();
     std::vector<uint8_t> arc;
     if (!ReadDiscFile(arcPath, arc)) {
         return false;
@@ -739,7 +741,12 @@ bool Layout::Load(const std::string& arcPath, const std::string& brlytName) {
             pane->h = BEF(body + 64);
             last = pane.get();
             if (!stack.empty()) {
-                stack.back()->children.push_back(pane.get());
+                // Accumulate translation and scale once; diagnostic rectangles ignore rotation.
+                const Pane& parent = *stack.back();
+                pane->tx = parent.tx + pane->tx * parent.sx;
+                pane->ty = parent.ty + pane->ty * parent.sy;
+                pane->sx *= parent.sx;
+                pane->sy *= parent.sy;
             }
             if (!pane->name.empty()) {
                 m_byName.emplace(pane->name, pane.get());
@@ -769,43 +776,21 @@ bool Layout::Load(const std::string& arcPath, const std::string& brlytName) {
     return m_loaded;
 }
 
-namespace {
-// Translation and scale (rotation ignored) accumulated from the root down to `target`.
-bool WorldOf(const Layout::Pane* pane, const Layout::Pane* target, float px, float py, float psx, float psy, float& x,
-             float& y, float& sx, float& sy) {
-    const float wx = px + pane->tx * psx, wy = py + pane->ty * psy;
-    const float wsx = psx * pane->sx, wsy = psy * pane->sy;
-    if (pane == target) {
-        x = wx;
-        y = wy;
-        sx = wsx;
-        sy = wsy;
-        return true;
-    }
-    for (const Layout::Pane* child : pane->children) {
-        if (WorldOf(child, target, wx, wy, wsx, wsy, x, y, sx, sy)) {
-            return true;
-        }
-    }
-    return false;
-}
-} // namespace
-
 bool Layout::PaneWorldRect(const std::string& paneName, float& x, float& y, float& w, float& h) const {
     const auto it = m_byName.find(paneName);
     if (!m_loaded || it == m_byName.end()) {
         return false;
     }
-    float sx = 1, sy = 1;
-    if (!WorldOf(m_panes[0].get(), it->second, 0, 0, 1, 1, x, y, sx, sy)) {
-        return false;
-    }
-    w = it->second->w * sx;
-    h = it->second->h * sy;
+    const Pane& pane = *it->second;
+    x = pane.tx;
+    y = pane.ty;
+    w = pane.w * pane.sx;
+    h = pane.h * pane.sy;
     return true;
 }
 
 std::vector<std::string> Layout::PaneNames() const {
+    if (!m_loaded) return {};
     std::vector<std::string> names;
     for (const auto& pane : m_panes) {
         names.push_back(pane->name);
