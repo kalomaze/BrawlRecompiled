@@ -39,7 +39,12 @@ internal static class TranslatorCppTestHarness
                 "-o", output, harnessPath, WriteSupportSource(temp)
             };
             if (System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture == System.Runtime.InteropServices.Architecture.X64)
-                arguments.Add("-march=x86-64-v3"); // Same x86 floor as the runtime.
+            {
+                var isa = Environment.GetEnvironmentVariable("MKW_HOST_ISA") ?? "v3";
+                if (isa is not ("v2" or "v3"))
+                    throw new ArgumentException("MKW_HOST_ISA must be v2 or v3");
+                arguments.Add($"-march=x86-64-{isa}");
+            }
             foreach (var source in new[] { "abi_bridge.cpp", "fpu_helpers.cpp", "memory.cpp", "guest_flat_memory.cpp", "ppc_helpers.cpp", "ppc_quantized.cpp" })
                 arguments.Add(Path.Combine(root, "runtime", "src", source));
             if (generated is not null)
@@ -49,7 +54,10 @@ internal static class TranslatorCppTestHarness
                 arguments.Add(generatedPath);
             }
             Run(Environment.GetEnvironmentVariable("CXX") ?? "clang++", arguments, 120);
-            return Run(output, [], 10).Trim();
+            var runner = Environment.GetEnvironmentVariable("BRAWL_NATIVE_RUNNER");
+            return (string.IsNullOrEmpty(runner)
+                ? Run(output, [], 10)
+                : Run(runner, [output], 30)).Trim();
         }
         finally
         {
