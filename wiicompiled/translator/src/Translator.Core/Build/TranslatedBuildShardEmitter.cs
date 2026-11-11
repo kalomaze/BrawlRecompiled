@@ -425,6 +425,8 @@ public static partial class TranslatedBuildShardEmitter
             source.AppendLine("// Translator-owned content-addressed aggregate shard; do not edit.");
             source.AppendLine("#include \"abi_bridge.h\"");
             source.AppendLine("#include \"brawl_rollback.h\"");
+            if (group.Any(static function => function.Address == 0x80949BC0u))
+                source.AppendLine("#include \"brawl_online_ipc.h\"");
             // Quoted include resolves the sibling traits header on every toolchain and keeps
             // the shard text free of the emitting machine's absolute paths.
             source.AppendLine($"#include \"{Path.GetFileName(traitsPath)}\"");
@@ -472,7 +474,13 @@ public static partial class TranslatedBuildShardEmitter
             var entry = guardIndex.TryGetValue(address, out var index)
                 ? $"{match.Value}\n    MKW_GUEST_CODE_GUARD({index}u, 0x{address:X8}u);"
                 : match.Value;
-            return address == 0x809435F0u ? entry + "\n    BrawlRollback::SeedCrossplayStage();" : entry;
+            return address switch
+            {
+                0x809435F0u => entry + "\n    BrawlRollback::SeedCrossplayStage();",
+                // Before the stage file loader can cache the local substage.
+                0x80949BC0u => entry + "\n    BrawlOnline::Stage();",
+                _ => entry
+            };
         });
 
     [GeneratedRegex(@"extern ""C"" void func_(?<address>[0-9A-F]{8})\(CpuContext\* MKW_RESTRICT ctx\)\s*\{", RegexOptions.CultureInvariant)]

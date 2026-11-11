@@ -11,6 +11,7 @@
 // other form, the same PPC_PsFromScalarInline / PPC_PsToScalarInline conversions translated code makes.
 #include "ppc_interpreter.h"
 #include "brawl_rollback.h"
+#include "brawl_online_ipc.h"
 
 // Guest comparisons must preserve unordered results. P+ disables Dreamland's
 // wind with infinite timer bounds: their subtraction produces a NaN, which
@@ -291,6 +292,7 @@ void Run(CpuContext* ctx, uint32_t entry) {
     static const bool rollbackEnabled=std::getenv("BRAWL_ROLLBACK_INPUT")!=nullptr || std::getenv("BRAWL_ONLINE_IPC")!=nullptr;
     for (;;) {
         const uint32_t pc = f.pc;
+        if(pc==0x80949BC0u) BrawlOnline::Stage();
         if(pc==0x809435F0u) BrawlRollback::SeedCrossplayStage();
         // Brawl Online's complete main-loop boundary, including pad bookkeeping,
         // render-side game writes and the application frame counter.

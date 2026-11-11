@@ -26,7 +26,7 @@ void SetOnlineCountdown(const std::array<unsigned, 4>&);
 namespace BrawlOnline { namespace {
 RuntimePlatform::LocalControlSocket control;
 std::string phase="boot";
-bool paused=false,css=false,barrier=false,start=false,go=false;
+bool paused=false,css=false,barrier=false,start=false,go=false,stageSetup=false;
 unsigned long long ticks=0;
 bool armed=false,padsActive=false;
 std::mutex padMutex;
@@ -56,7 +56,7 @@ void Command(const std::string& line){
   else if(op=="arm"){
    unsigned index,pad,mailbox,size;
    if(!(in>>index>>pad>>std::hex>>mailbox>>size)||index>1000000||pad>3||size>65536||!Memory::Contains(mailbox,size))throw std::runtime_error("invalid arm command");
-   BrawlRollback::BeginOnlineMatch(index,pad,mailbox,size);armed=true;barrier=start=go=false;Reply("ok");
+   BrawlRollback::BeginOnlineMatch(index,pad,mailbox,size);armed=true;barrier=start=go=stageSetup=false;Reply("ok");
   }
   else if(op=="hold")Reply(std::to_string(BrawlRollback::OnlineHold()));
   else if(op=="slot"){
@@ -106,7 +106,13 @@ void Loop(bool stageSeen){
  unsigned at=std::getenv("BRAWL_ROLLBACK_START")?std::stoul(std::getenv("BRAWL_ROLLBACK_START")):119;
  if(barrier&&!start&&scene=="scMelee"&&gf>=at){start=true;Hold("start");}
 }
-void Stage(){if(Enabled()&&(!MenuLoop()||armed))Hold("stage");}
+void Stage(){
+ // Apply the agreed substage before the first file load, not after the stage
+ // has retained pointers into that file. Changing it at construction can
+ // reload the archive over those live pointers (e.g. Smashville's lighting).
+ // The constructor remains a setup boundary for paths without a file load.
+ if(Enabled()&&(!MenuLoop()||armed)&&!stageSetup){Hold("stage");stageSetup=true;}
+}
 void SamplePads(FrameInput::GcPad* out){std::lock_guard<std::mutex> lock(padMutex);if(padsActive)for(unsigned p=0;p<4;++p)out[p]=pads[p];}
 void WaitForGo(){if(!Enabled())return;auto since=std::chrono::steady_clock::now();while(!go){Poll();if(std::chrono::steady_clock::now()-since>std::chrono::seconds(60))throw std::runtime_error("online go timed out");std::this_thread::sleep_for(std::chrono::milliseconds(1));}}
 }
