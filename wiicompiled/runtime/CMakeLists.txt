@@ -488,13 +488,13 @@ endif()
 
 if(UNIX)
     add_executable(mkw_guest_flat_memory_tests
-        "${CMAKE_CURRENT_LIST_DIR}/tests/guest_flat_memory_tests.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/src/guest_flat_memory.cpp")
+        "${CMAKE_CURRENT_LIST_DIR}/tests/guest_flat_memory_tests.cpp")
     target_include_directories(mkw_guest_flat_memory_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
     target_compile_features(mkw_guest_flat_memory_tests PRIVATE cxx_std_20)
     target_compile_definitions(mkw_guest_flat_memory_tests PRIVATE MKW_FLAT_MEMORY=1)
     target_link_libraries(mkw_guest_flat_memory_tests PRIVATE Threads::Threads)
     add_test(NAME mkw_guest_flat_memory_tests COMMAND mkw_guest_flat_memory_tests)
+    set_tests_properties(mkw_guest_flat_memory_tests PROPERTIES TIMEOUT 30)
 endif()
 
 if(MKW_PLATFORM_MACOS)

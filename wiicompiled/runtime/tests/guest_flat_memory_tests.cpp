@@ -1,4 +1,6 @@
-#include "guest_flat_memory.h"
+#include "../src/guest_flat_memory.cpp"
+#include <csignal>
+#include <thread>
 
 #include <cstdint>
 #include <cstdlib>
@@ -16,6 +18,15 @@ bool HandleExecutableWrite(uint32_t, size_t, uint64_t) { return false; }
 }
 void SystemBridge::DumpCpuState(const CpuContext*) { std::abort(); }
 void ShowRuntimeFatalPopup(std::string_view, std::string_view) noexcept { std::abort(); }
+
+namespace {
+volatile std::sig_atomic_t recovered = 0;
+void RecoverWhileInterrupted(int) {
+    auto* base = reinterpret_cast<uint8_t*>(GuestFlat::kFixedFlatGuestBase);
+    recovered = GuestFlat::HandleAccessViolation(base + 0x32000000u, true,
+                                                 reinterpret_cast<const void*>(&RecoverWhileInterrupted));
+}
+}
 
 int main() {
     GuestFlat::Initialize({
@@ -89,6 +100,11 @@ int main() {
         }
         *page = 0x6b;
         if (mem1Physical[0x1000] != 0x6b) return 1;
+        // A second thread's delayed fault must still be classified as an
+        // executable-page fault after the first handler reopened the page.
+        const auto sparseFaults = GuestFlat::Counters().unmapped;
+        if (!GuestFlat::HandleAccessViolation(page, true, reinterpret_cast<const void*>(&main)) ||
+            GuestFlat::Counters().unmapped != sparseFaults) return 1;
         GuestFlat::ReprotectExecutablePage(address);
         // Make the OS protection change fail, rather than mocking its return value.
         if (munmap(page, static_cast<size_t>(getpagesize())) != 0) return 1;
@@ -97,6 +113,28 @@ int main() {
             return 1;
         }
     }
+    // An interrupted mapping operation may own StateMutex. Sparse recovery
+    // must neither acquire it nor allocate through a lazily initialized vector.
+    std::signal(SIGUSR1, RecoverWhileInterrupted);
+    {
+        std::lock_guard<std::mutex> interrupted(GuestFlat::StateMutex());
+        std::raise(SIGUSR1);
+    }
+    std::signal(SIGUSR1, SIG_DFL);
+    if (!recovered) return 1;
+    guestWritable[0x32000000u] = 0x29;
+
+    const auto before = GuestFlat::Counters().unmappedRegions;
+    std::atomic<bool> success{true};
+    auto recover = [&] {
+        if (!GuestFlat::HandleAccessViolation(guestWritable + 0x33000000u, true,
+                                              reinterpret_cast<const void*>(&main))) success = false;
+    };
+    std::thread first(recover), second(recover);
+    first.join();
+    second.join();
+    if (!success || GuestFlat::Counters().unmappedRegions != before + 1) return 1;
+
     // Guest RAM is data, never native host instructions. Retrying an execution
     // fault after granting read/write permission would fault forever.
     auto* executionFault = guestWritable + 0x40000000u;
