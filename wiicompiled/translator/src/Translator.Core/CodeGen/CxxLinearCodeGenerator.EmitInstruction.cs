@@ -381,7 +381,7 @@ public sealed partial class CxxLinearCodeGenerator
                             // unit has to be added back.
                             var stateFreeResult = $"state_free_result_{addr:X8}_{bufferBaseLength + sb.Length:X}";
                             sb.AppendLine($"{pad}    const auto {stateFreeResult} = {stateFreeSymbol}({StateFreeCallArguments(stateFreeContract!, localFallthroughLr)});");
-                            AppendStateFreeResultStores(sb, pad + "    ", addr, stateFreeContract!, stateFreeResult);
+                            AppendStateFreeResultStores(sb, pad + "    ", stateFreeContract!, stateFreeResult);
                         }
                         else
                         {

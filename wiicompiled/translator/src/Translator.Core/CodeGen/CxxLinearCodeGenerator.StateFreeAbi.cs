@@ -309,13 +309,13 @@ public sealed partial class CxxLinearCodeGenerator
     }
 
     /// <summary>
-    /// Result unpacking into the resident locals. Field/value order must match
+    /// Result unpacking into resident locals or CpuContext. Field/value order must match
     /// <see cref="StateFreeReturnExpression"/> exactly, since this is a positional carrier for the
     /// callee's packed one- and two-output shapes.
     /// </summary>
-    private static void AppendStateFreeResidentResultStores(
-        StringBuilder sb, string pad, RegisterResidency residency,
-        GuestAbiContract contract, string resultName)
+    private static void AppendStateFreeResultStores(
+        StringBuilder sb, string pad, GuestAbiContract contract, string resultName,
+        RegisterResidency? residency = null)
     {
         var outputCount = StateFreeOutputCount(contract);
         var resultIndex = 0;
@@ -329,21 +329,21 @@ public sealed partial class CxxLinearCodeGenerator
             if ((contract.GprPossibleWriteMask & (1u << gpr)) != 0)
             {
                 var value = Value($"r{gpr}");
-                sb.AppendLine($"{pad}{residency.Gpr(gpr, written: true)} = static_cast<uint32_t>({value});");
+                sb.AppendLine($"{pad}{residency?.Gpr(gpr, written: true) ?? $"ctx->gpr[{gpr}]"} = static_cast<uint32_t>({value});");
             }
         for (var fpr = 0; fpr < 32; ++fpr)
             if ((contract.FprPossibleWriteMask & (1u << fpr)) != 0)
             {
                 var value = Value($"f{fpr}");
                 if (outputCount > 2) value += ".raw";
-                sb.AppendLine($"{pad}{residency.FprStorage(fpr, written: true)}.raw = static_cast<uint64_t>({value});");
+                sb.AppendLine($"{pad}{residency?.FprStorage(fpr, written: true) ?? $"ctx->fpr[{fpr}]"}.raw = static_cast<uint64_t>({value});");
             }
         if (contract.CrPossibleWriteMask != 0)
-            sb.AppendLine($"{pad}{residency.Cr(written: true)} = static_cast<uint32_t>({Value("cr")});");
+            sb.AppendLine($"{pad}{residency?.Cr(written: true) ?? "ctx->cr"} = static_cast<uint32_t>({Value("cr")});");
         if (contract.MayWriteXer)
-            sb.AppendLine($"{pad}{residency.Xer(written: true)} = static_cast<uint32_t>({Value("xer")});");
+            sb.AppendLine($"{pad}{residency?.Xer(written: true) ?? "ctx->xer"} = static_cast<uint32_t>({Value("xer")});");
         if (contract.MayWriteCtr)
-            sb.AppendLine($"{pad}{residency.Ctr(written: true)} = static_cast<uint32_t>({Value("ctr")});");
+            sb.AppendLine($"{pad}{residency?.Ctr(written: true) ?? "ctx->ctr"} = static_cast<uint32_t>({Value("ctr")});");
         if (contract.MayWriteLr) sb.AppendLine($"{pad}ctx->lr = static_cast<uint32_t>({Value("lr")});");
         if (contract.MayWriteFpscr) sb.AppendLine($"{pad}ctx->fpscr = static_cast<uint32_t>({Value("fpscr")});");
         for (var gqr = 0; gqr < 8; ++gqr)
@@ -384,7 +384,7 @@ public sealed partial class CxxLinearCodeGenerator
             // exactly like the CpuContext form.
             var resultName = $"state_free_result_{address:X8}_{bufferBaseLength + sb.Length:X}";
             sb.AppendLine($"{inner}const auto {resultName} = {symbol}({arguments});");
-            AppendStateFreeResidentResultStores(sb, inner, residency, contract, resultName);
+            AppendStateFreeResultStores(sb, inner, contract, resultName, residency);
         }
         else
         {
@@ -396,41 +396,6 @@ public sealed partial class CxxLinearCodeGenerator
         sb.AppendLine($"{inner}InvokeDirectCpu<0x{address:X8}u>(ctx);");
         AppendReload(sb, inner, ResidencyBoundarySync.Full);
         sb.AppendLine($"{pad}}}");
-    }
-
-    private static void AppendStateFreeResultStores(
-        StringBuilder sb, string pad, uint address, GuestAbiContract contract, string resultName)
-    {
-        var outputCount = StateFreeOutputCount(contract);
-        var resultIndex = 0;
-        string Value(string field) => outputCount switch
-        {
-            1 => resultName,
-            2 => $"{resultName}[{resultIndex++}]",
-            _ => $"{resultName}.{field}"
-        };
-        for (var gpr = 0; gpr < 32; ++gpr)
-            if ((contract.GprPossibleWriteMask & (1u << gpr)) != 0)
-            {
-                var value = Value($"r{gpr}");
-                sb.AppendLine($"{pad}ctx->gpr[{gpr}] = static_cast<uint32_t>({value});");
-            }
-        for (var fpr = 0; fpr < 32; ++fpr)
-            if ((contract.FprPossibleWriteMask & (1u << fpr)) != 0)
-            {
-                var value = Value($"f{fpr}");
-                if (outputCount > 2) value += ".raw";
-                sb.AppendLine($"{pad}ctx->fpr[{fpr}].raw = static_cast<uint64_t>({value});");
-            }
-        if (contract.CrPossibleWriteMask != 0) sb.AppendLine($"{pad}ctx->cr = static_cast<uint32_t>({Value("cr")});");
-        if (contract.MayWriteXer) sb.AppendLine($"{pad}ctx->xer = static_cast<uint32_t>({Value("xer")});");
-        if (contract.MayWriteCtr) sb.AppendLine($"{pad}ctx->ctr = static_cast<uint32_t>({Value("ctr")});");
-        if (contract.MayWriteLr) sb.AppendLine($"{pad}ctx->lr = static_cast<uint32_t>({Value("lr")});");
-        if (contract.MayWriteFpscr) sb.AppendLine($"{pad}ctx->fpscr = static_cast<uint32_t>({Value("fpscr")});");
-        for (var gqr = 0; gqr < 8; ++gqr)
-            if ((contract.GqrPossibleWriteMask & (1 << gqr)) != 0) sb.AppendLine($"{pad}ctx->gqr[{gqr}] = static_cast<uint32_t>({Value($"gqr{gqr}")});");
-        for (var hid = 0; hid < 3; ++hid)
-            if ((contract.HidPossibleWriteMask & (1 << hid)) != 0) sb.AppendLine($"{pad}ctx->hid{hid} = static_cast<uint32_t>({Value($"hid{hid}")});");
     }
 
     private static string StateFreeReturnExpression(GuestAbiContract contract, string body)
