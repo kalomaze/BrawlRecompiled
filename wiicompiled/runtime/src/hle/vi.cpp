@@ -399,73 +399,11 @@ static std::atomic<bool> s_inAdvanceRetrace{false};
 // end the freshly pre-warmed empty frame and show it as a black frame group.
 static std::atomic<bool> s_presentSequenceActive{false};
 
-// Frames the guest actually handed to the presenter (an XFB was ready), and a watchdog that dumps every guest
-// thread's state if none arrived after 12 s and again after 30 s, and whenever presenting stops for 10 s, so a
-// game that stalls in a wait loop shows where each thread is parked.
+// Frames the guest actually handed to the presenter (an XFB was ready).
 static std::atomic<uint32_t> s_presentedXfbFrames{0};
 extern "C" { extern int g_spmDrawDump; extern int g_spmCullOff; extern int g_spmSweepDump; extern unsigned g_spmDrawIdx; extern unsigned g_spmDrawLimit; }  // aurora command_processor (SPM bring-up diagnostics)
 static uint32_t SpmPresentedFramesLocal() { return s_presentedXfbFrames.load(std::memory_order_relaxed); }
 static uint32_t (*const g_spmFramesFn)() = &SpmPresentedFramesLocal;
-
-void StartStallWatchdogOnce() {
-    static std::once_flag once;
-    std::call_once(once, [] {
-        // Unattended bring-up: autoexit.txt beside the executable holds a run length in seconds.
-        if (const auto dir = RuntimeConfigFile::ExecutableDirectory()) {
-            std::ifstream in(*dir / "autoexit.txt");
-            int seconds = 0;
-            if (in >> seconds && seconds > 0) {
-                std::thread([seconds] {
-                    std::this_thread::sleep_for(std::chrono::seconds(seconds));
-                    std::cerr << "[runtime] autoexit after " << seconds << " s" << std::endl;
-                    std::_Exit(0);
-                }).detach();
-            }
-        }
-        std::thread([] {
-            const auto start = std::chrono::steady_clock::now();
-            for (const int seconds : {12, 30}) {
-                std::this_thread::sleep_until(start + std::chrono::seconds(seconds));
-                const uint32_t frames = s_presentedXfbFrames.load(std::memory_order_relaxed);
-                const bool black = g_vi.black;  // racy read; diagnostics only
-                RT_LOGF(RT_TAG_VI, "[watchdog] %d s: %u guest frame(s) presented, VI black=%d\n", seconds, frames,
-                        black ? 1 : 0);
-                if (frames != 0 && !black) {
-                    continue;
-                }
-                RT_LOGF(RT_TAG_VI, "[watchdog] nothing visible yet; guest threads:\n");
-                Fiber::GuestFiberManager::DumpGuestThreads(std::cerr);
-            }
-            // Later, a game that stops presenting (a wait loop, or a loop in interpreted mod code): once per stall.
-            uint32_t last = s_presentedXfbFrames.load(std::memory_order_relaxed);
-            for (int still = 0;; ) {
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-                const uint32_t now = s_presentedXfbFrames.load(std::memory_order_relaxed);
-                if (now != last) {
-                    last = now;
-                    still = 0;
-                } else if (++still == 10) {
-                    RT_LOGF(RT_TAG_VI, "[watchdog] no frame for 10 s (after %u); guest threads:\n", now);
-                    Fiber::GuestFiberManager::DumpGuestThreads(std::cerr);
-                    // The loaded .rel modules (__OSModuleInfoList), as id@header, to the first repeat.
-                    std::string list;
-                    std::vector<uint32_t> seen;
-                    for (uint32_t m = Memory::Read32(0x800030C8u); m != 0 && seen.size() < 200;
-                         m = Memory::Read32(m + 4u)) {
-                        const bool repeat = std::find(seen.begin(), seen.end(), m) != seen.end();
-                        char item[64];
-                        std::snprintf(item, sizeof(item), " %u@%08X(imp %08X+%X)%s", Memory::Read32(m), m,
-                                      Memory::Read32(m + 0x28u), Memory::Read32(m + 0x2Cu), repeat ? " (cycle)" : "");
-                        list += item;
-                        if (repeat) break;
-                        seen.push_back(m);
-                    }
-                    RT_LOGF(RT_TAG_VI, "[watchdog] modules:%s\n", list.c_str());
-                }
-            }
-        }).detach();
-    });
-}
 
 // Brawl: report every .rel module the game links (gfModuleManager -> OSLink) with its image and bss address. The
 // translated modules are pre-linked for these addresses (projects/brawl/tools), so this log is where they come from;
@@ -507,7 +445,6 @@ void AdvanceRetrace(CpuContext* ctx, Clock::time_point retraceStamp, bool servic
     if (s_inAdvanceRetrace.exchange(true)) {
         return;
     }
-    StartStallWatchdogOnce();
     LogGuestModulesOnce();
 
     uint32_t preCb = 0;

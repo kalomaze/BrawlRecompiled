@@ -135,12 +135,3 @@ function Copy-ReplacingLocked($from, $to) {
 Copy-ReplacingLocked (Join-Path $build "$module.dll") (Join-Path $root "Play\$module.dll")
 if (-not $OldCpu) { Copy-ReplacingLocked (Join-Path $build 'WiiCompiled.exe') $playExe }
 Set-Status "copied to Play\$module.dll and Play\SuperSmashBrosBrawl.exe"
-# Unattended test run: autotest\autorun.txt present -> start the game (its own autoexit.txt ends it) with logs.
-if (Test-Path (Join-Path $root 'autotest\autorun.txt')) {
-    $auto = Join-Path $root 'autotest'
-    $p = Start-Process -FilePath (Join-Path $root 'Play\SuperSmashBrosBrawl.exe') -WorkingDirectory (Join-Path $root 'Play') -PassThru `
-        -RedirectStandardOutput (Join-Path $auto 'run.log') -RedirectStandardError (Join-Path $auto 'run.err.log')
-    $p.WaitForExit(600000) | Out-Null
-    if (-not $p.HasExited) { $p.Kill() }
-    "autorun finished $(Get-Date -f s)" | Out-File (Join-Path $auto 'done.txt') -Encoding utf8
-}
