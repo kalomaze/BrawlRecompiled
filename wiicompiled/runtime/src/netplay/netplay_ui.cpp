@@ -29,7 +29,6 @@ namespace {
 
 using Phase = NetplayLobby::Phase;
 constexpr uint32_t kTwo = 0x0100, kA = 0x0800;
-bool g_restarting = false;
 
 std::string SlotName(int slot) {
     const auto& names = NetplayStart::SessionNames();
@@ -90,13 +89,13 @@ void DrawSession(ImDrawList* list) {
 // NSMBW_LOBBY_TEST (Android: debug.nsmbw.lobbytest) drives the lobby without the menus, to test
 // rooms between devices: "host" opens a room for 2 and starts it once someone joins, "join" joins
 // the first room it finds. The session then starts as it does from the menus.
-bool LobbyTest() {
+void LobbyTest() {
     static const std::string mode = [] {
         const char* value = std::getenv("NSMBW_LOBBY_TEST");
         return value != nullptr ? std::string(value) : std::string();
     }();
     if (mode != "host" && mode != "join") {
-        return false;
+        return;
     }
     static bool begun = false;
     if (!begun) {
@@ -107,7 +106,7 @@ bool LobbyTest() {
         } else {
             NetplayLobby::Browse();
         }
-        return true;
+        return;
     }
     const NetplayLobby::Snapshot lobby = NetplayLobby::Get();
     if (mode == "host" && lobby.phase == Phase::Hosting && lobby.members.size() >= 2) {
@@ -124,14 +123,6 @@ bool LobbyTest() {
         lastMessage = lobby.message;
         RT_LOGF(RT_TAG_RUNTIME, "netplay test: failed: %s\n", lobby.message.c_str());
     }
-    if (lobby.phase == Phase::Restarting && !g_restarting) {
-        NetplayLobby::Plan plan;
-        if (NetplayLobby::TakePlan(plan)) {
-            g_restarting = true;
-            NetplayStart::Restart(plan);
-        }
-    }
-    return true;
 }
 
 // NSMBW_DUMP_LAYOUT=<arc>;<arc>...: log every pane's position in those layouts once (finding
@@ -185,19 +176,17 @@ void Draw() {
         DrawSession(ImGui::GetBackgroundDrawList());
         return;
     }
+    LobbyTest();
     // Brawl's online menu owns rooms; a ready plan restarts into the session.
-    if (const NetplayLobby::Snapshot lobby = NetplayLobby::Get(); lobby.phase == Phase::Restarting && !g_restarting) {
+    if (const NetplayLobby::Snapshot lobby = NetplayLobby::Get(); lobby.phase == Phase::Restarting) {
         NetplayLobby::Plan plan;
         if (NetplayLobby::TakePlan(plan)) {
-            g_restarting = true;
             if (!NetplayStart::Restart(plan)) {
-                g_restarting = false;
                 NetplayLobby::Stop();
                 RT_LOGF(RT_TAG_RUNTIME, "netplay: couldn't start the session on this device\n");
             }
         }
     }
-    LobbyTest();
 }
 
 } // namespace NetplayUi
