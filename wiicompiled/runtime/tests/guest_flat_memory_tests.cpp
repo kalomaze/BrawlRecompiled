@@ -113,6 +113,11 @@ int main() {
         constexpr uint32_t address = 0x80001000u;
         auto* page = guestWritable + address;
         GuestFlat::RegisterExecutableRange(address, address + 0x1000u);
+        if (GuestFlat::HandleAccessViolation(page, false, reinterpret_cast<const void*>(&main)) ||
+            patchNotifications.load() != 0) {
+            std::cerr << "read fault entered executable-write recovery\n";
+            return 1;
+        }
         if (GuestFlat::HandleAccessViolation(page, true, page) ||
             GuestFlat::HandleAccessViolation(page, true, nullptr)) {
             std::cerr << "invalid host instruction pointer passed write-guard recovery\n";

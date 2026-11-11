@@ -737,6 +737,9 @@ bool HandleAccessViolation(void* faultAddress, bool isWrite, const void* instruc
         const uint32_t pageIndex = guestAddress >> 12;
         const bool guarded = (g_executablePages[pageIndex].load(std::memory_order_acquire) & kExecutableRegistered) != 0;
         if (guarded) {
+            // This guard only removes write permission. A read fault indicates
+            // another failure; reopening permissions cannot repair its backing.
+            if (!isWrite) return false;
             g_countXGuard.fetch_add(1, std::memory_order_relaxed);
             // Aborts inside CheckExecutableWrite for an unsupported patch; the
             // width and value are not recoverable from the fault record, so the
