@@ -1179,18 +1179,23 @@ void InstallSehLogger() {
 // instead of chaining. So this is the single SIGSEGV/SIGBUS handler for the whole process, and it
 // owns checking GuestFlat's fault-interception logic first, exactly mirroring the order SehLogger
 // already uses on Windows.
+// Only async-signal-safe operations belong here: the interrupted thread may hold
+// allocator, logger, or window-system locks. Leave detailed inspection to the
+// debugger/core dump instead of risking another fault or deadlock while reporting.
 void ReportUnhandledSignalFault(int sig, void* faultAddress) {
-    RT_LOG(RT_TAG_RUNTIME) << "Signal " << sig << " (fault address 0x" << std::hex
-              << reinterpret_cast<uintptr_t>(faultAddress) << std::dec << ")";
-    if (!g_lastEntryLabel.empty()) {
-        std::cerr << " while executing " << g_lastEntryLabel;
-    }
-    std::cerr << std::endl;
-    if (const CpuContext* cpu = TryGetCpuContext()) {
-        RT_LOG(RT_TAG_RUNTIME) << "===== DUMPING CPU STATE =====" << std::endl;
-        SystemBridge::DumpCpuState(cpu);
-    }
-    std::cerr.flush();
+    constexpr char prefix[] = "Fatal memory signal at host address 0x";
+    char message[sizeof(prefix) - 1 + sizeof(uintptr_t) * 2 + 1];
+    size_t position = 0;
+    for (size_t i = 0; i < sizeof(prefix) - 1; ++i) message[position++] = prefix[i];
+    const auto address = reinterpret_cast<uintptr_t>(faultAddress);
+    for (size_t digit = sizeof(uintptr_t) * 2; digit > 0; --digit)
+        message[position++] = "0123456789abcdef"[(address >> ((digit - 1) * 4)) & 0xf];
+    message[position++] = '\n';
+    const auto ignored = write(STDERR_FILENO, message, position);
+    (void)ignored;
+    // The signal remains blocked until this handler returns; its pending default
+    // delivery terminates with the original signal rather than a generic exit(1).
+    if (signal(sig, SIG_DFL) == SIG_ERR || raise(sig) != 0) _exit(128 + sig);
 }
 
 void PosixMemoryFaultHandler(int sig, siginfo_t* info, void* ucontextVoid) {
@@ -1231,34 +1236,7 @@ void PosixMemoryFaultHandler(int sig, siginfo_t* info, void* ucontextVoid) {
         return;
     }
 
-    // Guard against re-entrancy: if we crash while reporting, don't recurse.
-    static std::atomic_flag s_inCrashHandler = ATOMIC_FLAG_INIT;
-    if (s_inCrashHandler.test_and_set()) {
-        std::_Exit(EXIT_FAILURE);
-    }
-
     ReportUnhandledSignalFault(sig, faultAddress);
-    std::ostringstream popupDetails;
-    popupDetails << "A native signal (" << sig << ") occurred";
-    if (!g_lastEntryLabel.empty()) {
-        popupDetails << " while executing " << g_lastEntryLabel;
-    }
-    if (faultAddress != nullptr) {
-        popupDetails << ".\n\nThe game attempted a " << (isWrite ? "write" : "read")
-                     << " at host address 0x" << std::hex
-                     << reinterpret_cast<uintptr_t>(faultAddress) << std::dec;
-    }
-    popupDetails << ".\n\nThe process transcript and crash log contain the full CPU and stack "
-                    "diagnostics.";
-    ShowRuntimeFatalPopup("a native crash occurred", popupDetails.str());
-    DumpHostStackTrace();
-    WriteFatalLogImpl(sig == SIGBUS ? "sigbus" : "sigsegv");
-
-    std::cerr.flush();
-    std::cout.flush();
-    std::fflush(stdout);
-    std::fflush(stderr);
-    std::_Exit(EXIT_FAILURE);
 }
 
 void InstallPosixMemoryFaultHandler() {
