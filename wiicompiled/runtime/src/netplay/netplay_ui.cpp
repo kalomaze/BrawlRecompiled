@@ -1622,17 +1622,6 @@ void DumpProfiles() {
     last = profiles;
 }
 
-// NSMBW_WARP=<world>-<course> (debug.nsmbw.warp on Android): entering any course from the world map
-// enters that one instead (testing a level without a save that reaches it). Courses 1-9 are the
-// numbered ones; others are STAGE_e numbers: 20 ghost house, 21 tower, 23 castle, 32-34 the map
-// enemies' courses (5-32: World 5's giant Piranha Plant), 37 airship. Works by
-// rewriting dInfo_c::m_startGameInfo (0x80315B90; world/course shown at +0xC/+0xD and loaded at
-// +0xE/+0xF, all from 0)
-// while the map fades out to the course-in scene, which reads it.
-void Warp() {
-    // SPM uses seqSetSeq; NSMBW startGameInfo writes would overwrite SPM instructions.
-}
-
 // NSMBW_DUMP_LAYOUT=<arc>;<arc>...: log every pane's position in those layouts once (finding
 // where the game's own buttons are).
 void DumpLayouts() {
@@ -1698,7 +1687,6 @@ void ScriptedTaps() {
 
 void Draw() {
     DumpProfiles();
-    Warp();
     if (std::getenv("NSMBW_DUMP_STATES") != nullptr) {
         static std::string lastStates;
         std::string states = GameMenus::DumpStates();

@@ -14,7 +14,7 @@ bool Restart(const NetplayLobby::Plan& plan);
 
 // At startup: a pending session written by Restart in the last couple of minutes. Fills `config`,
 // points the NAND at the session's copy and consumes the file.
-bool TakePendingSession(NetplaySession::Config& config, int& saveFile);
+bool TakePendingSession(NetplaySession::Config& config);
 
 // The players' names in the running session, by slot.
 const std::vector<std::string>& SessionNames();

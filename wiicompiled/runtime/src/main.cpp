@@ -1221,7 +1221,6 @@ int RuntimeMain(int argc, char** argv) {
                                             std::pair{"debug.nsmbw.lobbytest", "NSMBW_LOBBY_TEST"},
                                             std::pair{"debug.nsmbw.tsonly", "NSMBW_NET_TAILSCALE_ONLY"},
                                             std::pair{"debug.nsmbw.tapscript", "NSMBW_TAP_SCRIPT"},
-                                            std::pair{"debug.nsmbw.warp", "NSMBW_WARP"},
                                             std::pair{"debug.nsmbw.logfps", "NSMBW_LOG_FPS"},
                                             std::pair{"debug.nsmbw.patchreadback", "NSMBW_PATCH_READBACK"}}) {
                 if (const std::string value = property(prop); !value.empty()) {
@@ -1248,10 +1247,7 @@ int RuntimeMain(int argc, char** argv) {
         // switches to the session's copy of the host's save before anything reads it.
         {
             NetplaySession::Config netplay;
-            int saveFile = 0;
-            if (NetplayStart::TakePendingSession(netplay, saveFile)) {
-                netplay.autopilot = false;  // NSMBW's walk through its file select; Brawl's players use the menus
-                netplay.saveFile = saveFile;
+            if (NetplayStart::TakePendingSession(netplay)) {
                 NetplaySession::Start(netplay);
             } else if (NetplaySession::LoadConfigFromEnvironment(netplay)) {
                 NetplaySession::Start(netplay);

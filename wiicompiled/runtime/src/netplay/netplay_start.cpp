@@ -169,7 +169,6 @@ bool Restart(const NetplayLobby::Plan& plan) {
     session << "players=" << static_cast<int>(plan.players) << "\n";
     session << "delay=" << plan.inputDelay << "\n";
     session << "host=" << plan.host << "\n";
-    session << "file=" << plan.saveFile << "\n";
     for (const auto& name : plan.names) {
         session << "name=" << name << "\n";
     }
@@ -195,7 +194,7 @@ void RecoverHostSave() {
     }
 }
 
-bool TakePendingSession(NetplaySession::Config& config, int& saveFile) {
+bool TakePendingSession(NetplaySession::Config& config) {
     std::ifstream in(SessionFile());
     if (!in) {
         RecoverHostSave();
@@ -234,7 +233,6 @@ bool TakePendingSession(NetplaySession::Config& config, int& saveFile) {
     config.playerCount = static_cast<uint8_t>(std::atoi(values["players"].c_str()));
     config.inputDelay = static_cast<uint32_t>(std::atoi(values["delay"].c_str()));
     config.host = values["host"];
-    saveFile = std::atoi(values["file"].c_str());
     if (config.sessionId == 0 || config.playerCount < 2 || config.localSlot >= config.playerCount ||
         config.inputDelay == 0 || (config.localSlot != 0 && config.host.empty())) {
         return false;
