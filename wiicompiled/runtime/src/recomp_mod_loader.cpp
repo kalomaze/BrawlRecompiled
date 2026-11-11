@@ -1,9 +1,9 @@
 #include "guest_code_patch.h"
+#include "fault_report.h"
 #include "recomp_mod_loader.h"
 
 #include <algorithm>
 #include <cstdlib>
-#include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <deque>
@@ -372,7 +372,7 @@ void RegisterExecutableRange(uint32_t start, uint32_t end, std::string name) {
 }
 
 [[noreturn]] void ReportForbiddenExecutableWrite(uint32_t address, size_t length, uint64_t value,
-                                                 const ExecutableRange& range);
+                                                 const ExecutableRange& range, bool storeKnown = true);
 
 bool HandleExecutableWrite(uint32_t address, size_t length, uint64_t value) {
     if (!ExecutableWriteGuardMayHit(address, length)) {
@@ -388,7 +388,7 @@ bool HandleExecutableWrite(uint32_t address, size_t length, uint64_t value) {
         return false;
     }
 
-    ReportForbiddenExecutableWrite(address, length, value, *hit);
+    ReportForbiddenExecutableWrite(address, length, value, *hit, false);
 }
 
 void CheckExecutableWrite(uint32_t address, size_t length, uint64_t value) {
@@ -408,29 +408,19 @@ void CheckExecutableWrite(uint32_t address, size_t length, uint64_t value) {
 }
 
 [[noreturn]] void ReportForbiddenExecutableWrite(uint32_t address, size_t length, uint64_t value,
-                                                 const ExecutableRange& range) {
-    RT_LOG(RT_TAG_MOD) << "FATAL unsupported executable write" << std::endl;
-    std::cerr << "  address: 0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << address << std::endl;
-    std::cerr << "  value:   0x" << std::setw(16) << value << std::endl;
-    std::cerr << "  width:   " << std::dec << length << std::endl;
-    std::cerr << "  range:   0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << range.start
-              << "-0x" << std::setw(8) << range.end << " " << range.name << std::dec << std::endl;
-
-    if (auto* cpu = TryGetCpuContext()) {
-        std::cerr << "  caller pc: 0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << cpu->pc << std::endl;
-        std::cerr << "  caller lr: 0x" << std::setw(8) << cpu->lr << std::dec << std::endl;
-        SystemBridge::DumpCpuState(cpu);
+                                                 const ExecutableRange& range, bool storeKnown) {
+    FaultReport::Message message;
+    message.Text("[mods] FATAL unsupported executable write")
+        .Text("\n  address: ").Hex(address);
+    if (storeKnown) {
+        message.Text("\n  value: ").Hex(value, 16).Text("\n  width: ").Decimal(length);
     } else {
-        std::cerr << "  caller pc: unavailable" << std::endl;
+        message.Text("\n  width/value: unavailable in fault record");
     }
-
-    std::cerr << "  reason: executable runtime writes are forbidden" << std::endl;
-    std::ostringstream message;
-    message << "The game stopped because translated code attempted to write to executable memory at 0x"
-            << std::hex << std::uppercase << address
-            << ". Runtime executable patches are not supported in this build.";
-    ShowRuntimeFatalPopup("forbidden executable memory write", message.str());
-    std::abort();
+    message.Text("\n  active function: ").Hex(CurrentTranslatedExecutionAddress())
+        .Text("\n  host CPU context: ").Hex(reinterpret_cast<uintptr_t>(TryGetCpuContext()), sizeof(uintptr_t) * 2)
+        .Text("\n  range: ").Hex(range.start).Text("-").Hex(range.end).Text(" ").Text(range.name);
+    message.Fatal();
 }
 
 } // namespace RecompMod

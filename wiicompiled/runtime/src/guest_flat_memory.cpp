@@ -1,4 +1,5 @@
 #include "guest_flat_memory.h"
+#include "fault_report.h"
 
 #include <algorithm>
 #include <atomic>
@@ -6,7 +7,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <sstream>
@@ -546,59 +546,25 @@ void InstallVectoredHandler() {
 }
 #endif
 
-void ReportFatalGuestFault(const char* category, uint32_t guestAddress, bool isWrite,
-                           const char* detail) {
-    RT_LOG(RT_TAG_MEMORY) << "FATAL " << category << std::endl;
-    std::cerr << "  guest address: 0x" << std::hex << std::uppercase << std::setw(8)
-              << std::setfill('0') << guestAddress << std::dec << std::setfill(' ') << std::endl;
-    std::cerr << "  access:        " << (isWrite ? "write" : "read") << std::endl;
-    // The fault record carries the faulting address but not the width of the
-    // access, so the size is genuinely unavailable on this path. The checked
-    // path (runtime/src/memory.cpp) reports the exact length instead.
-    std::cerr << "  access size:   unknown (not recoverable from the fault record)" << std::endl;
-    std::cerr << "  active func:   0x" << std::hex << std::uppercase
-              << RecompMod::CurrentTranslatedExecutionAddress() << std::dec << std::nouppercase
-              << std::endl;
-    std::cerr << "  detail:        " << detail << std::endl;
-    if (auto* cpu = TryGetCpuContext()) {
-        std::cerr << "  guest pc:      0x" << std::hex << cpu->pc << " lr=0x" << cpu->lr << std::dec
-                  << std::endl;
-        SystemBridge::DumpCpuState(cpu);
-    }
-    std::cerr.flush();
-    std::ostringstream message;
-    message << "The game stopped because translated code performed a forbidden guest memory "
-               "access at 0x"
-            << std::hex << std::uppercase << guestAddress << ".\n\n"
-            << detail;
-    ShowRuntimeFatalPopup(category, message.str());
-    std::abort();
+[[noreturn]] void ReportFatalGuestFault(const char* category, uint32_t guestAddress, bool isWrite,
+                                      const char* detail) {
+    FaultReport::Message message;
+    message.Text("[memory] FATAL ").Text(category)
+        .Text("\n  guest address: ").Hex(guestAddress)
+        .Text(isWrite ? "\n  access: write" : "\n  access: read")
+        .Text("; size unknown (fault record has no access width)")
+        .Text("\n  active function: ").Hex(RecompMod::CurrentTranslatedExecutionAddress())
+        .Text("\n  host CPU context: ").Hex(reinterpret_cast<uintptr_t>(TryGetCpuContext()), sizeof(uintptr_t) * 2)
+        .Text("\n  detail: ").Text(detail);
+    // Do not dereference the context or walk guest memory after a fault: either
+    // may be corrupt. Record addresses without walking possibly corrupt state.
+    message.Fatal();
 }
 
-// Recovery can interrupt the allocator or an iostream operation. Format into
-// stack storage and write directly, without locks, allocation or guest reads.
 void ReportRecoveredFault(const char* reason, uint32_t address, bool isWrite) {
-    char message[192];
-    size_t length = 0;
-    auto append = [&](const char* text) {
-        while (*text && length < sizeof(message) - 9) message[length++] = *text++;
-    };
-    append("[memory] WARNING ");
-    append(reason);
-    append(isWrite ? " write at 0x" : " read at 0x");
-    for (int shift = 28; shift >= 0; shift -= 4) {
-        message[length++] = "0123456789ABCDEF"[(address >> shift) & 15];
-    }
-    message[length++] = '\n';
-#if defined(_WIN32)
-    DWORD written;
-    WriteFile(GetStdHandle(STD_ERROR_HANDLE), message, static_cast<DWORD>(length), &written, nullptr);
-#else
-    const int savedErrno = errno;
-    const auto ignored = write(STDERR_FILENO, message, length);
-    (void)ignored;
-    errno = savedErrno;
-#endif
+    FaultReport::Message message;
+    message.Text("[memory] WARNING ").Text(reason)
+        .Text(isWrite ? " write at " : " read at ").Hex(address).Write();
 }
 
 } // namespace
