@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <unordered_set>
 
 namespace GameLayout {
 
@@ -177,13 +178,13 @@ bool Info(uint32_t format, FormatInfo& info) {
     }
 }
 
-size_t EncodedSize(uint32_t format, uint32_t width, uint32_t height) {
+uint64_t EncodedSize(uint32_t format, uint32_t width, uint32_t height) {
     FormatInfo info{};
     if (!Info(format, info)) {
         return 0;
     }
-    const size_t w = (width + info.bw - 1) / info.bw * info.bw;
-    const size_t h = (height + info.bh - 1) / info.bh * info.bh;
+    const uint64_t w = (uint64_t(width) + info.bw - 1) / info.bw * info.bw;
+    const uint64_t h = (uint64_t(height) + info.bh - 1) / info.bh * info.bh;
     return w * h * info.bits / 8;
 }
 
@@ -203,7 +204,9 @@ bool DecodeTexture(const uint8_t* src, size_t size, uint32_t format, uint32_t wi
     if ((format == 8 || format == 9 || format == 10) && palette == nullptr) {
         return false;
     }
-    rgba.assign(static_cast<size_t>(width) * height * 4, 0);
+    const uint64_t pixelsSize = uint64_t(width) * height * 4;
+    if (pixelsSize > rgba.max_size()) return false;
+    rgba.assign(static_cast<size_t>(pixelsSize), 0);
     const uint32_t blocksX = (width + info.bw - 1) / info.bw;
     const uint32_t blocksY = (height + info.bh - 1) / info.bh;
     const size_t blockBytes = info.bw * info.bh * info.bits / 8;
@@ -329,102 +332,109 @@ std::shared_ptr<Font> LoadFont(const std::string& name) {
     }
     auto font = std::make_shared<Font>();
     std::vector<uint8_t> data;
-    if (ReadDiscFile(name, data) && data.size() > 0x30 && BE32(data.data()) == 0x52464E54u) {
-        const uint16_t headerSize = BE16(&data[12]);
-        const uint8_t* finf = &data[headerSize];
-        if (BE32(finf) == 0x46494E46u) {  // FINF
-            const uint8_t* f = finf + 8;
-            font->linefeed = static_cast<int8_t>(f[1]);
-            font->defaultIndex = BE16(f + 2);
-            const uint32_t tglp = BE32(f + 8);
-            uint32_t cwdh = BE32(f + 12);
-            uint32_t cmap = BE32(f + 16);
-            font->height = f[20];
-            font->width = f[21];
-            font->ascent = f[22];
-            if (tglp + 0x18 <= data.size()) {
-                const uint8_t* t = &data[tglp];
-                font->cellWidth = t[0];
-                font->cellHeight = t[1];
-                const uint32_t sheetSize = BE32(t + 4);
-                const uint16_t sheetCount = BE16(t + 8);
-                const uint16_t sheetFormat = BE16(t + 10);
-                const uint16_t perRow = BE16(t + 12);
-                const uint16_t perColumn = BE16(t + 14);
-                const uint16_t sheetWidth = BE16(t + 16);
-                const uint16_t sheetHeight = BE16(t + 18);
-                const uint32_t sheetData = BE32(t + 20);
-                for (uint16_t i = 0; i < sheetCount; ++i) {
-                    const size_t at = sheetData + static_cast<size_t>(i) * sheetSize;
-                    Image sheet;
-                    sheet.width = sheetWidth;
-                    sheet.height = sheetHeight;
-                    if (at + sheetSize > data.size() ||
-                        !DecodeTexture(&data[at], sheetSize, sheetFormat, sheetWidth, sheetHeight, sheet.rgba)) {
-                        break;
-                    }
-                    font->sheets.push_back(Upload(sheet));
-                }
-                const uint32_t perSheet = static_cast<uint32_t>(perRow) * perColumn;
-                // Widths, then the glyph cells.
-                while (cwdh != 0 && cwdh + 8 <= data.size()) {
-                    const uint8_t* w = &data[cwdh];
-                    const uint16_t first = BE16(w);
-                    const uint16_t last = BE16(w + 2);
-                    for (uint32_t index = first; index <= last && cwdh + 8 + (index - first) * 3 + 3 <= data.size(); ++index) {
-                        if (index >= font->glyphs.size()) {
-                            font->glyphs.resize(index + 1);
-                        }
-                        Font::Glyph& g = font->glyphs[index];
-                        const uint8_t* e = w + 8 + (index - first) * 3;
-                        g.left = static_cast<int8_t>(e[0]);
-                        g.glyphWidth = e[1];
-                        g.charWidth = static_cast<int8_t>(e[2]);
-                    }
-                    const uint32_t next = BE32(w + 4);
-                    cwdh = next;
-                }
-                for (uint32_t index = 0; index < font->glyphs.size() && perSheet != 0; ++index) {
-                    Font::Glyph& g = font->glyphs[index];
-                    g.sheet = static_cast<uint16_t>(index / perSheet);
-                    const uint32_t cell = index % perSheet;
-                    const float x = static_cast<float>((cell % perRow) * (font->cellWidth + 1));
-                    const float y = static_cast<float>((cell / perRow) * (font->cellHeight + 1));
-                    g.u0 = x / sheetWidth;
-                    g.v0 = y / sheetHeight;
-                    g.u1 = (x + g.glyphWidth) / sheetWidth;
-                    g.v1 = (y + font->cellHeight) / sheetHeight;
-                }
-            }
-            while (cmap != 0 && cmap + 12 <= data.size()) {
-                const uint8_t* m = &data[cmap];
-                const uint16_t begin = BE16(m);
-                const uint16_t end = BE16(m + 2);
-                const uint16_t method = BE16(m + 4);
-                const uint8_t* body = m + 12;
-                if (method == 0) {
-                    const uint16_t offset = BE16(body);
-                    for (uint32_t code = begin; code <= end; ++code) {
-                        font->map[static_cast<uint16_t>(code)] = static_cast<uint16_t>(code - begin + offset);
-                    }
-                } else if (method == 1) {
-                    for (uint32_t code = begin; code <= end; ++code) {
-                        const uint16_t index = BE16(body + (code - begin) * 2);
-                        if (index != 0xFFFF) {
-                            font->map[static_cast<uint16_t>(code)] = index;
-                        }
-                    }
-                } else if (method == 2) {
-                    const uint16_t count = BE16(body);
-                    for (uint16_t i = 0; i < count; ++i) {
-                        font->map[BE16(body + 2 + i * 4)] = BE16(body + 4 + i * 4);
-                    }
-                }
-                cmap = BE32(m + 8);
-            }
-            font->ok = !font->sheets.empty() && !font->glyphs.empty();
+    font->ok = [&] {
+        if (!ReadDiscFile(name, data) || data.size() < 16 || BE32(data.data()) != 0x52464E54u) return false;
+        // Links point to block bodies, after their eight-byte tag/size headers.
+        const auto blockSize = [&](uint32_t body, uint32_t tag, size_t minimum) -> size_t {
+            if (body < 8 || body > data.size() || minimum > data.size() - body) return 0;
+            const uint32_t size = BE32(data.data() + body - 4);
+            if (BE32(data.data() + body - 8) != tag || size < 8 + minimum ||
+                size > data.size() - (body - 8)) return 0;
+            return size - 8;
+        };
+        const uint32_t finf = BE16(data.data() + 12) + 8u;
+        if (!blockSize(finf, 0x46494E46u, 24)) return false;
+        const uint8_t* f = data.data() + finf;
+        font->linefeed = static_cast<int8_t>(f[1]);
+        font->defaultIndex = BE16(f + 2);
+        const uint32_t tglp = BE32(f + 8);
+        uint32_t cwdh = BE32(f + 12), cmap = BE32(f + 16);
+        font->height = f[20];
+        font->width = f[21];
+        font->ascent = f[22];
+        const size_t textureSize = blockSize(tglp, 0x54474C50u, 24);
+        if (!textureSize) return false;
+        const uint8_t* t = data.data() + tglp;
+        font->cellWidth = t[0];
+        font->cellHeight = t[1];
+        const uint32_t sheetSize = BE32(t + 4);
+        const uint16_t sheetCount = BE16(t + 8), sheetFormat = BE16(t + 10);
+        const uint16_t perRow = BE16(t + 12), perColumn = BE16(t + 14);
+        const uint16_t sheetWidth = BE16(t + 16), sheetHeight = BE16(t + 18);
+        const uint32_t sheetData = BE32(t + 20);
+        if (!sheetSize || !sheetCount || !perRow || !perColumn || !sheetWidth || !sheetHeight ||
+            sheetData < tglp || sheetData - tglp > textureSize ||
+            sheetCount > (textureSize - (sheetData - tglp)) / sheetSize) return false;
+        std::vector<Image> sheets;
+        for (uint16_t i = 0; i < sheetCount; ++i) {
+            const size_t at = sheetData + static_cast<size_t>(i) * sheetSize;
+            Image sheet;
+            sheet.width = sheetWidth;
+            sheet.height = sheetHeight;
+            if (!DecodeTexture(data.data() + at, sheetSize, sheetFormat, sheetWidth, sheetHeight, sheet.rgba)) return false;
+            sheets.push_back(std::move(sheet));
         }
-    }
+        const uint32_t perSheet = static_cast<uint32_t>(perRow) * perColumn;
+        std::unordered_set<uint32_t> visited;
+        while (cwdh != 0) {
+            const size_t size = blockSize(cwdh, 0x43574448u, 8);
+            if (!size || !visited.insert(cwdh).second) return false;
+            const uint8_t* w = data.data() + cwdh;
+            const uint16_t first = BE16(w), last = BE16(w + 2);
+            if (last < first || (uint32_t(last) - first + 1) > (size - 8) / 3) return false;
+            if (last >= font->glyphs.size()) font->glyphs.resize(uint32_t(last) + 1);
+            for (uint32_t index = first; index <= last; ++index) {
+                Font::Glyph& g = font->glyphs[index];
+                const uint8_t* e = w + 8 + (index - first) * 3;
+                g.left = static_cast<int8_t>(e[0]);
+                g.glyphWidth = e[1];
+                g.charWidth = static_cast<int8_t>(e[2]);
+            }
+            cwdh = BE32(w + 4);
+        }
+        for (uint32_t index = 0; index < font->glyphs.size(); ++index) {
+            Font::Glyph& g = font->glyphs[index];
+            g.sheet = static_cast<uint16_t>(index / perSheet);
+            const uint32_t cell = index % perSheet;
+            const float x = static_cast<float>((cell % perRow) * (font->cellWidth + 1));
+            const float y = static_cast<float>((cell / perRow) * (font->cellHeight + 1));
+            g.u0 = x / sheetWidth;
+            g.v0 = y / sheetHeight;
+            g.u1 = (x + g.glyphWidth) / sheetWidth;
+            g.v1 = (y + font->cellHeight) / sheetHeight;
+        }
+        visited.clear();
+        while (cmap != 0) {
+            const size_t size = blockSize(cmap, 0x434D4150u, 14);
+            if (!size || !visited.insert(cmap).second) return false;
+            const uint8_t* m = data.data() + cmap;
+            const uint16_t begin = BE16(m), end = BE16(m + 2), method = BE16(m + 4);
+            if (end < begin) return false;
+            const uint8_t* body = m + 12;
+            if (method == 0) {
+                const uint16_t offset = BE16(body);
+                for (uint32_t code = begin; code <= end; ++code)
+                    font->map[static_cast<uint16_t>(code)] = static_cast<uint16_t>(code - begin + offset);
+            } else if (method == 1) {
+                if ((uint32_t(end) - begin + 1) > (size - 12) / 2) return false;
+                for (uint32_t code = begin; code <= end; ++code) {
+                    const uint16_t index = BE16(body + (code - begin) * 2);
+                    if (index != 0xFFFF) font->map[static_cast<uint16_t>(code)] = index;
+                }
+            } else if (method == 2) {
+                const uint16_t count = BE16(body);
+                if (count > (size - 14) / 4) return false;
+                for (uint16_t i = 0; i < count; ++i)
+                    font->map[BE16(body + 2 + i * 4)] = BE16(body + 4 + i * 4);
+            } else {
+                return false;
+            }
+            cmap = BE32(m + 8);
+        }
+        if (font->glyphs.empty() || font->map.empty()) return false;
+        for (const Image& sheet : sheets) font->sheets.push_back(Upload(sheet));
+        return true;
+    }();
     if (!font->ok) {
         RT_LOGF(RT_TAG_RUNTIME, "netplay ui: could not load the game font %s\n", name.c_str());
     }
