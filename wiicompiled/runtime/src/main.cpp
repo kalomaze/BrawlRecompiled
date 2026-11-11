@@ -1196,7 +1196,7 @@ void PosixMemoryFaultHandler(int sig, siginfo_t* info, void* ucontextVoid) {
     // the executable-write guard, unmapped pages). Resolving one here means resuming the
     // faulting instruction, which just returning from the handler does.
     // Unknown metadata and instruction fetches must never be treated as reads.
-    if (faultAddress != nullptr && HostFault::MayRecoverDataFault(sig, info->si_code, fault.access) &&
+    if (faultAddress != nullptr && HostFault::MayRecoverDataFault(sig, info->si_code, fault) &&
         GuestFlat::HandleAccessViolation(faultAddress, fault.access == HostFault::Access::Write, fault.instruction)) {
         return;
     }
@@ -1225,9 +1225,8 @@ void InstallPosixMemoryFaultHandler() {
     action.sa_flags = SA_SIGINFO;
     sigemptyset(&action.sa_mask);
     sigaction(SIGSEGV, &action, nullptr);
-    // A touch beyond a memfd-backed mapping's ftruncate()'d size raises SIGBUS rather than
-    // SIGSEGV on Linux; region sizing should make this unreachable, but routing it to the same
-    // handler costs nothing and avoids a silent gap if it ever isn't.
+    // Linux pager failures use SIGBUS; Darwin protection faults can use it too.
+    // Only faults admitted by platform-specific classification enter memory recovery.
     sigaction(SIGBUS, &action, nullptr);
 }
 #endif
