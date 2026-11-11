@@ -13,15 +13,14 @@ void WriteFatalLog(std::string_view reason);
 void SetRuntimeExitCode(int code);
 void MarkFatalErrorReported();
 
-// Centralized crash reporting (defined in main.cpp). Every fatal path funnels
-// through these so the per-run log folder always receives the same artifact
-// set: crash_<reason>.txt with registers/backtrace/heuristics, plus MEM1/MEM2
-// snapshots a developer can walk offline.
+// Detailed diagnostics for ordinary runtime error paths (defined in main.cpp).
+// Native fault/signal handlers use FaultReport instead: these helpers allocate,
+// use streams, and traverse guest state.
 namespace RuntimeCrash {
 
 // Writes crash_<reason>.txt (and, once per process, the guest memory
-// snapshots) into the current run's log folder. Safe to call from any fatal
-// path; never throws.
+// snapshots) into the current run's log folder. Never throws; must not be
+// called from a native fault or signal handler.
 void WriteCrashArtifacts(std::string_view reason,
                          std::string_view extraDetails = {},
                          const uint32_t* missingGuestTarget = nullptr) noexcept;

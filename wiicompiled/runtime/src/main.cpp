@@ -990,67 +990,6 @@ constexpr DWORD kCppExceptionCodeMsvc = 0xE06D7363;
 constexpr DWORD kAsanFatalAppExit = 0x40000015; // STATUS_FATAL_APP_EXIT
 LONG ReportFatalSehAndExit(EXCEPTION_POINTERS* info);
 
-void ReportStructuredException(EXCEPTION_POINTERS* info) {
-    if (!info || !info->ExceptionRecord) {
-        RT_LOG(RT_TAG_RUNTIME) << "Structured exception occurred, but no diagnostic info was captured." << std::endl;
-        return;
-    }
-
-    const auto* record = info->ExceptionRecord;
-    const auto code = record->ExceptionCode;
-    std::cerr << std::hex << std::uppercase;
-    RT_LOG(RT_TAG_RUNTIME) << "Structured exception 0x" << code;
-    if (!g_lastEntryLabel.empty()) {
-        std::cerr << " while executing " << g_lastEntryLabel;
-    }
-    std::cerr << std::dec << std::nouppercase << std::endl;
-
-    const auto faultAddress = reinterpret_cast<uintptr_t>(record->ExceptionAddress);
-    std::cerr << std::hex << std::uppercase;
-    RT_LOG(RT_TAG_RUNTIME) << "Fault address: 0x" << faultAddress << std::dec << std::nouppercase << std::endl;
-
-    if (code == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= 2) {
-        const auto accessType = record->ExceptionInformation[0];
-        const auto accessed = record->ExceptionInformation[1];
-        RT_LOG(RT_TAG_RUNTIME) << "Access type: " << (accessType ? "write" : "read")
-                  << " at 0x" << std::hex << std::uppercase << accessed << std::dec << std::nouppercase << std::endl;
-
-        // Guardrail: flag raw GX gather pipe touches (0xCC00_8xxx) which must be routed through HLE.
-        // Direct stores to this MMIO region (e.g., translated stfs/stb -0x8000(r4) with r4=0xCC010000)
-        // will fault on the host. Emit an explicit hint so we know to fix the translation/HLE path instead
-        // of chasing generic access violations.
-        constexpr uintptr_t kGxGatherLo = 0xCC008000;
-        constexpr uintptr_t kGxGatherHi = 0xCC009000; // one page past the 0x100-byte gather range for clarity
-        if (accessed >= kGxGatherLo && accessed < kGxGatherHi) {
-            RT_LOG(RT_TAG_RUNTIME) << "HINT: guest attempted a direct GX gather pipe write (0xCC00_8xxx)." << std::endl;
-            RT_LOG(RT_TAG_RUNTIME) << "      These must go through GX_HLE_FIFO_Write*; check the translated function for" << std::endl;
-            RT_LOG(RT_TAG_RUNTIME) << "      literal stores to -0x8000(r4) after lis r4,0xCC01 and route them via HLE." << std::endl;
-        }
-    }
-
-#if defined(_M_X64) || defined(__x86_64__)
-    const auto rip = info->ContextRecord ? info->ContextRecord->Rip : 0;
-    const auto rsp = info->ContextRecord ? info->ContextRecord->Rsp : 0;
-    std::cerr << std::hex << std::uppercase;
-    RT_LOG(RT_TAG_RUNTIME) << "RIP=0x" << rip << " RSP=0x" << rsp << std::dec << std::nouppercase << std::endl;
-#elif defined(_M_IX86)
-    const auto eip = info->ContextRecord ? info->ContextRecord->Eip : 0;
-    const auto esp = info->ContextRecord ? info->ContextRecord->Esp : 0;
-    std::cerr << std::hex << std::uppercase;
-    RT_LOG(RT_TAG_RUNTIME) << "EIP=0x" << eip << " ESP=0x" << esp << std::dec << std::nouppercase << std::endl;
-#endif
-
-    // Always dump CPU state on crash.
-    RT_LOG(RT_TAG_RUNTIME) << "===== DUMPING CPU STATE =====" << std::endl;
-    SystemBridge::DumpCpuState(TryGetCpuContext());
-    std::cerr.flush();
-
-    RT_LOG(RT_TAG_RUNTIME) << "Enable /DEBUG builds or capture a dump for full stack details." << std::endl;
-    std::cerr.flush();
-}
-
-
-
 LONG CALLBACK SehLogger(EXCEPTION_POINTERS* info) {
     // Guest-space faults are the flat memory interception mechanism (MMIO,
     // deferred EFB reads, the executable-write guard, unmapped pages). The
@@ -1106,41 +1045,31 @@ LONG WINAPI UnhandledSehFilter(EXCEPTION_POINTERS* info) {
 }
 
 LONG ReportFatalSehAndExit(EXCEPTION_POINTERS* info) {
-    // Guard against re-entrancy: if we crash while reporting, don't recurse
-    static std::atomic_flag s_inCrashHandler = ATOMIC_FLAG_INIT;
-    if (s_inCrashHandler.test_and_set()) {
-        std::_Exit(EXIT_FAILURE);
-    }
+    static std::atomic_flag reporting = ATOMIC_FLAG_INIT;
+    if (reporting.test_and_set()) std::_Exit(EXIT_FAILURE);
 
-    // Report the structured exception with detailed information
-    ReportStructuredException(info);
-    const auto* record = info->ExceptionRecord;
-    const DWORD code = record != nullptr ? record->ExceptionCode : 0;
-    std::ostringstream popupDetails;
-    popupDetails << "A native Windows exception (0x" << std::hex << std::uppercase << code << ") occurred";
-    if (!g_lastEntryLabel.empty()) {
-        popupDetails << " while executing " << g_lastEntryLabel;
+    // Native faults can interrupt the allocator, streams, or window system.
+    // Inspect only the OS exception record; leave stack/guest-state traversal
+    // to a debugger rather than risking another failure while reporting.
+    FaultReport::Message message;
+    message.Text("[runtime] FATAL native Windows exception");
+    const auto* record = info ? info->ExceptionRecord : nullptr;
+    if (record) {
+        message.Text("\n  code: ").Hex(record->ExceptionCode)
+            .Text("\n  instruction: ").Hex(reinterpret_cast<uintptr_t>(record->ExceptionAddress), sizeof(uintptr_t) * 2);
+        if ((record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION ||
+             record->ExceptionCode == EXCEPTION_IN_PAGE_ERROR) && record->NumberParameters >= 2) {
+            const auto access = record->ExceptionInformation[0];
+            message.Text("\n  access: ").Text(access == 0 ? "read" : access == 1 ? "write" : access == 8 ? "execute" : "unknown")
+                .Text(" at ").Hex(record->ExceptionInformation[1], sizeof(uintptr_t) * 2);
+            if (record->ExceptionCode == EXCEPTION_IN_PAGE_ERROR && record->NumberParameters >= 3)
+                message.Text("\n  paging error: ").Hex(record->ExceptionInformation[2]);
+        }
+    } else {
+        message.Text("\n  exception record unavailable");
     }
-    if (code == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= 2) {
-        popupDetails << ".\n\nThe game attempted a "
-                     << (record->ExceptionInformation[0] ? "write" : "read")
-                     << " at host address 0x" << record->ExceptionInformation[1];
-    }
-    popupDetails << ".\n\nThe process transcript and crash log contain the full CPU and stack diagnostics.";
-    ShowRuntimeFatalPopup("a native crash occurred", popupDetails.str());
-    DumpHostStackTrace();
-
-    WriteFatalLogImpl("seh");
-    
-    // CRITICAL: Explicitly flush all output to ensure visibility with PowerShell redirection
-    std::cerr << '\n';
-    RT_LOG(RT_TAG_RUNTIME) << "===== FLUSHING OUTPUT BEFORE EXIT =====" << std::endl;
-    std::cerr.flush();
-    std::cout.flush();
-    std::fflush(stdout);
-    std::fflush(stderr);
-    
-    std::_Exit(EXIT_FAILURE);
+    message.Text("\n  active guest function: ").Hex(RecompMod::CurrentTranslatedExecutionAddress());
+    message.Fatal();
 }
 
 void InstallSehLogger() {
