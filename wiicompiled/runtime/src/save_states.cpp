@@ -302,7 +302,14 @@ void FrameBoundary() {
         waited = 0;
     }
     g_request = 0;
-    if (g_helper == nullptr) g_helper = HostContext::Create(256u << 10, HelperMain, nullptr);
+    if (g_helper == nullptr) {
+        g_helper = HostContext::Create(256u << 10, HelperMain, nullptr);
+        if (g_helper == nullptr) {
+            Say("Cannot save or load: failed to create the helper context.");
+            RT_LOGF(RT_TAG_RUNTIME, "[savestate] helper context creation failed\n");
+            return;
+        }
+    }
     g_op = request;
     g_opSlot = slot;
     SwitchFiber(g_helper);

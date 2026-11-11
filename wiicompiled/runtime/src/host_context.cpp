@@ -53,7 +53,7 @@ bool InitializeScheduler(Handle* scheduler)
 {
     void* context = ConvertThreadToFiber(nullptr);
     g_convertedScheduler = context != nullptr;
-    if (!context) {
+    if (!context && IsThreadAFiber()) {
         context = GetCurrentFiber();
     }
     *scheduler = context;
