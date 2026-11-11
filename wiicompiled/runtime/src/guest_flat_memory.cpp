@@ -157,14 +157,9 @@ static_assert(std::atomic<uint8_t>::is_always_lock_free);
 // a fault racing registration could mistake executable memory for sparse data.
 constexpr uint8_t kExecutableRegistered = 1;
 std::atomic<uint8_t> g_executablePages[1u << 20]{};
-// OS commits are idempotent. Only the first successful commit increments the
-// distinct-region counter and emits a diagnostic.
-std::atomic<uint8_t> g_unmappedCommittedBlocks[1u << 16]{};
-
 std::atomic<uint32_t> g_countMmio{0};
 std::atomic<uint32_t> g_countXGuard{0};
-std::atomic<uint32_t> g_countUnmapped{0};
-std::atomic<uint32_t> g_countUnmappedRegions{0};
+std::atomic<uint32_t> g_countUnhandled{0};
 
 uint64_t RoundUp(uint64_t value, uint64_t alignment) {
     return (value + alignment - 1u) & ~(alignment - 1u);
@@ -335,28 +330,6 @@ bool CommitPlaceholder(uint8_t* address, uint64_t size, ProtectionFlags protecti
     return ProtectRange(address, size, protection);
 #endif
 }
-
-#if defined(_WIN32)
-void ReserveSparseStorage() {
-    // Convert each remaining placeholder span, not each 64 KiB block. Runtime
-    // recovery can then MEM_COMMIT without splitting/replacing any allocation.
-    for (uint64_t offset = 0; offset < kGuestSpaceSize;) {
-        MEMORY_BASIC_INFORMATION mbi{};
-        if (VirtualQuery(g_base + offset, &mbi, sizeof(mbi)) == 0 || mbi.RegionSize == 0)
-            throw std::runtime_error(LastErrorText("querying sparse guest reservation"));
-        const uint64_t size = std::min<uint64_t>(mbi.RegionSize, kGuestSpaceSize - offset);
-        if (mbi.State == MEM_RESERVE) {
-            // The final placeholder includes the extra guard granule. Split it
-            // at 4 GiB so that guard stays a placeholder and can never commit.
-            if (size != mbi.RegionSize) SplitPlaceholder(g_base + offset, size);
-            if (g_virtualAlloc2(GetCurrentProcess(), g_base + offset, static_cast<SIZE_T>(size),
-                                MEM_RESERVE | kMemReplacePlaceholder, PAGE_NOACCESS, nullptr, 0) == nullptr)
-                throw std::runtime_error(LastErrorText("reserving sparse guest storage"));
-        }
-        offset += size;
-    }
-}
-#endif
 
 // One definition of the two windows lives in memory_access.h; these are the
 // names the fault handler below reads.
@@ -561,7 +534,7 @@ void InstallVectoredHandler() {
     message.Fatal();
 }
 
-void ReportRecoveredFault(const char* reason, uint32_t address, bool isWrite) {
+void ReportGuestFault(const char* reason, uint32_t address, bool isWrite) {
     FaultReport::Message message;
     message.Text("[memory] WARNING ").Text(reason)
         .Text(isWrite ? " write at " : " read at ").Hex(address).Write();
@@ -677,9 +650,6 @@ void Initialize(const std::vector<RegionRequest>& regions) {
         throw std::runtime_error(LastErrorText("committing the no-access MMIO window"));
     }
 
-#if defined(_WIN32)
-    ReserveSparseStorage();
-#endif
     ApplyExecutableProtectionLocked();
 #if defined(_WIN32)
     InstallVectoredHandler();
@@ -735,8 +705,7 @@ FaultCounters Counters() {
     FaultCounters counters;
     counters.mmio = g_countMmio.load(std::memory_order_relaxed);
     counters.xguard = g_countXGuard.load(std::memory_order_relaxed);
-    counters.unmapped = g_countUnmapped.load(std::memory_order_relaxed);
-    counters.unmappedRegions = g_countUnmappedRegions.load(std::memory_order_relaxed);
+    counters.unhandled = g_countUnhandled.load(std::memory_order_relaxed);
     return counters;
 }
 
@@ -744,20 +713,8 @@ void LogFaultSummary() noexcept {
     static std::atomic<bool> reported{false};
     if (reported.exchange(true, std::memory_order_relaxed)) return;
     const FaultCounters counters = Counters();
-    if (counters.unmapped == 0) {
-        RT_LOG(RT_TAG_MEMORY) << "shutdown summary: no unmapped guest touches (xguard="
-                  << counters.xguard << " mmio=" << counters.mmio
-                  << ")" << std::endl;
-        std::cerr.flush();
-        return;
-    }
-    RT_LOG(RT_TAG_MEMORY) << "WARNING shutdown summary: " << counters.unmapped
-              << " unmapped guest touches across " << counters.unmappedRegions
-              << " distinct 64 KiB regions were absorbed by on-demand commits. Each one is a "
-                 "guest pointer that addressed nothing; search the log for "
-                 "'[" RT_TAG_MEMORY "] WARNING unmapped guest touch' for the faulting addresses."
-              << std::endl;
-    RT_LOG(RT_TAG_MEMORY) << "shutdown summary: xguard=" << counters.xguard << " mmio=" << counters.mmio << std::endl;
+    RT_LOG(RT_TAG_MEMORY) << "shutdown summary: unhandled=" << counters.unhandled
+                         << " xguard=" << counters.xguard << " mmio=" << counters.mmio << std::endl;
     std::cerr.flush();
 }
 
@@ -775,7 +732,7 @@ bool HandleAccessViolation(void* faultAddress, bool isWrite, const void* instruc
     const uint32_t guestAddress = static_cast<uint32_t>(fault - base);
 
     // 1) Executable-write guard. Registration remains visible while a page is
-    // being protected or reopened, so delayed faults cannot enter sparse recovery.
+    // being protected or reopened, so delayed faults retain their code-write classification.
     {
         const uint32_t pageIndex = guestAddress >> 12;
         const bool guarded = (g_executablePages[pageIndex].load(std::memory_order_acquire) & kExecutableRegistered) != 0;
@@ -806,13 +763,17 @@ bool HandleAccessViolation(void* faultAddress, bool isWrite, const void* instruc
     //    answering zero would turn a missing device into a silent hang, so both are reported instead.
     if (IsMmio(guestAddress)) {
         g_countMmio.fetch_add(1, std::memory_order_relaxed);
-        // Outside the device register blocks (Flipper at 0xCC000000/0xCD000000, Hollywood at 0xCD800000) the bus has
-        // nothing; mods read through stale pointers there (Project+: an 0xCC-filled pointer plus an offset). Like
-        // the console and Dolphin, such reads give 0: the page becomes zeroed scratch memory.
+        // Compatibility reads outside the modeled device blocks currently
+        // return zero. This is not a complete hardware/MMIO model. Keep that
+        // zero backing read-only; helper-based stores already discard writes.
         const uint32_t block = guestAddress & 0xFFFF0000u;
         if (block != 0xCC000000u && block != 0xCD000000u && block != 0xCD800000u) {
-            if (ProtectRange(g_base + (guestAddress & ~(kHostPageSize - 1)), kHostPageSize, kProtReadWrite)) {
-                ReportRecoveredFault("no hardware register; opened scratch page for", guestAddress, isWrite);
+            if (isWrite) {
+                ReportFatalGuestFault("unchecked MMIO write", guestAddress, isWrite,
+                                      "MMIO stores must use memory helpers; writable scratch would create hidden guest state.");
+            }
+            if (ProtectRange(g_base + (guestAddress & ~(kHostPageSize - 1)), kHostPageSize, kProtRead)) {
+                ReportGuestFault("unhandled MMIO block; opened read-only zero page for", guestAddress, false);
                 return true;
             }
         }
@@ -841,43 +802,12 @@ bool HandleAccessViolation(void* faultAddress, bool isWrite, const void* instruc
         return true;
     }
 
-    // 3) Unmapped address: commit the block on demand (reproducing the old zero-fill sparse-map behavior)
-    //    and report it, since a commit here means a wild guest pointer that would otherwise walk over silently.
-    const uint64_t blockBase = static_cast<uint64_t>(guestAddress) & ~(kAllocationGranularity - 1u);
-    g_countUnmapped.fetch_add(1, std::memory_order_relaxed);
-    bool committed = false;
-    {
-#if defined(_WIN32)
-        MEMORY_BASIC_INFORMATION mbi{};
-        if (VirtualQuery(g_base + blockBase, &mbi, sizeof(mbi)) == 0) return false;
-        if (mbi.State == MEM_COMMIT) {
-            // Another thread already committed this block: re-running the
-            // access succeeds. Any other committed-but-inaccessible state is
-            // not ours to fix - resuming would fault forever, so hand the
-            // exception to the crash reporter instead.
-            const bool writable = (mbi.Protect & (PAGE_READWRITE | PAGE_WRITECOPY |
-                                                  PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
-            const bool readable = writable || (mbi.Protect & (PAGE_READONLY | PAGE_EXECUTE_READ |
-                                                              PAGE_EXECUTE)) != 0;
-            return isWrite ? writable : readable;
-        }
-        // Initialization already replaced placeholders with private reservations.
-        // MEM_COMMIT is idempotent and never releases another thread's backing.
-        if (VirtualAlloc(g_base + blockBase, kAllocationGranularity, MEM_COMMIT, PAGE_READWRITE) == nullptr)
-            return false;
-#else
-        // Re-establish access even after a previous commit: protection or the
-        // mapping itself may have changed. Failed OS operations must propagate.
-        if (!CommitPlaceholder(g_base + blockBase, kAllocationGranularity, kProtReadWrite)) return false;
-#endif
-        const uint32_t blockIndex = static_cast<uint32_t>(blockBase / kAllocationGranularity);
-        committed = g_unmappedCommittedBlocks[blockIndex].exchange(1, std::memory_order_relaxed) == 0;
-    }
-    if (committed) {
-        g_countUnmappedRegions.fetch_add(1, std::memory_order_relaxed);
-        ReportRecoveredFault("unmapped guest touch; committed zero-filled block for", guestAddress, isWrite);
-    }
-    return true;
+    // Neither a registered code guard nor a modeled MMIO recovery. Granting
+    // access here would invent mutable memory absent from Memory::Contains and
+    // all snapshots. Preserve the fault, including failures on existing backing.
+    g_countUnhandled.fetch_add(1, std::memory_order_relaxed);
+    ReportGuestFault("unhandled guest memory fault", guestAddress, isWrite);
+    return false;
 }
 
 } // namespace GuestFlat

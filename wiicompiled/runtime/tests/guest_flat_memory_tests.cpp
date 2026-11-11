@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include "system_bridge.h"
 #include "recomp_mod_loader.h"
 
@@ -38,9 +39,10 @@ void ShowRuntimeFatalPopup(std::string_view, std::string_view) noexcept { std::a
 
 namespace {
 volatile std::sig_atomic_t recovered = 0;
+volatile std::sig_atomic_t faultIsWrite = 1;
 std::atomic<uint32_t> recoveryAddress{0x32000000u};
 void RecoverActualFault(int, siginfo_t* info, void*) {
-    if (!GuestFlat::HandleAccessViolation(info->si_addr, true,
+    if (!GuestFlat::HandleAccessViolation(info->si_addr, faultIsWrite != 0,
                                          reinterpret_cast<const void*>(&RecoverActualFault))) std::_Exit(2);
 }
 void RecoverWhileInterrupted(int) {
@@ -124,9 +126,9 @@ int main() {
         if (mem1Physical[0x1000] != 0x6b) return 1;
         // A second thread's delayed fault must still be classified as an
         // executable-page fault after the first handler reopened the page.
-        const auto sparseFaults = GuestFlat::Counters().unmapped;
+        const auto unhandledFaults = GuestFlat::Counters().unhandled;
         if (!GuestFlat::HandleAccessViolation(page, true, reinterpret_cast<const void*>(&main)) ||
-            GuestFlat::Counters().unmapped != sparseFaults) return 1;
+            GuestFlat::Counters().unhandled != unhandledFaults) return 1;
         // Recovery must work even if the interrupted operation owns StateMutex.
         recoveryAddress.store(address);
         std::signal(SIGUSR1, RecoverWhileInterrupted);
@@ -179,27 +181,25 @@ int main() {
             return 1;
         }
     }
-    // An interrupted mapping operation may own StateMutex. Sparse recovery
-    // must neither acquire it nor allocate through a lazily initialized vector.
+    // Reject unknown addresses even when interrupted code owns the mapper lock.
     std::signal(SIGUSR1, RecoverWhileInterrupted);
     {
         std::lock_guard<std::mutex> interrupted(GuestFlat::StateMutex());
         std::raise(SIGUSR1);
     }
     std::signal(SIGUSR1, SIG_DFL);
-    if (!recovered) return 1;
-    guestWritable[0x32000000u] = 0x29;
+    if (recovered) return 1;
 
-    const auto before = GuestFlat::Counters().unmappedRegions;
-    std::atomic<bool> success{true};
-    auto recover = [&] {
-        if (!GuestFlat::HandleAccessViolation(guestWritable + 0x33000000u, true,
-                                              reinterpret_cast<const void*>(&main))) success = false;
+    const auto before = GuestFlat::Counters().unhandled;
+    std::atomic<bool> rejected{true};
+    auto reject = [&] {
+        if (GuestFlat::HandleAccessViolation(guestWritable + 0x33000000u, true,
+                                             reinterpret_cast<const void*>(&main))) rejected = false;
     };
-    std::thread first(recover), second(recover);
+    std::thread first(reject), second(reject);
     first.join();
     second.join();
-    if (!success || GuestFlat::Counters().unmappedRegions != before + 1) return 1;
+    if (!rejected || GuestFlat::Counters().unhandled != before + 2) return 1;
 
     // Guest RAM is data, never native host instructions. Retrying an execution
     // fault after granting read/write permission would fault forever.
@@ -209,16 +209,40 @@ int main() {
         std::cerr << "native execution in guest RAM was reported as recovered\n";
         return 1;
     }
-    // A past commit is not evidence that this fault can now be retried.
-    auto* sparse = guestWritable + 0x30000000u;
-    if (!GuestFlat::HandleAccessViolation(sparse, true, reinterpret_cast<const void*>(&main))) return 1;
-    *sparse = 0x5c;
-    if (mprotect(sparse, 0x10000u, PROT_NONE) != 0) return 1;
-    if (!GuestFlat::HandleAccessViolation(sparse, true, reinterpret_cast<const void*>(&main))) return 1;
-    *sparse = 0x7d;
-    if (munmap(sparse, 0x10000u) != 0) return 1;
-    if (GuestFlat::HandleAccessViolation(sparse, true, reinterpret_cast<const void*>(&main))) {
-        std::cerr << "a past commit concealed a failed recovery\n";
+    // Check actual OS access after attempted recovery, not just its return value.
+    // A child exits through the signal handler only if the access still faults.
+    auto expectFault = [&](uint32_t address, bool write, int expectedExit) {
+        const pid_t child = fork();
+        if (child < 0) return false;
+        if (child == 0) {
+            faultIsWrite = write;
+            struct sigaction action{};
+            action.sa_sigaction = RecoverActualFault;
+            action.sa_flags = SA_SIGINFO;
+            sigemptyset(&action.sa_mask);
+            if (sigaction(SIGSEGV, &action, nullptr) != 0) std::_Exit(3);
+            auto* ptr = reinterpret_cast<volatile uint8_t*>(guestWritable + address);
+            if (write) *ptr = 0x5c;
+            else { const auto value = *ptr; (void)value; }
+            std::_Exit(4);
+        }
+        int status = 0;
+        return waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+               WEXITSTATUS(status) == expectedExit;
+    };
+    for (const bool write : {false, true}) {
+        if (GuestFlat::HandleAccessViolation(guestWritable + 0x30000000u, write,
+                                             reinterpret_cast<const void*>(&main)) ||
+            !expectFault(0x30000000u, write, 2)) {
+            std::cerr << "unsupported guest access acquired backing memory\n";
+            return 1;
+        }
+    }
+    constexpr uint32_t scratch = 0xCCCC0000u;
+    if (!GuestFlat::HandleAccessViolation(guestWritable + scratch, false,
+                                          reinterpret_cast<const void*>(&main)) ||
+        guest[scratch] != 0 || !expectFault(scratch, true, 1)) {
+        std::cerr << "MMIO compatibility page is not read-only zero storage\n";
         return 1;
     }
     return 0;

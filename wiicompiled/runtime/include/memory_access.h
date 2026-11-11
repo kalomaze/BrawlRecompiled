@@ -85,9 +85,9 @@ constexpr bool IsMmioAddress(uint32_t addr) {
     return addr >= 0xCC000000u && addr < 0xCE000000u;
 }
 
-// The device register blocks (Flipper at 0xCC000000/0xCD000000, Hollywood at 0xCD800000). The rest of the MMIO
-// range has nothing on the bus: like the console and Dolphin, such accesses read 0 and drop writes (the flat
-// memory fault turns the page into scratch), as mods reach them through an 0xCC-filled pointer (Brawl Minus).
+// Modeled device blocks. Other MMIO addresses currently read zero through the
+// compatibility path and discard helper-based writes. This is not a complete
+// hardware model: Dolphin also has MMIO aliases that this policy does not model.
 constexpr bool IsDeviceMmioAddress(uint32_t addr) {
     const uint32_t block = addr & 0xFFFF0000u;
     return IsMmioAddress(addr) && (block == 0xCC000000u || block == 0xCD000000u || block == 0xCD800000u);

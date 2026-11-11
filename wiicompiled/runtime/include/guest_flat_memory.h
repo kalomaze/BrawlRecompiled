@@ -63,8 +63,7 @@ struct RegionRequest {
 struct FaultCounters {
     uint32_t mmio = 0;      // MMIO access that reached the handler
     uint32_t xguard = 0;    // executable-page write trap
-    uint32_t unmapped = 0;  // guest touches that landed outside every mapped region
-    uint32_t unmappedRegions = 0;  // distinct 64 KiB blocks committed on demand
+    uint32_t unhandled = 0; // guest faults without a supported recovery
 };
 
 #if MKW_FLAT_MEMORY
