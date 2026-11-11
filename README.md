@@ -104,6 +104,33 @@ connection adds input delay (2 to 8 frames, picked from the ping when the room s
 
 ## Building from source
 
+### Ubuntu (local portability fork)
+
+From a fresh clone on Ubuntu 24.04:
+
+```sh
+cmake -DDISC=/absolute/path/to/brawl.iso -P build.cmake
+```
+
+This builds the host tools, extracts only the disc's compilation inputs, prelinks its modules,
+translates the game, fetches native dependencies, and compiles `build/native/WiiCompiled`.
+ISO, CISO, and split WBFS are accepted; keep `.wbf1`, `.wbf2`, etc. beside the `.wbfs`.
+The USA revision-1 translation hash and the verified revision-2 executable are supported.
+All generated files, downloaded tools, and extracted data stay in ignored `build/`.
+Rerun the same command to resume; use `-DJOBS=2` for lower memory use or
+`-DBUILD_DIR=/another/directory` to choose the build directory. Initial builds need internet access.
+This is a compilation workflow; it does not extract the full assets needed to play.
+
+The current entry point requires CMake 3.25+, Python 3.12+, Git, Clang, Ninja, and the
+Ubuntu C/C++ development environment. It downloads its pinned .NET SDK locally and does not
+install system packages. On a machine without development tools:
+
+```sh
+sudo apt install cmake python3 git clang lld ninja-build build-essential pkg-config libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libasound2-dev libwayland-dev libxkbcommon-dev
+```
+
+### Upstream Windows build
+
 You need Windows, Python 3, 16 GB of RAM and your own disc image (USA, RSBE01). The toolchain is shared with the
 Super Paper Mario port's `toolchain\` folder.
 

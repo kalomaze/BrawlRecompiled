@@ -50,3 +50,15 @@ launcher/linux/publish/
 /server/worker/node_modules/
 /server/worker/.wrangler/
 /build-logs-v2/
+
+# User-owned disc images
+*.iso
+*.ciso
+*.wbfs
+*.wbf[0-9]*
+*.rvz
+
+# Native Ubuntu build workspace (disc data, SDK, generated code and binaries)
+/build/
+/tools/disc-extract/bin/
+/tools/disc-extract/obj/
