@@ -1,6 +1,7 @@
 // Gameplay rollback prototype. Pad anchoring and region discovery ported from
 // Brawl Online GameplayRollback.cpp / gp-v29 (GPL-2.0-or-later).
 #include "brawl_rollback.h"
+#include "abi_bridge.h"
 #include "det_clock.h"
 #include "brawl_snapshot_store.h"
 #include "brawl_write_watch.h"
@@ -72,6 +73,40 @@ uint32_t Read(uint32_t p) { return Memory::Contains(p,4) ? Memory::Read32(p) : 0
 unsigned Env(const char* key, unsigned fallback) {
     const char* value = std::getenv(key);
     return value ? static_cast<unsigned>(std::stoul(value)) : fallback;
+}
+// GameplaySession::RunIoWait: retire mid-match resource loads before hashing
+// the completed frame or saving it. In particular, Zelda/Sheik must finish
+// loading the other fighter form between the same two frames on both peers.
+void WaitForResourceLoads(CpuContext* ctx) {
+    auto pending=[] {
+        uint32_t count=0;
+        const auto manager=Read(0x8059FFF4);
+        if(manager) for(uint32_t offset : {8u,12u}) {
+            const auto queue=Read(manager+offset);
+            const auto entries=queue?Read(queue+0x18):0;
+            if(entries) count+=Read(entries)&0xFFFF;
+        }
+        const auto snd=Read(0x805A01D0);
+        const auto loader=snd?Read(snd+0xB98):0;
+        if(loader) {
+            const auto queued=Read(loader+0xCC8),loading=Read(loader+0xCCC);
+            if(queued<=0x95 && loading<=0x95) count+=queued+loading;
+        }
+        return count;
+    };
+    if(!pending()) return;
+    CpuContext call=*ctx;
+    CpuContextScope scope(&call);
+    unsigned retraces=0;
+    while(pending()) {
+        if(retraces==600) throw std::runtime_error("rollback: resource loads did not finish within 600 retraces");
+        call.gpr[3]=Read(0x8059FFF4);
+        InvokeIndirectCpu(0x80022F84,&call); // gfFileIOManager::update
+        if(!pending()) break;
+        InvokeIndirectCpu(0x801E892C,&call); // VIWaitForRetrace: let loader threads run
+        ++retraces;
+    }
+    std::fprintf(stderr,"[rollback] resource wait game_frame=%u retraces=%u\n",Read(0x901812A4),retraces);
 }
 void Add(uint32_t addr, uint32_t size) {
     if (size && Memory::Contains(addr,size)) session.ranges.push_back({addr,size});
@@ -538,6 +573,7 @@ void RunLoop(CpuContext* ctx,GuestFunction gameProc) {
             }
             return;
         }
+        WaitForResourceLoads(ctx);
         DiscoverRegions();
         if (!gekko_create(&session.gekko,session.udpPort?GekkoGameSession:GekkoStressSession)) throw std::runtime_error("rollback: Gekko creation failed");
         GekkoConfig cfg{};
@@ -615,6 +651,7 @@ void RunLoop(CpuContext* ctx,GuestFunction gameProc) {
             {
                 ResimHide hide(session.resimulating && advanceIndex+2<advanceCount);
                 AnchorPads();gameProc(ctx);
+                WaitForResourceLoads(ctx);
             }
             ++advanceIndex;++session.advances;
             DetClock::SetRollbackResimulating(false);
