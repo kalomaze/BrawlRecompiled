@@ -110,12 +110,22 @@ std::vector<uint8_t> Pack(const uint8_t* data, size_t size) {
 }
 
 void Unpack(const std::vector<uint8_t>& packed, uint8_t* out, size_t size) {
-#ifdef SAVE_STATES_ZSTD
     if (packed.size() != size) {
-        ZSTD_decompress(out, size, packed.data(), packed.size());
-        return;
-    }
+#ifdef SAVE_STATES_ZSTD
+        const size_t decoded = ZSTD_decompress(out, size, packed.data(), packed.size());
+        if (!ZSTD_isError(decoded) && decoded == size) return;
+        if (ZSTD_isError(decoded)) {
+            RT_LOGF(RT_TAG_RUNTIME, "[savestate] decompression failed: %s\n", ZSTD_getErrorName(decoded));
+        } else {
+            RT_LOGF(RT_TAG_RUNTIME, "[savestate] decoded %zu bytes; expected %zu\n", decoded, size);
+        }
+#else
+        RT_LOGF(RT_TAG_RUNTIME, "[savestate] stored %zu bytes; expected %zu\n", packed.size(), size);
 #endif
+        // Decompression may already have changed guest RAM. Never resume a
+        // partially restored machine after an invalid internal snapshot.
+        std::abort();
+    }
     std::memcpy(out, packed.data(), size);
 }
 
