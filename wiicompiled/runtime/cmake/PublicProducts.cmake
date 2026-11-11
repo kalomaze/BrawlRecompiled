@@ -294,8 +294,8 @@ function(mkw_configure_product target)
 endfunction()
 
 # MKW_ENGINE_MODULE (Windows): the engine is a DLL named MKW_ENGINE_MODULE_NAME exporting SDL_main, like the Android
-# libmain.so, and WiiCompiled.exe is the small loader in src/product/engine_loader.cpp that picks the region's module.
-option(MKW_ENGINE_MODULE "Build the engine as a region module DLL plus the loader executable" OFF)
+# libmain.so, and WiiCompiled.exe is the small loader in src/product/engine_loader.cpp that selects the engine's CPU variant.
+option(MKW_ENGINE_MODULE "Build the engine as a DLL plus the loader executable" OFF)
 set(MKW_ENGINE_MODULE_NAME "engine_usa" CACHE STRING "Output name of the engine module DLL")
 if(MKW_PLATFORM_ANDROID OR (MKW_PLATFORM_WINDOWS AND MKW_ENGINE_MODULE))
     add_library(WiiCompiled SHARED ${MKW_BASE_REGISTRATION_SOURCES})
