@@ -205,16 +205,12 @@ bool BranchTaken(CpuContext* c, uint32_t bo, uint32_t bi) {
     return ctrOk && condOk;
 }
 
-// Translated callees leave the volatile FPRs in the forms their own code wrote, which the interpreter cannot see, so
-// those are read in the form their consumer expects. f14-f31 are callee-saved: every callee (translated, or
-// interpreted with its stfd/psq_st save and lfd/psq_l restore) hands back the caller's exact bits, so their forms
-// still hold. Forgetting them made a paired value kept across a call (a vector in f31) read as a double by the next
-// scalar op: horizontal speeds blew up when a mod's sora_melee ran in the interpreter.
-// f1 is the exception: it comes back as the scalar return value, the form translated callers take it in (and Run
-// hands back). Read as a pair, a returned 0.99 and 1.0 scaled a mod's TransN motion by 1.87 * 1.875: dash attacks
-// and rolls went 3.5 times as far.
-void ForgetVolatileForms(Frame& f) {
-    for (int r = 0; r < 14; ++r) f.form[r] = Form::Unknown;
+// Match translated callers: f1 is the scalar floating-point return; retain the
+// other registers' representation tags across calls. ABI volatility alone does
+// not change their representation. P+ keeps a scalar multiplier in f3 across a
+// posture-scale call, then consumes it with ps_muls0. Forgetting its scalar tag
+// interprets double 1.0 as packed float 1.875 and changes jump velocity.
+void NormalizeCallFloatReturn(Frame& f) {
     f.form[1] = Form::Scalar;
 }
 
@@ -232,7 +228,7 @@ bool Call(Frame& f, uint32_t target, uint32_t returnTo) {
         InvokeIndirectCpu(target, f.ctx);
         if (target == 0x80029438u) BrawlRollback::AnchorPads();
     }
-    ForgetVolatileForms(f);
+    NormalizeCallFloatReturn(f);
     return true;
 }
 
@@ -243,7 +239,7 @@ bool Call(Frame& f, uint32_t target, uint32_t returnTo) {
 bool TailCall(Frame& f, uint32_t target, uint32_t returnAddress) {
     const uint32_t back = f.ctx->lr & ~3u;
     InvokeIndirectCpu(target, f.ctx);
-    ForgetVolatileForms(f);
+    NormalizeCallFloatReturn(f);
     f.ctx->lr = back;
     return back == (returnAddress & ~3u);
 }
