@@ -12,14 +12,14 @@
 #include "memory.h"
 #include "runtime_log.h"
 
-#if __has_include(<zstd.h>)
+#ifdef SAVE_STATES_ZSTD
 #include <zstd.h>
-#define SAVE_STATES_ZSTD 1
 #endif
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <csetjmp>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -42,14 +42,15 @@ extern std::unordered_set<uint32_t> gOutstandingParks;
 namespace SaveStates {
 namespace {
 
-constexpr uint32_t kMem1 = 0x80000000u, kMem1Size = 24u << 20;
-constexpr uint32_t kMem2 = 0x90000000u, kMem2Size = 128u << 20;  // the modules' pre-linked homes live above 64 MB
+constexpr uint32_t kMem1 = Memory::kMem1CachedBase, kMem1Size = Memory::kMem1Size;
+constexpr uint32_t kMem2 = Memory::kMem2CachedBase, kMem2Size = Memory::kMem2Size;
 constexpr size_t kPad = 64u << 10;    // see SwitchFiber
 constexpr size_t kBelow = 512;        // bytes kept below a thread's resume point (its switch frame's spills)
 
 // Where each fiber resumes: written by SwitchFiber, read back when the fiber runs again.
 struct FiberSlot {
-    void* jmp[5] = {};
+    std::jmp_buf jmp{};
+    char* stackPointer = nullptr;
     char* top = nullptr;
 };
 std::unordered_map<void*, FiberSlot> g_fibers;  // only touched on the game's host thread
@@ -94,7 +95,7 @@ void Say(std::string text) {
 }
 
 std::vector<uint8_t> Pack(const uint8_t* data, size_t size) {
-#if SAVE_STATES_ZSTD
+#ifdef SAVE_STATES_ZSTD
     std::vector<uint8_t> out(ZSTD_compressBound(size));
     const size_t n = ZSTD_compress(out.data(), out.size(), data, size, 1);
     if (!ZSTD_isError(n)) {
@@ -107,7 +108,7 @@ std::vector<uint8_t> Pack(const uint8_t* data, size_t size) {
 }
 
 void Unpack(const std::vector<uint8_t>& packed, uint8_t* out, size_t size) {
-#if SAVE_STATES_ZSTD
+#ifdef SAVE_STATES_ZSTD
     if (packed.size() != size) {
         ZSTD_decompress(out, size, packed.data(), packed.size());
         return;
@@ -132,11 +133,11 @@ void TakeSnapshot(Snapshot& s) {
     }
     s.stacks.clear();
     for (const auto& [fiber, slot] : g_fibers) {
-        if (slot.top == nullptr || slot.jmp[2] == nullptr) continue;  // never ran, or never switched out
+        if (slot.top == nullptr || slot.stackPointer == nullptr) continue;  // never ran, or never switched out
         StackCopy copy;
         copy.fiber = fiber;
         copy.slot = slot;
-        copy.from = static_cast<char*>(slot.jmp[2]) - kBelow;  // __builtin_setjmp keeps the stack pointer in [2]
+        copy.from = slot.stackPointer - kBelow;
         copy.bytes.assign(copy.from, slot.top);
         s.stacks.push_back(std::move(copy));
     }
@@ -156,6 +157,17 @@ void TakeSnapshot(Snapshot& s) {
 
 void PutBack(const Snapshot& s) {
     if (g_packer.joinable()) g_packer.join();
+    // All fibers are now suspended, so their current switch positions are
+    // authoritative. Never overwrite the live return path below SwitchBelow's pad.
+    for (const StackCopy& copy : s.stacks) {
+        const auto current = g_fibers.find(copy.fiber);
+        if (current == g_fibers.end() || !current->second.stackPointer ||
+            reinterpret_cast<uintptr_t>(current->second.stackPointer) - kPad >=
+                reinterpret_cast<uintptr_t>(copy.from)) {
+            Say("Cannot load this state from the current host stack depth.");
+            return;
+        }
+    }
     Unpack(s.mem1, Memory::GetPointer(kMem1, kMem1Size), kMem1Size);
     Unpack(s.mem2, Memory::GetPointer(kMem2, kMem2Size), kMem2Size);
     for (const StackCopy& copy : s.stacks) {
@@ -189,7 +201,7 @@ std::string LoadProblem(const Snapshot& s) {
     if (!s.valid) return "That slot is empty.";
     uint32_t current = 0;
     const auto threads = Fiber::GuestFiberManager::CopyFibers(current);
-    const size_t live = std::count_if(g_fibers.begin(), g_fibers.end(), [](const auto& f) { return f.second.top && f.second.jmp[2]; });
+    const size_t live = std::count_if(g_fibers.begin(), g_fibers.end(), [](const auto& f) { return f.second.top && f.second.stackPointer; });
     bool same = threads.size() == s.threads.size() && s.stacks.size() == live;
     for (const auto& [thread, fiber] : threads) {
         const auto it = std::find_if(s.threads.begin(), s.threads.end(), [&](const auto& t) { return t.first == thread; });
@@ -204,11 +216,11 @@ std::string LoadProblem(const Snapshot& s) {
 
 [[gnu::noinline]] void ResumeSaved(void* fiber) {
     FiberSlot& slot = g_fibers[fiber];
-    if (slot.jmp[1] == nullptr) {
+    if (slot.stackPointer == nullptr) {
         RT_LOGF(RT_TAG_RUNTIME, "[savestate] fiber %p resumed with no saved point (%zu fibers)\n", fiber, g_fibers.size());
         std::abort();
     }
-    __builtin_longjmp(slot.jmp, 1);
+    std::longjmp(slot.jmp, 1);
 }
 
 } // namespace
@@ -236,26 +248,22 @@ void ForgetFiber(void* fiber) { g_fibers.erase(fiber); }
 
 void MarkStackTop(void* top) { g_fibers[HostContext::Current()].top = static_cast<char*>(top); }
 
-// The resume point goes into the fiber's slot, its registers onto its own stack (the compiler spills every callee-saved
-// register around __builtin_setjmp). kPad keeps this switch's own frames below where a load writes the saved stack, as
-// long as the thread is no more than kPad shallower than when it was saved; after the switch nothing in this frame is
-// read again: ResumeSaved jumps through the slot, which a load has replaced.
+// Leave room below the saved stack while returning from the context switch.
+// The jump buffer is opaque: its layout belongs to the target C library.
 [[gnu::noinline]] void SwitchBelow(void* target) {
-    volatile char pad[kPad];  // a fixed frame: a dynamic alloca would need a base pointer longjmp doesn't restore
+    volatile char pad[kPad];
     pad[0] = 0;
+    // Make the whole array escape so optimization cannot shrink it to pad[0].
+    asm volatile("" : : "r"(pad) : "memory");
     HostContext::Switch(target);
+    asm volatile("" : : "r"(pad) : "memory");
     ResumeSaved(HostContext::Current());
 }
 
 [[gnu::noinline]] void SwitchFiber(void* target) {
-    void** jmp = g_fibers[HostContext::Current()].jmp;
-    if (__builtin_setjmp(jmp) == 0) {
-#if defined(__x86_64__) && defined(_WIN32)
-        // Win64: the frame address __builtin_setjmp keeps is rbp minus the SEH frame offset, but the resume path reloads
-        // xmm6-15 relative to rbp, so it read them from below this frame and every resumed thread lost them (the
-        // x86-64-v2 build kept guest r14-r29 there across native OS calls). Resume with the real rbp.
-        asm volatile("movq %%rbp, %0" : "=m"(jmp[0]));
-#endif
+    FiberSlot& slot = g_fibers[HostContext::Current()];
+    slot.stackPointer = static_cast<char*>(HostContext::StackPointer());
+    if (setjmp(slot.jmp) == 0) {
         SwitchBelow(target);
     }
 }

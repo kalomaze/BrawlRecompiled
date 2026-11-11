@@ -8,9 +8,10 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
-#elif (defined(__APPLE__) || defined(__ANDROID__)) && defined(__aarch64__)
+#elif (defined(__APPLE__) || defined(__linux__)) && defined(__aarch64__)
 #include <sys/mman.h>
 #include <unistd.h>
+#include <limits>
 #if defined(__ANDROID__)
 #include <pthread.h>
 
@@ -30,6 +31,17 @@ extern "C" void* mkw_co_init(void* stackTop, void (*entry)(void*), void* argumen
 #endif
 
 namespace HostContext {
+
+void* StackPointer()
+{
+    void* stack;
+#if defined(__x86_64__)
+    asm volatile("mov %%rsp, %0" : "=r"(stack));
+#elif defined(__aarch64__)
+    asm volatile("mov %0, sp" : "=r"(stack));
+#endif
+    return stack;
+}
 
 #if defined(_WIN32)
 
@@ -83,7 +95,7 @@ void Switch(Handle target)
     SwitchToFiber(target);
 }
 
-#elif (defined(__APPLE__) || defined(__ANDROID__)) && defined(__aarch64__)
+#elif (defined(__APPLE__) || defined(__linux__)) && defined(__aarch64__)
 
 namespace {
 struct Context {
@@ -96,7 +108,11 @@ struct Context {
 // Guest scheduling is confined to the initialized main host thread. Keeping
 // this as ordinary process state also avoids relying on Darwin TLS internals
 // while executing on a manually managed stack.
+#if defined(__APPLE__) || defined(__ANDROID__)
 Context* g_current = nullptr;
+#else
+thread_local Context* g_current = nullptr;
+#endif
 
 #if defined(__ANDROID__)
 // ART compares the stack pointer with the Java thread's stack bounds whenever native code calls
@@ -171,9 +187,14 @@ void ShutdownScheduler(Handle scheduler)
 
 Handle Create(std::size_t stackSize, Entry entry, void* argument)
 {
-    auto* context = new Context();
     const std::size_t guardSize = static_cast<std::size_t>(getpagesize());
-    const std::size_t totalSize = stackSize + guardSize;
+    if (stackSize == 0 || stackSize > std::numeric_limits<std::size_t>::max() - 2 * guardSize) {
+        return nullptr;
+    }
+    // Keep each stack and its guard page aligned, including successive Android
+    // arena allocations when callers request a non-page-multiple stack size.
+    const std::size_t totalSize = ((stackSize + guardSize - 1) / guardSize + 1) * guardSize;
+    auto* context = new Context();
 #if defined(__ANDROID__)
     context->stack = AllocateArenaStack(totalSize);
     context->arenaStack = context->stack != nullptr;

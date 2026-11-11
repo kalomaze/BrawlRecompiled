@@ -39,17 +39,36 @@ function(_aurora_dawn_set_platform_backends)
   endif ()
 endfunction()
 
-# ── Auto: resolve provider based on platform availability ──
+# Resolve package names from the target, including common architecture aliases.
+string(TOLOWER "${CMAKE_SYSTEM_NAME}" _dawn_system)
+string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _dawn_arch)
+if (APPLE AND CMAKE_OSX_ARCHITECTURES)
+  list(GET CMAKE_OSX_ARCHITECTURES 0 _dawn_osx_arch)
+  string(TOLOWER "${_dawn_osx_arch}" _dawn_arch)
+endif ()
+if (_dawn_arch MATCHES "^(amd64|x86_64)$")
+  if (_dawn_system STREQUAL "windows")
+    set(_dawn_arch "amd64")
+  else ()
+    set(_dawn_arch "x86_64")
+  endif ()
+elseif (_dawn_arch MATCHES "^(arm64|aarch64)$")
+  if (_dawn_system MATCHES "^(windows|darwin|ios)$")
+    set(_dawn_arch "arm64")
+  else ()
+    set(_dawn_arch "aarch64")
+  endif ()
+endif ()
+
 set(_aurora_dawn_provider "${AURORA_DAWN_PROVIDER}")
 if (_aurora_dawn_provider STREQUAL "auto")
-  # Prebuilt Dawn packages available for: windows-{amd64,arm64}, linux-{x86_64,aarch64}, darwin-{arm64,x86_64}
-  set(_has_package FALSE)
-  if (WIN32 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|x86_64|ARM64|aarch64)$")
+  set(_dawn_package_targets windows-amd64 windows-arm64 linux-x86_64 linux-aarch64
+      darwin-arm64 darwin-x86_64 ios-arm64 android-aarch64)
+  set(_dawn_target "${_dawn_system}-${_dawn_arch}")
+  if (_dawn_target IN_LIST _dawn_package_targets)
     set(_has_package TRUE)
-  elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|aarch64)$")
-    set(_has_package TRUE)
-  elseif (APPLE AND (CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|x86_64)$" OR CMAKE_OSX_ARCHITECTURES MATCHES "^(arm64|x86_64)$"))
-    set(_has_package TRUE)
+  else ()
+    set(_has_package FALSE)
   endif ()
 
   if (_has_package)
@@ -100,7 +119,8 @@ if (_aurora_dawn_provider STREQUAL "vendor")
 
     include(FetchContent)
     FetchContent_Declare(dawn
-      URL "https://github.com/google/dawn/archive/refs/tags/${AURORA_DAWN_VERSION}.tar.gz"
+      URL "https://github.com/google/dawn/archive/${AURORA_DAWN_SOURCE_REVISION}.tar.gz"
+      URL_HASH "${AURORA_DAWN_SOURCE_HASH}"
       DOWNLOAD_EXTRACT_TIMESTAMP FALSE
       EXCLUDE_FROM_ALL
     )
@@ -141,19 +161,6 @@ elseif (_aurora_dawn_provider STREQUAL "system")
 elseif (_aurora_dawn_provider STREQUAL "package")
   # ── Package: download prebuilt Dawn install tree ──
   if (NOT AURORA_DAWN_PACKAGE_URL)
-    string(TOLOWER "${CMAKE_SYSTEM_NAME}" _dawn_system)
-    string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _dawn_arch)
-    if (APPLE AND CMAKE_OSX_ARCHITECTURES)
-      list(GET CMAKE_OSX_ARCHITECTURES 0 _dawn_osx_arch)
-      string(TOLOWER "${_dawn_osx_arch}" _dawn_arch)
-    endif ()
-    if (_dawn_system STREQUAL "windows")
-      if (_dawn_arch STREQUAL "x86_64")
-        set(_dawn_arch "amd64")
-      elseif (_dawn_arch STREQUAL "aarch64")
-        set(_dawn_arch "arm64")
-      endif ()
-    endif ()
     set(AURORA_DAWN_PACKAGE_URL
       "https://github.com/theofficialgman/dawn-build/releases/download/${AURORA_DAWN_VERSION}/dawn-${_dawn_system}-${_dawn_arch}.tar.gz")
 

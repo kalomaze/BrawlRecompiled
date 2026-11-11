@@ -205,7 +205,15 @@ if (AURORA_ENABLE_GX)
       DOWNLOAD_EXTRACT_TIMESTAMP FALSE
       EXCLUDE_FROM_ALL
     )
-    FetchContent_MakeAvailable(PNG)
+    block(SCOPE_FOR VARIABLES)
+      # libpng's genout.cmake invokes the preprocessor directly and omits
+      # CMAKE_C_COMPILER_TARGET. Pass it through the flags that script reads,
+      # without changing compiler flags for the rest of the dependency tree.
+      if (CMAKE_C_COMPILER_ID MATCHES "Clang" AND CMAKE_C_COMPILER_TARGET)
+        string(APPEND CMAKE_C_FLAGS " --target=${CMAKE_C_COMPILER_TARGET}")
+      endif ()
+      FetchContent_MakeAvailable(PNG)
+    endblock()
     if (TARGET png_shared AND _USE_SHARED)
       add_library(PNG::PNG ALIAS png_shared)
     elseif (TARGET png_static)

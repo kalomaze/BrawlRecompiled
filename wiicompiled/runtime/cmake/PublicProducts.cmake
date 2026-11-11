@@ -29,12 +29,12 @@ endif()
 
 function(mkw_apply_common_compile_options target)
     # Runtime code relies on NaN/Inf checks; retain standard floating-point semantics.
-    target_compile_options(${target} PRIVATE -O3 -pipe)
+    target_compile_options(${target} PRIVATE -pipe)
 endfunction()
 
 function(mkw_apply_translated_compile_options target)
     target_compile_options(${target} PRIVATE
-        -O2 ${MKW_TRANSLATED_PPC_FP_OPTIONS} -fno-slp-vectorize -w -pipe)
+        "$<$<CONFIG:Release>:-O2>" ${MKW_TRANSLATED_PPC_FP_OPTIONS} -fno-slp-vectorize -w -pipe)
 endfunction()
 
 function(mkw_configure_object_target target)
@@ -83,6 +83,7 @@ target_link_libraries(mkw_runtime_common PRIVATE mkw_platform mkw::pugixml mkw::
 # Save states compress their snapshots with zstd (aurora's pipeline cache brings it in).
 if(TARGET libzstd_static)
     target_link_libraries(mkw_runtime_common PRIVATE libzstd_static)
+    target_compile_definitions(mkw_runtime_common PRIVATE SAVE_STATES_ZSTD)
 endif()
 if(MKW_PLATFORM_WINDOWS)
     # ole32/uuid: the first-start game folder picker (game_folder.cpp).
@@ -90,7 +91,7 @@ if(MKW_PLATFORM_WINDOWS)
 elseif(MKW_PLATFORM_LINUX)
     # ${CMAKE_DL_LIBS} for music_attenuation.cpp's dlopen of libdbus-1 (MPRIS
     # media monitoring).
-    target_link_libraries(mkw_runtime_common PRIVATE mkw::libco ${CMAKE_DL_LIBS})
+    target_link_libraries(mkw_runtime_common PRIVATE ${CMAKE_DL_LIBS})
 elseif(MKW_PLATFORM_ANDROID)
     target_link_libraries(mkw_runtime_common PRIVATE android log ${CMAKE_DL_LIBS})
 endif()
@@ -98,11 +99,9 @@ endif()
 if(MKW_PLATFORM_MACOS)
     # CoreAudio framework is required for automatic music muting on macOS.
     target_link_libraries(mkw_runtime_common PRIVATE "${MKW_COREAUDIO_FRAMEWORK}")
-    if(MKW_PLATFORM_MACOS_X86_64)
-        # libco is used by Intel macOS. Apple Silicon uses the local
-        # x18-safe assembly backend and therefore does not define mkw::libco.
-        target_link_libraries(mkw_runtime_common PRIVATE mkw::libco)
-    endif()
+endif()
+if(TARGET mkw::libco)
+    target_link_libraries(mkw_runtime_common PRIVATE mkw::libco)
 endif()
 
 if(MKW_CPPWINRT_INCLUDE_DIR)
@@ -214,15 +213,10 @@ function(mkw_configure_product target)
 
         set_target_properties(${target} PROPERTIES WIN32_EXECUTABLE TRUE)
     elseif(MKW_PLATFORM_LINUX OR MKW_PLATFORM_MACOS_X86_64)
-        # mkw_runtime_common is an OBJECT library: WiiCompiled only pull in its .o
-        # files via $<TARGET_OBJECTS:>, which does not propagate mkw_runtime_common's own
-        # target_link_libraries (object libraries don't carry usage requirements to a consumer
-        # that isn't itself linked against as a target). fiber_manager.cpp's co_* calls live in
-        # those objects, so the actual executable link needs mkw::libco directly, same as it
-        # needs it independently of that first `if(WIN32)` branch above. ${CMAKE_DL_LIBS} is
-        # here for the same reason: music_attenuation.cpp's dlopen(libdbus-1) lives in those
-        # objects (empty string on glibc >= 2.34, where dl* is in libc).
-        target_link_libraries(${target} PRIVATE mkw::libco ${CMAKE_DL_LIBS})
+        target_link_libraries(${target} PRIVATE ${CMAKE_DL_LIBS})
+        if(TARGET mkw::libco)
+            target_link_libraries(${target} PRIVATE mkw::libco)
+        endif()
     elseif(MKW_PLATFORM_ANDROID)
         # The same object-library gap as above: the product link needs the libraries the runtime
         # objects call into. SDL's Android activity loads the product as libmain.so and runs its
@@ -331,23 +325,6 @@ if(MKW_PLATFORM_WINDOWS)
 endif()
 
 add_custom_target(mkw_release DEPENDS WiiCompiled)
-
-# Windows and Linux x86_64 share the x86-64-v3 floor that the CPU baseline
-# object above checks. AArch64 builds are compiled locally for the host that
-# will run them, so both Linux and Apple Silicon use the compiler's native CPU
-# tuning rather than leaving target-specific performance on the table.
-set(MKW_HOST_ISA "v3" CACHE STRING "x86_64 floor: v3 (AVX2/FMA, the usual build) or v2 (older processors)")
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64)$")
-    set(MKW_BASELINE_ARCH_FLAG -march=x86-64-${MKW_HOST_ISA})
-elseif(MKW_PLATFORM_ANDROID)
-    # Cross-compiled, so -mcpu=native would describe the build machine. ARMv8.2-A (LSE atomics,
-    # RCpc loads) is the floor of every Android phone since Cortex-A55/A75.
-    set(MKW_BASELINE_ARCH_FLAG -march=armv8.2-a)
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
-    set(MKW_BASELINE_ARCH_FLAG -mcpu=native)
-else()
-    set(MKW_BASELINE_ARCH_FLAG "")
-endif()
 
 set(MKW_ALL_BUILD_TARGETS
     mkw_runtime_common mkw_base_shared WiiCompiled)

@@ -63,6 +63,8 @@ def main():
     parser.add_argument('--build-dir', type=Path, required=True)
     parser.add_argument('--cmake', required=True)
     parser.add_argument('--jobs', type=int, default=4)
+    parser.add_argument('--build-type', default='Release',
+                        choices=('Debug', 'Release', 'RelWithDebInfo', 'MinSizeRel'))
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error('--jobs must be positive')
@@ -187,7 +189,7 @@ def build_game(args, disc, build):
             '--native-source-dir', 'runtime/src', '--out', 'generated/build_shards', '--base-shards', '600', cwd=wc)
         translated_stamp.write_text(translation_key)
     run(args.cmake, '-S', wc / 'runtime', '-B', build / 'native', '-G', 'Ninja',
-        '-DCMAKE_BUILD_TYPE=Release', f'-DCMAKE_C_COMPILER={shutil.which("clang")}',
+        f'-DCMAKE_BUILD_TYPE={args.build_type}', f'-DCMAKE_C_COMPILER={shutil.which("clang")}',
         f'-DCMAKE_CXX_COMPILER={shutil.which("clang++")}', f'-DMKW_TRANSLATED_COMPILE_JOBS={args.jobs}')
     run(args.cmake, '--build', build / 'native', '--target', 'WiiCompiled', '--parallel', args.jobs)
     print(f'Built: {build / "native/WiiCompiled"}\nExtracted game data: {data}', flush=True)

@@ -120,6 +120,9 @@ All generated files, downloaded tools, and extracted data stay in ignored `build
 Rerun the same command to resume; use `-DJOBS=2` for lower memory use or
 `-DBUILD_DIR=/another/directory` to choose the build directory. Initial builds need internet access.
 This is a compilation workflow; it does not extract the full assets needed to play.
+The default configuration is Release. Add `-DCMAKE_BUILD_TYPE=Debug` for unoptimized
+native code with debug symbols, or `-DCMAKE_BUILD_TYPE=RelWithDebInfo` for optimized
+code with symbols. Changing configurations reuses the disc extraction and translation.
 
 The current entry point requires CMake 3.25+, Python 3.12+, Git, Clang, Ninja, and the
 Ubuntu C/C++ development environment. It downloads its pinned .NET SDK locally and does not
@@ -131,8 +134,8 @@ sudo apt install cmake python3 git clang lld ninja-build build-essential pkg-con
 
 ### Upstream Windows build
 
-You need Windows, Python 3, 16 GB of RAM and your own disc image (USA, RSBE01). The toolchain is shared with the
-Super Paper Mario port's `toolchain\` folder.
+You need Windows, Python 3, 16 GB of RAM and your own disc image (USA, RSBE01).
+Build tools are stored in this checkout's `toolchain\` folder.
 
 ```powershell
 # Extract your disc image to Disc\DATA, then:
