@@ -819,10 +819,11 @@ bool HandleAccessViolation(void* faultAddress, bool isWrite) noexcept {
                 // Those arrive in bulk, so the page is opened permanently
                 // rather than trapping every relocation.
                 std::lock_guard<std::mutex> lock(StateMutex());
-                if (ProtectRange(g_base + (static_cast<uint64_t>(pageIndex) << 12), kHostPageSize,
-                                 kProtReadWrite)) {
-                    ExecutableProtectedPages()[pageIndex] = 0;
+                if (!ProtectRange(g_base + (static_cast<uint64_t>(pageIndex) << 12), kHostPageSize,
+                                  kProtReadWrite)) {
+                    return false;  // Retrying an unchanged protection fault would loop forever.
                 }
+                ExecutableProtectedPages()[pageIndex] = 0;
             }
             return true;
         }

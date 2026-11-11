@@ -481,14 +481,18 @@ if(MKW_TARGET_ARM64)
     add_test(NAME mkw_aarch64_context_abi_tests COMMAND mkw_aarch64_context_abi_tests)
 endif()
 
-if(MKW_PLATFORM_MACOS)
-    add_executable(mkw_macos_guest_flat_memory_tests
-        "${CMAKE_CURRENT_LIST_DIR}/tests/macos_guest_flat_memory_tests.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/src/guest_flat_memory_macos.cpp")
-    target_include_directories(mkw_macos_guest_flat_memory_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
-    target_compile_features(mkw_macos_guest_flat_memory_tests PRIVATE cxx_std_17)
-    add_test(NAME mkw_macos_guest_flat_memory_tests COMMAND mkw_macos_guest_flat_memory_tests)
+if(UNIX)
+    add_executable(mkw_guest_flat_memory_tests
+        "${CMAKE_CURRENT_LIST_DIR}/tests/guest_flat_memory_tests.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/src/guest_flat_memory.cpp")
+    target_include_directories(mkw_guest_flat_memory_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+    target_compile_features(mkw_guest_flat_memory_tests PRIVATE cxx_std_20)
+    target_compile_definitions(mkw_guest_flat_memory_tests PRIVATE MKW_FLAT_MEMORY=1)
+    target_link_libraries(mkw_guest_flat_memory_tests PRIVATE Threads::Threads)
+    add_test(NAME mkw_guest_flat_memory_tests COMMAND mkw_guest_flat_memory_tests)
+endif()
 
+if(MKW_PLATFORM_MACOS)
     add_executable(mkw_macos_external_audio_tests
         "${CMAKE_CURRENT_LIST_DIR}/tests/macos_external_audio_tests.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/src/external_audio_macos.cpp")

@@ -1,9 +1,21 @@
 #include "guest_flat_memory.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <unistd.h>
+#include <sys/mman.h>
+#include "system_bridge.h"
+#include "recomp_mod_loader.h"
+
+// No guest execution is needed to exercise the real mappings and protection recovery.
+namespace RecompMod {
+uint32_t CurrentTranslatedExecutionAddress() noexcept { return 0; }
+bool HandleExecutableWrite(uint32_t, size_t, uint64_t) { return false; }
+}
+void SystemBridge::DumpCpuState(const CpuContext*) { std::abort(); }
+void ShowRuntimeFatalPopup(std::string_view, std::string_view) noexcept { std::abort(); }
 
 int main() {
     GuestFlat::Initialize({
@@ -61,6 +73,24 @@ int main() {
         std::cerr << "guest address space accepted a different layout\n";
         return 1;
     } catch (const std::runtime_error&) {
+    }
+    if (!GuestFlat::RequiresCheckedAccess()) {
+        constexpr uint32_t address = 0x80001000u;
+        auto* page = guestWritable + address;
+        GuestFlat::RegisterExecutableRange(address, address + 0x1000u);
+        if (!GuestFlat::HandleAccessViolation(page, true)) {
+            std::cerr << "permitted executable write was not recovered\n";
+            return 1;
+        }
+        *page = 0x6b;
+        if (mem1Physical[0x1000] != 0x6b) return 1;
+        GuestFlat::ReprotectExecutablePage(address);
+        // Make the OS protection change fail, rather than mocking its return value.
+        if (munmap(page, static_cast<size_t>(getpagesize())) != 0) return 1;
+        if (GuestFlat::HandleAccessViolation(page, true)) {
+            std::cerr << "failed protection recovery was reported as handled\n";
+            return 1;
+        }
     }
     return 0;
 }
