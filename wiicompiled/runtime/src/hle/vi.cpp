@@ -1188,39 +1188,18 @@ extern "C" void VIInit_caseD_0_HLE_801b9934(CpuContext* ctx)
     (void)ctx;
     RT_LOG(RT_TAG_VI) << "VIInit_caseD_0_801b9934 stubbed" << std::endl;
 }
-#if 0  // NSMBW: MKW switch-case label; its function is native in NSMBW (was MKW-only)
-#if 0  // SPM: 0x801b9934: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801B9934, VIInit_caseD_0_HLE_801b9934, (CpuContext* ctx), (ctx));
-#endif
-#endif
-#endif
 
 extern "C" void VIInit_caseD_1_HLE_801b993c(CpuContext* ctx)
 {
     (void)ctx;
     RT_LOG(RT_TAG_VI) << "VIInit_caseD_1_801b993c stubbed" << std::endl;
 }
-#if 0  // NSMBW: MKW switch-case label; its function is native in NSMBW (was MKW-only)
-#if 0  // SPM: 0x801b993c: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801B993C, VIInit_caseD_1_HLE_801b993c, (CpuContext* ctx), (ctx));
-#endif
-#endif
-#endif
 
 extern "C" void VIInit_caseD_2_HLE_801b9944(CpuContext* ctx)
 {
     (void)ctx;
     RT_LOG(RT_TAG_VI) << "VIInit_caseD_2_801b9944 stubbed" << std::endl;
 }
-#if 0  // NSMBW: MKW switch-case label; its function is native in NSMBW (was MKW-only)
-#if 0  // SPM: 0x801b9944: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801B9944, VIInit_caseD_2_HLE_801b9944, (CpuContext* ctx), (ctx));
-#endif
-#endif
-#endif
 
 // -----------------------------------------------------------------------------
 // VISetPreRetraceCallback (0x801BC3E0)
@@ -1376,13 +1355,6 @@ extern "C" void VIGetNextFrameBuffer_HLE_801bab24(CpuContext* ctx)
     ViSetR3(ctx, fb);
     VI_HLE_PollRetrace(ctx);
 }
-#if 0  // NSMBW: VIGetNextFrameBuffer is not linked into NSMBW (was MKW-only)
-#if 0  // SPM: 0x801bab24: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801BAB24, VIGetNextFrameBuffer_HLE_801bab24, (CpuContext* ctx), (ctx));
-#endif
-#endif
-#endif
 
 extern "C" void VISetBlack_HLE_801bab2c(CpuContext* ctx)
 {

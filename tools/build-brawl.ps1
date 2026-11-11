@@ -95,7 +95,6 @@ if (-not $SkipTranslate) {
         '--outdir', 'generated/functions', '--output-metadata', 'generated/base_translation_output.json',
         '--production-source-bundle', 'generated/base_translation_sources.bin',
         '--no-function-files', '--no-state-free-abi', '--data-in-text', 'projects/brawl/resident_data_ranges.txt', '--prune-stale', '--threads', "$Jobs") $workspace
-    # emit-base-manifest (WiiCompiled's own mod manifest) needs the project's single REL; Brawl's modules come later.
     Invoke-Step 'data-init' $dotnet.Source @($translator, 'generate-data-init', '--project', $project) $workspace
     Invoke-Step 'shards' $dotnet.Source @($translator, 'emit-build-shards', '--project', $project,
         '--base-metadata', 'generated/base_translation_output.json', '--base-functions-dir', 'generated/functions',

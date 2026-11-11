@@ -23,7 +23,6 @@
 #include "recomp_mod_loader.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
-#include "runtime_product.h"
 #include "timebase_contract.h"
 
 // Global flag to suppress SEH reporting during static constructor execution
@@ -435,17 +434,14 @@ void SystemBridge::SeedLowMemDefaults(const Memory::Config& config) {
     // Retro Rewind reads the region byte directly from here while building its
     // Retro-WFC payload URL, and OSGetAppGamename reads the app code mirrors
     // at 0x80003180/0x80003194 while building NAS auth fields.
-    entries.push_back({0x80000000u, 0x52534245u, "Disc game code"}); // SMNE
+    entries.push_back({0x80000000u, 0x52534245u, "Disc game code"}); // RSBE
     entries.push_back({0x80000004u, 0x30310001u, "Disc maker/id"});  // "01", disc 0, revision 1 (boot.bin)
-    entries.push_back({0x80003194u, 0x52534245u, "OS app game code"}); // SMNE
-    entries.push_back({0x80003194u, 0x52534245u, "OS app gamename"});  // SMNE
+    entries.push_back({0x80003194u, 0x52534245u, "OS app game code"}); // RSBE
+    entries.push_back({0x80003194u, 0x52534245u, "OS app gamename"});  // RSBE
     // NSMBW's OSInit (newer SDK than Mario Kart's) compares the running IOS (0x80003140) with the
     // title's required IOS at 0x80003188 - same major, revision not older - and calls OSFatal
     // ("ERROR #002") otherwise. The boot path leaves the TMD's IOS here; Dolphin writes the IOS word.
-    entries.push_back({0x80003188u, kIos36Version, "Title's required IOS (IOS53)"});
-    if (RuntimeProduct::IsRetroRewind()) {
-        entries.push_back({0x800017D8u, 0x00000001u, "Retro Rewind recomp runtime marker", true});
-    }
+    entries.push_back({0x80003188u, kIos36Version, "Title's required IOS (IOS36)"});
 
     for (const auto& reservation : RecompMod::MemoryReservations()) {
         if (reservation.start >= kMem1ArenaLoDefault &&

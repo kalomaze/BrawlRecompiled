@@ -522,11 +522,6 @@ extern "C" void OSJoinThread_HLE_801aa3ac(CpuContext* ctx)
     OS__RestoreInterrupts_801a65d4(irqState);
     cpu->gpr[3] = result;
 }
-#if 0  // SPM: OSJoinThread: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801B5670, OSJoinThread_HLE_801aa3ac, (CpuContext* ctx), (ctx));
-#endif
-#endif
 
 extern "C" void OSDetachThread_HLE_801aa4ec(CpuContext* ctx)
 {
@@ -556,11 +551,6 @@ extern "C" void OSDetachThread_HLE_801aa4ec(CpuContext* ctx)
 
     OS__RestoreInterrupts_801a65d4(irqState);
 }
-#if 0  // SPM: OSDetachThread: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801B57C0, OSDetachThread_HLE_801aa4ec, (CpuContext* ctx), (ctx));
-#endif
-#endif
 
 extern "C" void OSSuspendThread_HLE_801aa6a8(CpuContext* ctx)
 {

@@ -193,9 +193,6 @@ PPC_NATIVE_OVERRIDE_VOID(801f0208, GX__SetArray_8016e32c, (uint32_t a, uint32_t 
 // Switch-artifact entry point for the same SDK function; forwards rather than
 // repeating the body.
 extern "C" void GX__SetArray_8016e1c4(uint32_t a, uint32_t b, uint32_t s) { GX__SetArray_8016e32c(a, b, s); }
-#if 0  // NSMBW: MKW switch-artifact alias of GXSetArray (0x8016e1c4); NSMBW's map has no such split
-PPC_NATIVE_OVERRIDE_VOID(801f0208, GX__SetArray_8016e1c4, (uint32_t a, uint32_t b, uint32_t s), (a, b, s));
-#endif
 
 // ============================================================================
 // Texture Coordinate Generation
@@ -343,14 +340,8 @@ extern "C" void GX__Begin_8016f0f0(uint32_t t, uint32_t vf, uint32_t nv) {
 PPC_NATIVE_OVERRIDE_VOID(801f1088, GX__Begin_8016f0f0, (uint32_t t, uint32_t vf, uint32_t nv), (t, vf, nv));
 
 extern "C" void GX__End_80044b30() { g_hleGxState.inBegin=false; GXEnd(); }
-#if 0  // SPM: GXEnd: name not in SPM
-PPC_NATIVE_OVERRIDE_VOID(80235770, GX__End_80044b30, (), ());  // NSMBW out-of-line GXEnd copy #1 (blr)
-#endif
 
 extern "C" void GX__End_80048c30() { GX__End_80044b30(); }
-#if 0  // SPM: GXEnd: name not in SPM
-PPC_NATIVE_OVERRIDE_VOID(80239e50, GX__End_80048c30, (), ());  // NSMBW out-of-line GXEnd copy #2 (blr)
-#endif
 
 extern "C" void GX__DrawSphere_80172a30(uint32_t numMajor, uint32_t numMinor) {
     constexpr uint32_t kAttrCount = 26;

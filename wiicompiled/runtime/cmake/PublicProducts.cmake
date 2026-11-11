@@ -1,8 +1,4 @@
-# Public WiiCompiled product graph.
-#
-# The translator owns the translated build graph. Mario Kart's profile-neutral
-# functions are compiled once into mkw_base_shared; only callers whose direct
-# ABI differs between profiles receive small base/RR variants.
+# Brawl runtime and translated-code build targets.
 
 set(DATA_INIT_FILE "${MKW_RUNTIME_SOURCE_DIR}/../generated/data_sections_init.cpp")
 set(DATA_INIT_BLOB_ASM "${MKW_RUNTIME_SOURCE_DIR}/../generated/data_sections_init_blobs.S")
@@ -164,31 +160,7 @@ add_library(mkw_base_shared STATIC ${MKW_BASE_COMMON_SHARDS})
 mkw_configure_translated_target(mkw_base_shared)
 target_precompile_headers(mkw_base_shared PRIVATE "${MKW_RUNTIME_SOURCE_DIR}/include/mkw_pch.h")
 
-if(MKW_BASE_PORTABLE_SENSITIVE_SHARDS)
-    add_library(mkw_base_sensitive OBJECT ${MKW_BASE_PORTABLE_SENSITIVE_SHARDS})
-    mkw_configure_translated_target(mkw_base_sensitive)
-    target_precompile_headers(mkw_base_sensitive REUSE_FROM mkw_base_shared)
-endif()
 
-if(MKW_HAVE_RETRO_REWIND)
-    if(MKW_RETRO_PORTABLE_SENSITIVE_SHARDS)
-        add_library(mkw_retro_sensitive OBJECT ${MKW_RETRO_PORTABLE_SENSITIVE_SHARDS})
-        mkw_configure_translated_target(mkw_retro_sensitive)
-        target_precompile_headers(mkw_retro_sensitive REUSE_FROM mkw_base_shared)
-    endif()
-
-    set(MKW_RETRO_TRANSLATED_SOURCES ${MKW_RETRO_MOD_SHARDS} ${MKW_RETRO_EXTRA_SOURCES})
-    set(MKW_RETRO_BLOB_OBJECTS)
-    foreach(source IN LISTS MKW_RETRO_EXTRA_SOURCES)
-        if(source MATCHES "\\.S$")
-            enable_language(ASM)
-            set_source_files_properties("${source}" PROPERTIES LANGUAGE ASM SKIP_PRECOMPILE_HEADERS ON)
-        endif()
-    endforeach()
-    add_library(mkw_retro_rewind_functions OBJECT ${MKW_RETRO_TRANSLATED_SOURCES})
-    mkw_configure_translated_target(mkw_retro_rewind_functions)
-    target_precompile_headers(mkw_retro_rewind_functions REUSE_FROM mkw_base_shared)
-endif()
 
 function(mkw_configure_product target)
     target_sources(${target} PRIVATE $<TARGET_OBJECTS:mkw_runtime_common>)
@@ -242,7 +214,7 @@ function(mkw_configure_product target)
 
         set_target_properties(${target} PROPERTIES WIN32_EXECUTABLE TRUE)
     elseif(MKW_PLATFORM_LINUX OR MKW_PLATFORM_MACOS_X86_64)
-        # mkw_runtime_common is an OBJECT library: WiiCompiled/RetroRewind only pull in its .o
+        # mkw_runtime_common is an OBJECT library: WiiCompiled only pull in its .o
         # files via $<TARGET_OBJECTS:>, which does not propagate mkw_runtime_common's own
         # target_link_libraries (object libraries don't carry usage requirements to a consumer
         # that isn't itself linked against as a target). fiber_manager.cpp's co_* calls live in
@@ -331,9 +303,9 @@ endfunction()
 option(MKW_ENGINE_MODULE "Build the engine as a region module DLL plus the loader executable" OFF)
 set(MKW_ENGINE_MODULE_NAME "engine_usa" CACHE STRING "Output name of the engine module DLL")
 if(MKW_PLATFORM_ANDROID OR (MKW_PLATFORM_WINDOWS AND MKW_ENGINE_MODULE))
-    add_library(WiiCompiled SHARED "${MKW_BASE_PRODUCT_SOURCE}" ${MKW_BASE_REGISTRATION_SOURCES})
+    add_library(WiiCompiled SHARED ${MKW_BASE_REGISTRATION_SOURCES})
 else()
-    add_executable(WiiCompiled "${MKW_BASE_PRODUCT_SOURCE}" ${MKW_BASE_REGISTRATION_SOURCES})
+    add_executable(WiiCompiled ${MKW_BASE_REGISTRATION_SOURCES})
 endif()
 mkw_configure_product(WiiCompiled)
 if(MKW_PLATFORM_WINDOWS AND MKW_ENGINE_MODULE)
@@ -357,26 +329,8 @@ if(MKW_PLATFORM_WINDOWS)
         target_sources(WiiCompiledLoader PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/app_icon.rc")
     endif()
 endif()
-if(TARGET mkw_base_sensitive)
-    target_sources(WiiCompiled PRIVATE $<TARGET_OBJECTS:mkw_base_sensitive>)
-endif()
 
-if(MKW_HAVE_RETRO_REWIND)
-    add_executable(RetroRewind "${MKW_RETRO_REWIND_PRODUCT_SOURCE}" ${MKW_RETRO_REGISTRATION_SOURCES})
-    mkw_configure_product(RetroRewind)
-    target_precompile_headers(RetroRewind REUSE_FROM WiiCompiled)
-    if(TARGET mkw_retro_sensitive)
-        target_sources(RetroRewind PRIVATE $<TARGET_OBJECTS:mkw_retro_sensitive>)
-    endif()
-    target_sources(RetroRewind PRIVATE $<TARGET_OBJECTS:mkw_retro_rewind_functions>)
-    if(MKW_RETRO_BLOB_OBJECTS)
-        target_sources(RetroRewind PRIVATE ${MKW_RETRO_BLOB_OBJECTS})
-    endif()
-    add_custom_target(mkw_release DEPENDS WiiCompiled RetroRewind)
-else()
-    add_custom_target(mkw_release DEPENDS WiiCompiled)
-    message(STATUS "RetroRewind target disabled (run translate-mod and emit-build-shards)")
-endif()
+add_custom_target(mkw_release DEPENDS WiiCompiled)
 
 # Windows and Linux x86_64 share the x86-64-v3 floor that the CPU baseline
 # object above checks. AArch64 builds are compiled locally for the host that
@@ -396,8 +350,7 @@ else()
 endif()
 
 set(MKW_ALL_BUILD_TARGETS
-    mkw_runtime_common mkw_base_shared mkw_base_sensitive mkw_retro_sensitive
-    mkw_retro_rewind_functions WiiCompiled RetroRewind)
+    mkw_runtime_common mkw_base_shared WiiCompiled)
 foreach(target IN LISTS MKW_ALL_BUILD_TARGETS)
     if(TARGET ${target} AND MKW_BASELINE_ARCH_FLAG)
         target_compile_options(${target} PRIVATE ${MKW_BASELINE_ARCH_FLAG})

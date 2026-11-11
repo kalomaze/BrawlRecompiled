@@ -23,9 +23,6 @@ extern "C" void GX__GetCullMode_801c5890(uint32_t modePtr) {
         Memory::Write32(modePtr, static_cast<uint32_t>(mode));
     }
 }
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(8028d6a4, GX__GetCullMode_801c5890, (uint32_t modePtr), (modePtr));
-#endif
 
 // GXAbortFrame asks the GPU to drop the frame in flight. Aurora submits whole frames and has nothing
 // half-finished to abandon, so there is nothing to do.
@@ -38,31 +35,31 @@ PPC_NATIVE_OVERRIDE_VOID(801f0724, GX__AbortFrame_801c4ce0, (), ());
 // GXPoke*: modes for CPU writes straight into the embedded frame buffer (GXPokeARGB/GXPokeZ). On
 // hardware they program pixel-engine registers; the runtime does not emulate CPU-to-EFB access, so
 // the modes have no consumer. Accept them (Aurora declares but does not implement these).
-#define NSMBW_GX_POKE_NOOP(addr, name, params, uses)                                        \
+#define GX_POKE_NOOP(addr, name, params, uses)                                        \
     extern "C" void GX__##name##_##addr params {                                            \
         static bool logged = false;                                                          \
         (void)(uses);                                                                        \
         LogOnce(logged, "GX" #name ": CPU-to-EFB poke modes are not emulated (no-op)");     \
     }
 
-NSMBW_GX_POKE_NOOP(801f0b14, PokeAlphaMode, (uint32_t func, uint32_t threshold), (func, threshold))
+GX_POKE_NOOP(801f0b14, PokeAlphaMode, (uint32_t func, uint32_t threshold), (func, threshold))
 PPC_NATIVE_OVERRIDE_VOID(801f0b14, GX__PokeAlphaMode_801f0b14, (uint32_t func, uint32_t threshold), (func, threshold));
-NSMBW_GX_POKE_NOOP(801f0b24, PokeAlphaRead, (uint32_t mode), (mode))
+GX_POKE_NOOP(801f0b24, PokeAlphaRead, (uint32_t mode), (mode))
 PPC_NATIVE_OVERRIDE_VOID(801f0b24, GX__PokeAlphaRead_801f0b24, (uint32_t mode), (mode));
-NSMBW_GX_POKE_NOOP(801f0b3c, PokeAlphaUpdate, (uint32_t enable), (enable))
+GX_POKE_NOOP(801f0b3c, PokeAlphaUpdate, (uint32_t enable), (enable))
 PPC_NATIVE_OVERRIDE_VOID(801f0b3c, GX__PokeAlphaUpdate_801f0b3c, (uint32_t enable), (enable));
-NSMBW_GX_POKE_NOOP(801f0b50, PokeBlendMode, (uint32_t type, uint32_t src, uint32_t dst, uint32_t op), (type, src, dst, op))
+GX_POKE_NOOP(801f0b50, PokeBlendMode, (uint32_t type, uint32_t src, uint32_t dst, uint32_t op), (type, src, dst, op))
 PPC_NATIVE_OVERRIDE_VOID(801f0b50, GX__PokeBlendMode_801f0b50, (uint32_t type, uint32_t src, uint32_t dst, uint32_t op),
                          (type, src, dst, op));
-NSMBW_GX_POKE_NOOP(801f0bac, PokeColorUpdate, (uint32_t enable), (enable))
+GX_POKE_NOOP(801f0bac, PokeColorUpdate, (uint32_t enable), (enable))
 PPC_NATIVE_OVERRIDE_VOID(801f0bac, GX__PokeColorUpdate_801f0bac, (uint32_t enable), (enable));
-NSMBW_GX_POKE_NOOP(801f0bc0, PokeDstAlpha, (uint32_t enable, uint32_t alpha), (enable, alpha))
+GX_POKE_NOOP(801f0bc0, PokeDstAlpha, (uint32_t enable, uint32_t alpha), (enable, alpha))
 PPC_NATIVE_OVERRIDE_VOID(801f0bc0, GX__PokeDstAlpha_801f0bc0, (uint32_t enable, uint32_t alpha), (enable, alpha));
-NSMBW_GX_POKE_NOOP(801f0bd8, PokeDither, (uint32_t dither), (dither))
+GX_POKE_NOOP(801f0bd8, PokeDither, (uint32_t dither), (dither))
 PPC_NATIVE_OVERRIDE_VOID(801f0bd8, GX__PokeDither_801f0bd8, (uint32_t dither), (dither));
-NSMBW_GX_POKE_NOOP(801f0bec, PokeZMode, (uint32_t compareEnable, uint32_t func, uint32_t updateEnable),
+GX_POKE_NOOP(801f0bec, PokeZMode, (uint32_t compareEnable, uint32_t func, uint32_t updateEnable),
                    (compareEnable, func, updateEnable))
 PPC_NATIVE_OVERRIDE_VOID(801f0bec, GX__PokeZMode_801f0bec, (uint32_t compareEnable, uint32_t func, uint32_t updateEnable),
                          (compareEnable, func, updateEnable));
 
-#undef NSMBW_GX_POKE_NOOP
+#undef GX_POKE_NOOP

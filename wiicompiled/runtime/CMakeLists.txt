@@ -362,15 +362,13 @@ else()
     endif()
 endif()
 set(MKW_PLATFORM_SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/platform/host_platform.cpp")
-set(MKW_BASE_PRODUCT_SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/product/base_product.cpp")
-set(MKW_RETRO_REWIND_PRODUCT_SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/product/retro_rewind_product.cpp")
 # The region-module loader is its own executable (cmake/PublicProducts.cmake, MKW_ENGINE_MODULE), not runtime code.
 list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_LIST_DIR}/src/product/engine_loader.cpp")
 # The host ISA guard is the one translation unit that must not receive the
 # x86-64-v3 flags, so it gets its own object library instead of riding along in
 # mkw_runtime_common. See cmake/PublicProducts.cmake and the file's own header.
 set(MKW_CPU_BASELINE_SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/host_cpu_baseline.cpp")
-list(REMOVE_ITEM SOURCES ${MKW_BASE_PRODUCT_SOURCE} ${MKW_RETRO_REWIND_PRODUCT_SOURCE}
+list(REMOVE_ITEM SOURCES
      ${MKW_CPU_BASELINE_SOURCE} ${MKW_PLATFORM_SOURCE})
 
 # This deliberately small library contains host services that are safe to
@@ -503,7 +501,7 @@ endif()
 
 # The translator emits the complete, content-addressed source graph. Consuming
 # this one manifest keeps configure independent of the 28k generated function
-# files and of optional Retro Rewind artifacts such as code.map.
+# files and of per-function source files.
 if(MKW_BUILD_PRODUCTS)
     set(MKW_TRANSLATED_SHARD_MANIFEST
         "${CMAKE_CURRENT_LIST_DIR}/../generated/build_shards/shards.cmake"
@@ -520,11 +518,8 @@ if(MKW_BUILD_PRODUCTS)
             "Run Translator.Cli emit-build-shards first; see translator/README.md.")
     endif()
     include("${MKW_TRANSLATED_SHARD_MANIFEST}")
-    set(MKW_HAVE_RETRO_REWIND ${MKW_HAVE_RETRO_REWIND_SHARDS})
     message(STATUS
-        "Translator graph: ${MKW_SHARED_BASE_FUNCTION_COUNT}/${MKW_BASE_FUNCTION_COUNT} base functions shared; "
-        "${MKW_PROFILE_SENSITIVE_CALLER_COUNT} profile-sensitive callers; "
-        "${MKW_RETRO_REWIND_FUNCTION_COUNT} Retro Rewind functions")
+        "Translator graph: ${MKW_SHARED_BASE_FUNCTION_COUNT}/${MKW_BASE_FUNCTION_COUNT} translated functions")
 
     set(MKW_RUNTIME_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}")
     include("${CMAKE_CURRENT_LIST_DIR}/cmake/PublicProducts.cmake")

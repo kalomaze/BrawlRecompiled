@@ -44,38 +44,6 @@ uint32_t Find(uint16_t profile) {
     // SPM has no NSMBW fManager/profile tree; never expose unrelated objects to pane writers.
     (void)profile;
     return 0;
-#if 0
-    uint32_t node = 0;
-    if (!Memory::TryRead32(kTreeRoot, node)) {
-        return 0;
-    }
-    for (int guard = 0; node != 0 && guard < 4096; ++guard) {
-        uint32_t owner = 0;
-        uint32_t word = 0;
-        if (Memory::TryRead32(node + 0x10, owner) && owner != 0 && Memory::TryRead32(owner + 8, word) &&
-            static_cast<uint16_t>(word >> 16) == profile) {
-            return owner;
-        }
-        uint32_t child = 0;
-        Memory::TryRead32(node + 4, child);
-        if (child != 0) {
-            node = child;
-            continue;
-        }
-        while (node != 0) {
-            uint32_t next = 0;
-            Memory::TryRead32(node + 0xC, next);
-            if (next != 0) {
-                node = next;
-                break;
-            }
-            uint32_t parent = 0;
-            Memory::TryRead32(node, parent);
-            node = parent;
-        }
-    }
-    return 0;
-#endif
 }
 
 } // namespace
@@ -86,40 +54,6 @@ bool HasProfile(uint16_t profile) {
 
 std::vector<uint16_t> Profiles() {
     return {};
-#if 0
-    std::vector<uint16_t> profiles;
-    uint32_t node = 0;
-    if (!Memory::TryRead32(kTreeRoot, node)) {
-        return profiles;
-    }
-    for (int guard = 0; node != 0 && guard < 4096; ++guard) {
-        uint32_t owner = 0;
-        uint32_t word = 0;
-        if (Memory::TryRead32(node + 0x10, owner) && owner != 0 && Memory::TryRead32(owner + 8, word)) {
-            profiles.push_back(static_cast<uint16_t>(word >> 16));
-        }
-        uint32_t child = 0;
-        Memory::TryRead32(node + 4, child);
-        if (child != 0) {
-            node = child;
-            continue;
-        }
-        while (node != 0) {
-            uint32_t next = 0;
-            Memory::TryRead32(node + 0xC, next);
-            if (next != 0) {
-                node = next;
-                break;
-            }
-            uint32_t parent = 0;
-            Memory::TryRead32(node, parent);
-            node = parent;
-        }
-    }
-    std::sort(profiles.begin(), profiles.end());
-    profiles.erase(std::unique(profiles.begin(), profiles.end()), profiles.end());
-    return profiles;
-#endif
 }
 
 SelectPlayers SelectPlayersState() {

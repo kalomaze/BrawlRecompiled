@@ -215,10 +215,3 @@ extern "C" int32_t OS__JamMessage_HLE_801a7500(CpuContext* ctx)
         [msg](uint32_t queue) { MsgQueueJam(queue, msg); },
         kMsgQueueRecvOffset, kMsgQueueSendOffset);
 }
-#if 0  // NSMBW: OSJamMessage is not linked into NSMBW (was MKW-only)
-#if 0  // SPM: 0x801a7500: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-REGISTER_NATIVE_FUNCTION(0x801A7500, OS__JamMessage_HLE_801a7500);
-#endif
-#endif
-#endif

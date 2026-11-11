@@ -244,11 +244,6 @@ extern "C" uint32_t AICheckInit_80124094()
     Memory::TryRead32(kAIInitializedAddr, initialized);
     return initialized;
 }
-#if 0  // SPM: AICheckInit: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-REGISTER_NATIVE_FUNCTION(0x8019F1E0, AICheckInit_80124094);
-#endif
-#endif
 
 
 
@@ -352,22 +347,12 @@ extern "C" uint32_t AIGetDMAStartAddr_8012406c()
     std::lock_guard<std::mutex> lock(g_ai.mutex);
     return g_ai.registerStartAddr;
 }
-#if 0  // SPM: AIGetDMAStartAddr: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE(8019F1B0, AIGetDMAStartAddr_8012406c, uint32_t, (), ());
-#endif
-#endif
 
 extern "C" uint32_t AIGetDMALength_80124084()
 {
     std::lock_guard<std::mutex> lock(g_ai.mutex);
     return g_ai.length;
 }
-#if 0  // SPM: AIGetDMALength: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE(8019F1D0, AIGetDMALength_80124084, uint32_t, (), ());
-#endif
-#endif
 
 extern "C" uint32_t AIGetDSPSampleRate_8012409c()
 {
@@ -375,13 +360,6 @@ extern "C" uint32_t AIGetDSPSampleRate_8012409c()
     // SDK AIGetDSPSampleRate returns AIDFR^1: 0 for 32 kHz, 1 for 48 kHz.
     return (g_ai.sampleRate == 48000u) ? 1u : 0u;
 }
-#if 0  // NSMBW: AIGetDSPSampleRate is not linked into NSMBW (was MKW-only)
-#if 0  // SPM: 0x8012409c: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE(8012409C, AIGetDSPSampleRate_8012409c, uint32_t, (), ());
-#endif
-#endif
-#endif
 
 extern "C" void DSPSendMailToDSP_8015d430(uint32_t mail)
 {
@@ -394,14 +372,6 @@ extern "C" void SoundPlayerSetVolume_800a35e0(uint32_t soundPlayer, float volume
     MusicAttenuation::SetSoundPlayerVolume(soundPlayer, volume);
 }
 
-#if 0  // NSMBW: music ducking hooks MKW nw4r::snd::SoundPlayer::SetVolume via an MKW sound-manager pointer; not ported to NSMBW yet
-#if 0  // SPM: 0x800a35e0: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(800A35E0, SoundPlayerSetVolume_800a35e0,
-              (uint32_t soundPlayer, float volume), (soundPlayer, volume));
-#endif
-#endif
-#endif
 
 extern "C" uint32_t DSPCheckMailToDSP_8015d3fc()
 {

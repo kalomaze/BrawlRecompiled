@@ -59,11 +59,6 @@ extern "C" uint32_t OSInitFont_HLE_801b0d60(uint32_t fontData)
     (void)fontData;
     return 0;
 }
-#if 0  // SPM: OSInitFont: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE(801B0D60, OSInitFont_HLE_801b0d60, uint32_t, (uint32_t fontData), (fontData));
-#endif
-#endif
 
 extern "C" uint32_t OSLoadFont_HLE_801b0480(uint32_t fontData, uint32_t temp)
 {

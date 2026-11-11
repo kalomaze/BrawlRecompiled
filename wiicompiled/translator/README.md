@@ -37,7 +37,7 @@ See `projects/examples/generic-dol.yml` for a minimal manifest driven by `RECOMP
 | --- | --- |
 | .NET 8 SDK | Builds and runs the translator. |
 | CMake ≥ 3.25 and Ninja | Configures and drives the native build. |
-| Clang / LLVM | The shipped build uses LLVM-MinGW targeting `x86-64-v3`. MSVC is not the tested path. |
+| Clang / LLVM | Ubuntu uses system Clang; Windows uses LLVM-MinGW. |
 
 Build the CLI once and invoke the assembly directly:
 
@@ -64,9 +64,7 @@ Relative paths resolve from `workspace_root`, which itself resolves from the man
 -  `info [--project path]`
 -  `translate-recursive <address> --project path`
 -  `generate-data-init --project path`
--  `emit-base-manifest --project path`
 -  `emit-build-shards --project path`
--  `translate-mod --project path [--profile name] ...` - static Kamek/Pulsar module translation
 
 Any command prints its own option list with `--help`.
 

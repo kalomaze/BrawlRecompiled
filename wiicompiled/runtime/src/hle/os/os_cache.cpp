@@ -149,11 +149,6 @@ PPC_NATIVE_OVERRIDE_VOID(801D76BC, DCInvalidateRange_801a1600, (uint32_t addr, u
 PPC_NATIVE_OVERRIDE_VOID(801D76E8, DCFlushRange_801a162c, (uint32_t addr, uint32_t length), (addr, length));
 PPC_NATIVE_OVERRIDE_VOID(801D7718, DCStoreRange_801a165c, (uint32_t addr, uint32_t length), (addr, length));
 PPC_NATIVE_OVERRIDE_VOID(801D7748, DCFlushRangeNoSync_801a168c, (uint32_t addr, uint32_t length), (addr, length));
-#if 0  // SPM: DCStoreRangeNoSync: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801AC500, DCStoreRangeNoSync_801a16b8, (uint32_t addr, uint32_t length), (addr, length));
-#endif
-#endif
 
 // ----------------------------------------------------------------------------
 // CPU Cache Maintenance Stubs (DC/IC/LC)
@@ -281,40 +276,5 @@ PPC_NATIVE_OVERRIDE_VOID(801d77a0, DCZeroRange_HLE_801a16e4, (CpuContext* ctx), 
 PPC_NATIVE_OVERRIDE_VOID(801d77cc, Cache_Maintenance_Stub, (), ()); // ICInvalidateRange
 PPC_NATIVE_OVERRIDE_VOID(801d7800, Cache_Maintenance_Stub, (), ()); // ICFlashInvalidate
 PPC_NATIVE_OVERRIDE_VOID(801d7810, Cache_Maintenance_Stub, (), ()); // ICEnable
-#if 0  // SPM: __LCEnable: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801ac5d0, Cache_Maintenance_Stub, (), ()); // __LCEnable
-#endif
-#endif
-#if 0  // SPM: LCEnable: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801ac6a0, Cache_Maintenance_Stub, (), ()); // LCEnable
-#endif
-#endif
 PPC_NATIVE_OVERRIDE_VOID(801d7928, Cache_Maintenance_Stub, (), ()); // LCDisable
-#if 0  // SPM: LCLoadBlocks: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801ac710, LCLoadBlocks_HLE_801a1894, (CpuContext* ctx), (ctx)); // LCLoadBlocks
-#endif
-#endif
-#if 0  // SPM: LCStoreBlocks: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801ac740, LCStoreBlocks_HLE_801a18b8, (CpuContext* ctx), (ctx)); // LCStoreBlocks
-#endif
-#endif
-#if 0  // SPM: LCStoreData: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE(801ac770, LCStoreData_HLE_801a18dc, uint32_t, (CpuContext* ctx), (ctx)); // LCStoreData
-#endif
-#endif
-#if 0  // SPM: LCQueueLength: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE(801ac810, LCQueueLength_HLE_801a197c, uint32_t, (CpuContext* ctx), (ctx)); // LCQueueLength
-#endif
-#endif
-#if 0  // SPM: LCQueueWait: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801ac820, LCQueueWait_HLE_801a1988, (CpuContext* ctx), (ctx)); // LCQueueWait
-#endif
-#endif
 PPC_NATIVE_OVERRIDE_VOID(801d7c40, Cache_Maintenance_Stub, (), ()); // OS____CacheInit

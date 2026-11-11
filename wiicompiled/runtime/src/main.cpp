@@ -84,7 +84,6 @@
 #include "hle_stubs.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
-#include "runtime_product.h"
 #include "recomp_mod_loader.h"
 #include <aurora/aurora.h>
 #include <aurora/gfx.h>
@@ -267,7 +266,7 @@ const std::filesystem::path& GetRunLogDirectory() {
         const auto secs = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
 
         std::ostringstream name;
-        name << (RuntimeProduct::IsRetroRewind() ? "retro_rewind" : "base")
+        name << "brawl"
              << "_" << secs << "_pid" << pid;
         const std::filesystem::path directory = logRoot / name.str();
         std::filesystem::create_directories(directory, ec);
@@ -1491,7 +1490,7 @@ int RuntimeMain(int argc, char** argv) {
         // We use auto backend (or specific if needed) and set a default window size.
         // This is required for GX commands (like texture loading) to work.
         AuroraConfig auroraConfig = {};
-        auroraConfig.appName = RuntimeProduct::Active().displayName.data();
+        auroraConfig.appName = "Super Smash Bros. Brawl";
         const auto applicationDataDirectory = RuntimeConfigFile::ApplicationDataDirectory();
         const auto rendererCacheDirectory = applicationDataDirectory / "Cache";
         std::error_code rendererPathError;

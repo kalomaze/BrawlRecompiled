@@ -100,20 +100,6 @@ uint32_t ResolveSoundPlayerArray() noexcept {
     // revo_kart.brsar setup; in NSMBW that address lies inside d_enemiesNP's data. Report "no
     // players" so TickGuest never writes guest memory until NSMBW's SndAudioMgr is mapped.
     return 0;
-#if 0  // NSMBW: MKW sound-manager walk
-    uint32_t soundManager = 0;
-    uint32_t archivePlayer = 0;
-    uint32_t soundPlayers = 0;
-    if (!Memory::TryRead32(kSoundManagerPointer, soundManager) || soundManager == 0 ||
-        !Memory::TryRead32(soundManager + kArchivePlayerOffset, archivePlayer) || archivePlayer == 0 ||
-        !Memory::TryRead32(archivePlayer + kSoundPlayersOffset, soundPlayers)) {
-        return 0;
-    }
-
-    // revo_kart.brsar names player 0 YPPL_BGM. Players 1-10 are the
-    // independent UI, object, engine, race, vehicle, and voice players.
-    return soundPlayers;
-#endif
 }
 
 enum class SoundCategory {

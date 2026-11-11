@@ -19,9 +19,6 @@
 #include "system_bridge.h"
 
 extern "C" void func_801E0480(CpuContext* ctx);
-#if 0  // NSMBW: MKW StaticR.rel prolog
-extern "C" void func_8055531C(CpuContext* ctx);
-#endif
 
 extern "C" void OSInitAlarm_RecompModLateInit_801a961c(CpuContext* ctx) {
     func_801E0480(ctx);
@@ -29,19 +26,7 @@ extern "C" void OSInitAlarm_RecompModLateInit_801a961c(CpuContext* ctx) {
 
 REGISTER_NATIVE_FUNCTION_AS(0x801E0480, OSInitAlarm_RecompModLateInit_801a961c, "OSInitAlarm_RecompModLateInit_801a961c");
 
-#if 0  // NSMBW: MKW StaticR.rel prolog wrapper (Retro Rewind mod init); NSMBW has no StaticR
-extern "C" void StaticRProlog_RecompModInit_8055531c(CpuContext* ctx) {
-    RecompMod::RunMemoryInitializers();
-    func_8055531C(ctx);
-    RecompMod::RunPostRelInitializers();
-}
-#endif
 
-#if 0  // NSMBW: StaticRProlog_RecompModInit is not linked into NSMBW (was MKW-only)
-#if 0  // SPM: 0x8055531c: no NSMBW symbol at this address
-REGISTER_NATIVE_FUNCTION_AS(0x8055531C, StaticRProlog_RecompModInit_8055531c, "StaticRProlog_RecompModInit_8055531c");
-#endif
-#endif
 
 namespace {
 std::string ReadGuestCStringLimited(uint32_t address, size_t limit = 4096) {

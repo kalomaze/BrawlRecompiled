@@ -13,7 +13,6 @@ extern "C" void GxNotifyGuestRamDmaWrite(uint32_t addr, uint32_t size);
 #include "recomp_mod_loader.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
-#include "runtime_product.h"
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -974,14 +973,6 @@ extern "C" void DVDInit_8015EA1C()
     ScanDirectory(rootPath / "files", "/");
 
     const auto& overlays = RuntimeRiivolution::Overlays();
-    if (overlays.empty() && RuntimeProduct::IsRetroRewind()) {
-        RT_LOG(RT_TAG_DVD) << "WARNING: no Retro Rewind overlay root was found. "
-                     "File replacements (menu archives, karts, drivers, courses) will not apply "
-                     "and the game will look and play like the unmodded disc. Set "
-                     "[paths] retro_rewind_root in Config.toml "
-                     "with the RetroRewind6 folder."
-                  << std::endl;
-    }
     // RegisterFileEntry lets the last registration win, so apply the roots in
     // reverse discovery order: the explicitly configured root outranks the mod
     // manifest.
@@ -1280,11 +1271,6 @@ PPC_NATIVE_OVERRIDE(801FD7F8, DVDLowUnencryptedRead_80165708, int32_t, (uint32_t
 // ============================================================================
 
 extern "C" int32_t DVDCheckDevice_801643FC() { return 1; } // Ready
-#if 0  // SPM: __DVDCheckDevice: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE(801D0980, DVDCheckDevice_801643FC, int32_t, (), ());
-#endif
-#endif
 
 extern "C" int32_t DVDLowClearCoverInterrupt_80166964(uint32_t cb) { return 1; }
 PPC_NATIVE_OVERRIDE(801FEA54, DVDLowClearCoverInterrupt_80166964, int32_t, (uint32_t cb), (cb));

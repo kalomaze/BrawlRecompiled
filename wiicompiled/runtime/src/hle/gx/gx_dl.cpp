@@ -1580,9 +1580,6 @@ extern "C" void nw4r__lyt__detail__DrawQuad_800847c0(CpuContext* ctx) {
     EmitLytDrawQuad(ctx->gpr[3], ctx->gpr[4], static_cast<int32_t>(ctx->gpr[5]), ctx->gpr[6], colorPtr);
 }
 
-#if 0  // SPM: DrawQuad__Q34nw4r3lyt6detailFRCQ34nw4r4math4VEC2RCQ34nw4r3lyt4SizeUcPA4_CQ34nw4r4math4VEC2PCQ34nw4r2ut5Color: name not in SPM
-REGISTER_NATIVE_FUNCTION(0x80248E40, nw4r__lyt__detail__DrawQuad_800847c0);  // NSMBW: DrawQuad(VEC2&, Size&, u8, VEC2[4]*, Color*)
-#endif
 
 extern "C" void nw4r__lyt__detail__DrawQuad_80084d20(CpuContext* ctx) {
     uint32_t colors[4];
@@ -1599,7 +1596,3 @@ extern "C" void nw4r__lyt__detail__DrawQuad_80084d20(CpuContext* ctx) {
 
     EmitLytDrawQuad(ctx->gpr[3], ctx->gpr[4], static_cast<int32_t>(ctx->gpr[5]), ctx->gpr[6], colorPtr);
 }
-
-#if 0  // SPM: DrawQuad__Q34nw4r3lyt6detailFRCQ34nw4r4math4VEC2RCQ34nw4r3lyt4SizeUcPA4_CQ34nw4r4math4VEC2PCQ34nw4r2ut5ColorUc: name not in SPM
-REGISTER_NATIVE_FUNCTION(0x802493A0, nw4r__lyt__detail__DrawQuad_80084d20);  // NSMBW: DrawQuad(..., Color*, u8 alpha)
-#endif

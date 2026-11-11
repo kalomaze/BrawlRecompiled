@@ -118,10 +118,6 @@ void SweepGfxNodeList(uint32_t list, bool offscreenList) {
 void AssertOffscreenScreenBypass() {
     // NSMBW: the draw/offscreen lists are Mario Kart's (0x809C1830/0x809C183C fall inside
     // NSMBW's d_enemiesNP); nothing to sweep until NSMBW's screens are mapped.
-#if 0  // NSMBW: MKW gfx node lists
-    SweepGfxNodeList(kMkwGfxDrawList, /*offscreenList=*/false);
-    SweepGfxNodeList(kMkwGfxOffscreenList, /*offscreenList=*/true);
-#endif
 }
 
 void WriteEggScreenRecord(uint32_t recordAddr, uint32_t width) {
@@ -139,36 +135,6 @@ void ApplyEggScreenRecords(uint32_t surfaceWidth, uint32_t surfaceHeight) {
     (void)surfaceWidth;
     (void)surfaceHeight;
     return;
-#if 0  // NSMBW: MKW EGG::Screen records
-    using namespace MkwDynamicAspect;
-    const uint32_t width43 =
-        g_widescreenConfigured ? EggRecordWidth(kEggRecordWidth43, surfaceWidth, surfaceHeight)
-                               : kEggRecordWidth43;
-    const uint32_t width169 =
-        g_widescreenConfigured ? EggRecordWidth(kEggRecordWidth169, surfaceWidth, surfaceHeight)
-                               : kEggRecordWidth169;
-    WriteEggScreenRecord(kEggScreenRecord43, width43);
-    WriteEggScreenRecord(kEggScreenRecord169, width169);
-    Memory::WriteFloat32(kEggScreenProjScaleX, 1.0f);
-    Memory::WriteFloat32(kEggScreenProjScaleY,
-                         g_widescreenConfigured
-                             ? VerticalExpansion(surfaceWidth, surfaceHeight)
-                             : 1.0f);
-    AssertOffscreenScreenBypass();
-    if (width43 == g_lastEggWidth43 && width169 == g_lastEggWidth169) {
-        return;
-    }
-    g_lastEggWidth43 = width43;
-    g_lastEggWidth169 = width169;
-    CpuContext callbackCpu = GetPersistentCpuContext();
-    if (Memory::Read32(kSystemManagerInstance) != 0 && Memory::Read32(kMkwGfxDrawList) != 0) {
-        InvokeIndirectCpu(kMkwUpdateAllScreens, &callbackCpu);
-        return;
-    }
-    if (Memory::Read32(kEggActiveScreenPtr) != 0) {
-        InvokeIndirectCpu(kEggScreenAspectHandler, &callbackCpu);
-    }
-#endif
 }
 
 } // namespace

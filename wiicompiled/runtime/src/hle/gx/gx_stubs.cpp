@@ -40,13 +40,6 @@ extern "C" void SPM_GXSetDrawSync(uint32_t token) {
     } catch (const ::Memory::AccessViolation&) {}
 }
 PPC_NATIVE_OVERRIDE_VOID(801f08d8, SPM_GXSetDrawSync, (uint32_t token), (token));
-#if 0  // NSMBW: GXSetDrawSync is not linked into NSMBW (was MKW-only)
-#if 0  // SPM: 0x8016e9fc: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(8016e9fc, GX__SetDrawSync_8016e9fc, (uint32_t token), (token));
-#endif
-#endif
-#endif
 
 extern "C" void OSWakeupThread_HLE_801aaaa4(CpuContext* ctx);
 
@@ -174,11 +167,6 @@ extern "C" void GX__ReadBoundingBox_SPM(uint32_t leftPtr, uint32_t topPtr, uint3
     } catch (const Memory::AccessViolation&) {
     }
 }
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(8028E26C, GX__ReadBoundingBox_SPM,
-                         (uint32_t leftPtr, uint32_t topPtr, uint32_t rightPtr, uint32_t bottomPtr),
-                         (leftPtr, topPtr, rightPtr, bottomPtr));
-#endif
 
 // ============================================================================
 // FIFO/State Management - No-ops

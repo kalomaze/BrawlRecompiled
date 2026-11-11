@@ -106,7 +106,6 @@ std::string Problem(const fs::path& root) {
     }
     const std::string id(header, 6);
     const int revision = static_cast<unsigned char>(header[7]);
-    // projects/spm/pal/tools/make_pal_runtime.py rewrites these two for the PAL engine (R8PP01, any revision).
     constexpr const char* kGameId = "RSBE01";
     constexpr int kRevision = 1;
     if (id != kGameId) {
