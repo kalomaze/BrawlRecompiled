@@ -205,6 +205,12 @@ def build_game(args, disc, build):
     native_options = [f'-DMKW_HOST_ISA={args.host_isa}'] if args.host_isa else []
     if args.flat_memory is not None:
         native_options.append(f'-DMKW_FLAT_MEMORY={args.flat_memory}')
+    compilers = f'{shutil.which("clang")}\n{shutil.which("clang++")}'
+    compilers_stamp = build / 'native-compilers.txt'
+    if compilers_stamp.exists() and compilers_stamp.read_text() != compilers:
+        # CMake would reset the cache itself on a compiler change and drop the -D options below with it.
+        (build / 'native/CMakeCache.txt').unlink(missing_ok=True)
+    compilers_stamp.write_text(compilers)
     run(args.cmake, '-S', wc / 'runtime', '-B', build / 'native', '-G', 'Ninja',
         f'-DCMAKE_BUILD_TYPE={args.build_type}', f'-DCMAKE_C_COMPILER={shutil.which("clang")}',
         f'-DCMAKE_CXX_COMPILER={shutil.which("clang++")}', f'-DMKW_TRANSLATED_COMPILE_JOBS={args.jobs}', *native_options, *args.native_arg)
