@@ -75,7 +75,7 @@ sealed class WiiDisc : IDisposable
     }
 
     // Writes sys/ and files/ under outDir. Returns the number of files written.
-    public int Extract(string outDir, Action<int, int, string>? progress = null, CancellationToken cancel = default, Func<string, bool>? include = null)
+    public int Extract(string outDir, Action<int, int, string>? progress = null, CancellationToken cancel = default)
     {
         var boot = ReadData(0, 0x440);
         long dolOff = (long)U32(boot, 0x420) << 2, fstOff = (long)U32(boot, 0x424) << 2, fstSize = (long)U32(boot, 0x428) << 2;
@@ -118,7 +118,6 @@ sealed class WiiDisc : IDisposable
         }
         Walk(1, entries, "files", 0);
 
-        if (include != null) files.RemoveAll(file => !include(file.path));
         int total = files.Count + 5, done = 0;
         void Put(string rel, long off, long size)
         {

@@ -13,7 +13,7 @@ engine=$stage/engine
 rm -rf "$build/stage"
 mkdir -p "$engine/UserData/mods" "$engine/UserData/SD" "$engine/licenses"
 
-[[ -x $native/WiiCompiled ]] || { echo "missing the build: run cmake -DDISC=<image> -P build.cmake" >&2; exit 1; }
+[[ -x $native/WiiCompiled ]] || { echo "missing the build: run cmake -P build.cmake (see README.md)" >&2; exit 1; }
 [[ -d $root/wiicompiled/Dependencies ]] || { echo "missing wiicompiled/Dependencies (license files)" >&2; exit 1; }
 # The launcher's controller list (launcher/Gamepads.cs): SDL as a shared library, from the SDL sources the game uses.
 sdl=$build/sdl-shared

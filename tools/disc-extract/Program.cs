@@ -12,9 +12,7 @@ try
     disc.Extract(args[1], (done, total, path) =>
     {
         if (done % 100 == 0 || done == total) Console.WriteLine($"{done}/{total}: {path}");
-    }, include: path => path.StartsWith(Path.Combine("files", "module") + Path.DirectorySeparatorChar, StringComparison.Ordinal)
-        || path == Path.Combine("files", "system", "font", "font_hira.brfnt")
-        || path == Path.Combine("files", "system", "font", "font_melee.brfnt"));
+    });
     return 0;
 }
 catch (Exception error)

@@ -1,10 +1,11 @@
 # Windows release build of Super Smash Bros. Brawl: build.cmake (the same build as on Linux) with the release's
 # pinned llvm-mingw toolchain, the engine as a DLL started by a small loader exe, and the C++/WinRT headers for the
 # media-session monitor. The result is copied to Play\, which tools\package-brawl.ps1 packages.
-#   powershell -ExecutionPolicy Bypass -File tools\build-brawl.ps1 <disc image> [-Jobs N] [-OldCpu]
+#   powershell -ExecutionPolicy Bypass -File tools\build-brawl.ps1 [-Game <extracted disc>] [-Jobs N] [-OldCpu]
+# Extract the disc first (extract.cmake, see README.md); -Game defaults to Disc\DATA, like build.cmake.
 [CmdletBinding()]
 param(
-    [Parameter(Position = 0)] [string]$Disc,
+    [string]$Game,
     [int]$Jobs = 0,
     # The engine for processors without AVX2/FMA (x86-64-v2): engine_usa_v2.dll, built in build\release-v2\; the
     # loader picks it on such a CPU.
@@ -12,7 +13,6 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
-if (-not $Disc) { throw 'Pass the disc image: build-brawl.ps1 <path to RSBE01 .iso/.wbfs>' }
 
 $root = Split-Path -Parent $PSScriptRoot            # <project>\tools -> <project>
 $launcherScripts = Join-Path $root 'wiicompiled\Launcher'
@@ -37,8 +37,8 @@ if (-not (Test-Path -LiteralPath (Join-Path $cppWinRt 'winrt\base.h'))) {
 $env:PATH = "$toolchain\llvm-mingw\bin;$toolchain\CMake\bin;$toolchain\Ninja;$env:PATH"
 
 $release = "-DMKW_ENGINE_MODULE=ON;-DMKW_ENGINE_MODULE_NAME=$module;-DMKW_CPPWINRT_INCLUDE_DIR=$($cppWinRt.Replace('\', '/'))"
-$isa = if ($OldCpu) { @('-DMKW_HOST_ISA=v2') } else { @() }
-& cmake "-DDISC=$Disc" "-DBUILD_DIR=$build" "-DJOBS=$Jobs" "-DNATIVE_ARGS=$release" @isa -P (Join-Path $root 'build.cmake')
+$extra = @(if ($OldCpu) { '-DMKW_HOST_ISA=v2' }) + @(if ($Game) { "-DGAME=$Game" })
+& cmake "-DBUILD_DIR=$build" "-DJOBS=$Jobs" "-DNATIVE_ARGS=$release" @extra -P (Join-Path $root 'build.cmake')
 if ($LASTEXITCODE -ne 0) { throw "build.cmake failed with exit code $LASTEXITCODE." }
 $native = Join-Path $build 'native'
 

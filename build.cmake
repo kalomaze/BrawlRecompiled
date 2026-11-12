@@ -1,13 +1,16 @@
 cmake_minimum_required(VERSION 3.25)
-# Run from any directory: cmake -DDISC=/path/to/brawl.iso -P /path/to/build.cmake
-if(NOT DEFINED DISC OR NOT EXISTS "${DISC}")
-    message(FATAL_ERROR "Usage: cmake -DDISC=/path/to/brawl.iso -P build.cmake")
-endif()
+# Run from any directory, after extract.cmake: cmake -P /path/to/build.cmake
 find_package(Python3 3.12 REQUIRED COMPONENTS Interpreter)
 if(NOT DEFINED BUILD_DIR)
     set(BUILD_DIR "${CMAKE_CURRENT_LIST_DIR}/build")
 endif()
-set(args --disc "${DISC}" --build-dir "${BUILD_DIR}" --cmake "${CMAKE_COMMAND}")
+if(NOT DEFINED GAME)
+    set(GAME "${CMAKE_CURRENT_LIST_DIR}/Disc/DATA")  # where the launchers extract too
+endif()
+set(args --game "${GAME}" --build-dir "${BUILD_DIR}" --cmake "${CMAKE_COMMAND}")
+if(EXTRACT)
+    list(APPEND args --extract "${DISC}")
+endif()
 if(DEFINED CMAKE_BUILD_TYPE)
     list(APPEND args --build-type "${CMAKE_BUILD_TYPE}")
 endif()

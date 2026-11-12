@@ -63,7 +63,8 @@ def translation_fingerprint(sources):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--disc', type=Path, required=True)
+    parser.add_argument('--game', type=Path, required=True, help='extracted disc: built from, and played')
+    parser.add_argument('--extract', type=Path, help='disc image to extract to --game, instead of building')
     parser.add_argument('--build-dir', type=Path, required=True)
     parser.add_argument('--cmake', required=True)
     parser.add_argument('--jobs', type=int, default=4)
@@ -76,7 +77,7 @@ def main():
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error('--jobs must be positive')
-    disc, build = args.disc.resolve(strict=True), args.build_dir.resolve()
+    game, build = args.game.resolve(), args.build_dir.resolve()
     if build == ROOT or ROOT.is_relative_to(build):
         parser.error('build directory must not contain the source checkout')
     build.mkdir(parents=True, exist_ok=True)
@@ -88,10 +89,10 @@ def main():
         else:
             import fcntl
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        build_game(args, disc, build)
+        build_game(args, game, build)
 
 
-def build_game(args, disc, build):
+def build_game(args, game, build):
     for tool in ('git', 'clang', 'clang++', 'ninja'):
         if not shutil.which(tool):
             raise RuntimeError(f'Missing {tool} on PATH. See "Building from source" in README.md for the prerequisites.')
@@ -144,30 +145,23 @@ def build_game(args, disc, build):
     source_stamp.write_text(json.dumps(current, sort_keys=True))
     fingerprint = translation_fingerprint(current)
     wc = work / 'wiicompiled'
-    for project in ('tools/disc-extract/DiscExtract.csproj', 'wiicompiled/translator/src/Translator.Cli/Translator.Cli.csproj'):
-        run(dotnet, 'build', work / project, '-c', 'Release', '--nologo', '--disable-build-servers')
-    extractor = work / 'tools/disc-extract/bin/Release/net8.0/DiscExtract.dll'
+    tool = 'tools/disc-extract/DiscExtract' if args.extract else 'wiicompiled/translator/src/Translator.Cli/Translator.Cli'
+    run(dotnet, 'build', work / f'{tool}.csproj', '-c', 'Release', '--nologo', '--disable-build-servers')
+    if args.extract:
+        if game.exists():
+            raise RuntimeError(f'{game} already exists; delete it to extract again')
+        partial = game.with_name(game.name + '.partial')  # rerun to resume: the extractor overwrites
+        run(dotnet, work / 'tools/disc-extract/bin/Release/net8.0/DiscExtract.dll', args.extract.resolve(strict=True), partial)
+        partial.rename(game)
+        print(f'Extracted: {game}', flush=True)
+        return
     translator = wc / 'translator/src/Translator.Cli/bin/Release/net8.0/Translator.Cli.dll'
-    images = [disc]
-    if disc.suffix.lower() == '.wbfs':
-        i = 1
-        while disc.with_suffix(f'.wbf{i}').exists():
-            images.append(disc.with_suffix(f'.wbf{i}'))
-            i += 1
-    identity = [(str(p), p.stat().st_size, p.stat().st_mtime_ns) for p in images]
-    extraction_stamp = build / 'extracted.json'
-    extraction_key = json.dumps([identity, current['launcher/WiiDisc.cs'], current['tools/disc-extract/Program.cs'],
-                                 current['tools/disc-extract/DiscExtract.csproj']])
-    data = build / 'disc'
-    if not extraction_stamp.exists() or extraction_stamp.read_text() != extraction_key:
-        temporary = build / 'disc.partial'
-        if temporary.exists():
-            shutil.rmtree(temporary)
-        run(dotnet, extractor, disc, temporary)
-        if data.exists():
-            shutil.rmtree(data)
-        temporary.rename(data)
-        extraction_stamp.write_text(extraction_key)
+    dol = game / 'sys/main.dol'
+    if not dol.is_file():
+        raise RuntimeError(f'No extracted disc in {game}: run extract.cmake first, or pass -DGAME=<folder>')
+    game_inputs = hashlib.sha256()
+    for path in (dol, *sorted((game / 'files/module').iterdir())):
+        game_inputs.update(path.name.encode() + path.read_bytes())
     decomp = build / f'brawl-{DECOMP}'
     if not (decomp / '.ready').exists():
         archive = downloads / f'brawl-{DECOMP}.tar.gz'
@@ -176,18 +170,18 @@ def build_game(args, disc, build):
         unpack(archive, build)
         (decomp / '.ready').touch()
     translated_stamp = build / 'translated.json'
-    translation_key = json.dumps([fingerprint, extraction_key])
+    translation_key = json.dumps([fingerprint, game_inputs.hexdigest()])
     if not translated_stamp.exists() or translated_stamp.read_text() != translation_key:
-        game = work / 'game'
-        game.mkdir(exist_ok=True)
-        shutil.copy2(data / 'sys/main.dol', game / 'main.dol')
-        run(sys.executable, wc / 'projects/brawl/tools/build_modules.py', data / 'files/module',
-            decomp / 'config/RSBE01_02', game / 'brawl_modules.rel', wc, game / 'main.dol')
+        inputs = work / 'game'
+        inputs.mkdir(exist_ok=True)
+        shutil.copy2(dol, inputs / 'main.dol')
+        run(sys.executable, wc / 'projects/brawl/tools/build_modules.py', game / 'files/module',
+            decomp / 'config/RSBE01_02', inputs / 'brawl_modules.rel', wc, inputs / 'main.dol')
         project = 'projects/brawl/recomp.yml'
         # Rev 2 matches doldecomp's 127 input hashes and the checked-in runtime module
         # layout. Retain upstream's rev 1 pin; select this additional known executable
         # only in the staged build configuration. Unknown images still fail validation.
-        actual = hashlib.sha256((game / 'main_translate.dol').read_bytes()).hexdigest()
+        actual = hashlib.sha256((inputs / 'main_translate.dol').read_bytes()).hexdigest()
         if actual == '27e3afd3e877e64c84cad2de5f0c0b04fe338813aa7aea5d8b19b509b7ab2ac6':
             config = wc / project
             config.write_text(re.sub(r'(?m)^(    sha256:) [a-f0-9]+$',
@@ -215,7 +209,17 @@ def build_game(args, disc, build):
         f'-DCMAKE_BUILD_TYPE={args.build_type}', f'-DCMAKE_C_COMPILER={shutil.which("clang")}',
         f'-DCMAKE_CXX_COMPILER={shutil.which("clang++")}', f'-DMKW_TRANSLATED_COMPILE_JOBS={args.jobs}', *native_options, *args.native_arg)
     run(args.cmake, '--build', build / 'native', '--target', 'WiiCompiled', '--parallel', args.jobs)
-    print(f'Built: {build / "native/WiiCompiled"}\nExtracted game data: {data}', flush=True)
+    # Portable like Play\: settings, saves and logs go to native/UserData, whose config points the game at the disc.
+    (build / 'native/portable.txt').write_text('Settings, saves and logs stay in the UserData folder next to this file.\n')
+    config = build / 'native/UserData/Config.toml'
+    config.parent.mkdir(exist_ok=True)
+    text = config.read_text() if config.exists() else ''
+    setting = f'dvd_root = {json.dumps(str(game))}'  # the build owns this one setting: -DGAME changes it
+    text, found = re.subn(r'(?m)^dvd_root\s*=.*$', lambda _: setting, text)
+    if not found:
+        text, found = re.subn(r'(?m)^\[paths\]\s*$', lambda _: f'[paths]\n{setting}', text, count=1)
+    config.write_text(text if found else f'{text}\n[paths]\n{setting}\n')
+    print(f'Built: {build / "native/WiiCompiled"}, playing {game}', flush=True)
 
 
 if __name__ == '__main__':

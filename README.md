@@ -107,21 +107,24 @@ connection adds input delay (2 to 8 frames, picked from the ping when the room s
 From a fresh clone, on Linux or Windows:
 
 ```sh
-cmake -DDISC=/absolute/path/to/brawl.iso -P build.cmake
+cmake -DDISC=/absolute/path/to/brawl.iso -P extract.cmake   # once
+cmake -P build.cmake
 ```
 
-This builds the host tools, extracts only the disc's compilation inputs, prelinks its modules,
-translates the game, fetches native dependencies, and compiles `build/native/WiiCompiled`
-(`WiiCompiled.exe` on Windows), with the libraries and data files it loads beside it.
+The first command extracts the whole disc to `Disc/DATA`.
 ISO, CISO, and split WBFS are accepted; keep `.wbf1`, `.wbf2`, etc. beside the `.wbfs`.
+Pass `-DGAME=<folder>` to both commands to use another folder.
+The second builds the host tools, prelinks the disc's modules, translates the game, fetches native
+dependencies, and compiles `build/native/WiiCompiled` (`WiiCompiled.exe` on Windows), with the libraries
+and data files it loads beside it. It is ready to play: it keeps its settings and saves in
+`build/native/UserData`, whose `Config.toml` points it at the extracted disc.
 The USA revision-1 translation hash and the verified revision-2 executable are supported.
-All generated files, downloaded tools, and extracted data stay in ignored `build/`.
+All generated files and downloaded tools stay in ignored `build/`.
 Rerun the same command to resume; use `-DJOBS=2` for lower memory use or
 `-DBUILD_DIR=/another/directory` to choose the build directory. Initial builds need internet access.
-This is a compilation workflow; it does not extract the full assets needed to play.
 The default configuration is Release. Add `-DCMAKE_BUILD_TYPE=Debug` for unoptimized
 native code with debug symbols, or `-DCMAKE_BUILD_TYPE=RelWithDebInfo` for optimized
-code with symbols. Changing configurations reuses the disc extraction and translation.
+code with symbols. Changing configurations reuses the translation.
 Use an external native profiler with the matching executable and symbols; translated
 functions retain `func_<guest address>` names. The former Windows-only `BRAWL_PROFILE`
 and `profile.txt` samplers and their private stack-file resolver have been removed.
@@ -156,7 +159,7 @@ executable wrapper that receives the test binary as its argument, for CPU emulat
 
 ### Release packaging
 
-`tools\build-brawl.ps1 <disc image>` runs the same `build.cmake` with the release's pinned llvm-mingw, the engine
+After `extract.cmake`, `tools\build-brawl.ps1` runs the same `build.cmake` with the release's pinned llvm-mingw, the engine
 as a DLL behind a small loader, and the media-session headers, and copies the result to `Play\` (`-OldCpu` adds the
 x86-64-v2 engine). The release (`Brawl Recompiled.exe` plus a hidden `engine\` folder) is made by
 `tools\build-launcher.ps1` (the launcher, Windows and Linux, with a portable .NET SDK) and

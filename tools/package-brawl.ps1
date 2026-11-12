@@ -1,18 +1,18 @@
 # Builds Brawl Recompiled's release folder and updates the player's game folder (-Install, default
 # Desktop\My recomps\BrawlRecompiled).
-#   powershell -ExecutionPolicy Bypass -File tools\package-brawl.ps1 [-Build <disc image>] [-Zip] [-Install <folder>]
-# -Build first rebuilds the game from the disc image (build-brawl.ps1) and the launcher. -Zip also writes dist\BrawlRecompiled.zip.
+#   powershell -ExecutionPolicy Bypass -File tools\package-brawl.ps1 [-Build] [-Zip] [-Install <folder>]
+# -Build first rebuilds the game (build-brawl.ps1) and the launcher. -Zip also writes dist\BrawlRecompiled.zip.
 # Layout: Brawl Recompiled.exe (launcher), README.txt, engine\ (brawl-engine.exe = Play\SuperSmashBrosBrawl.exe
 # renamed, engine_usa.dll = the recompiled game, DLLs, wii_bootstrap\, UserData\ = saves, settings, the virtual SD
 # card (UserData\SD: Project+ and other SD mods) and UserData\mods (file and texture replacement mods)).
 # The disc is never copied in: the launcher extracts the player's image into Disc\ inside the folder.
 # A clean copy is staged in dist\_stage (deleted afterwards) and copied over the game folder, so the saves, Config.toml,
 # mods and Disc\ already there are kept. The version is <Version> in launcher\BrawlRecompiled.Launcher.csproj.
-[CmdletBinding()] param([string]$Build, [switch]$Zip, [string]$Install = "$env:USERPROFILE\Desktop\My recomps\BrawlRecompiled")
+[CmdletBinding()] param([switch]$Build, [switch]$Zip, [string]$Install = "$env:USERPROFILE\Desktop\My recomps\BrawlRecompiled")
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $launcher = "$root\launcher\publish\Brawl Recompiled.exe"
-if ($Build) { & "$PSScriptRoot\build-brawl.ps1" $Build; & "$PSScriptRoot\build-launcher.ps1" }
+if ($Build) { & "$PSScriptRoot\build-brawl.ps1"; &"$PSScriptRoot\build-launcher.ps1" }
 elseif (-not (Test-Path -LiteralPath $launcher)) { & "$PSScriptRoot\build-launcher.ps1" }
 $version = 'v' + ([xml](Get-Content -LiteralPath "$root\launcher\BrawlRecompiled.Launcher.csproj")).Project.PropertyGroup.Version
 function Mirror([string]$From, [string]$To) {
