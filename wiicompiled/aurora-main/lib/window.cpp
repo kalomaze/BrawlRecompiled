@@ -627,9 +627,8 @@ bool is_presentable() noexcept {
 }
 
 void pump_events() noexcept {
-  if (g_window != nullptr) {
-    SDL_SyncWindow(g_window);
-  }
+  // Window changes arrive through SDL events. SyncWindow waits for window-manager
+  // operations to finish and can sleep even when called on an ordinary frame.
   SDL_PumpEvents();
 }
 
