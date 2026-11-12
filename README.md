@@ -104,65 +104,40 @@ connection adds input delay (2 to 8 frames, picked from the ping when the room s
 
 ## Building from source
 
-From a fresh clone, on Linux or Windows:
+You need your own disc image (USA, RSBE01), and CMake 3.25+, Python 3.12+, Git, Clang and Ninja on `PATH`. On
+Windows, the Clang must be llvm-mingw. On Ubuntu:
 
 ```sh
-cmake -DDISC=/absolute/path/to/brawl.iso -P extract.cmake   # once
+sudo apt install cmake python3 git clang lld ninja-build build-essential pkg-config libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libasound2-dev libwayland-dev libxkbcommon-dev
+```
+
+Then, on Linux or Windows:
+
+```sh
+cmake -DDISC=/absolute/path/to/brawl.iso -P extract.cmake   # once: extracts the disc to Disc/DATA
 cmake -P build.cmake
 ```
 
-The first command extracts the whole disc to `Disc/DATA`.
-ISO, CISO, and split WBFS are accepted; keep `.wbf1`, `.wbf2`, etc. beside the `.wbfs`.
-Pass `-DGAME=<folder>` to both commands to use another folder.
-The second builds the host tools, prelinks the disc's modules, translates the game, fetches native
-dependencies, and compiles `build/native/WiiCompiled` (`WiiCompiled.exe` on Windows), with the libraries
-and data files it loads beside it. It is ready to play: it keeps its settings and saves in
-`build/native/UserData`, whose `Config.toml` points it at the extracted disc.
-The USA revision-1 translation hash and the verified revision-2 executable are supported.
-All generated files and downloaded tools stay in ignored `build/`.
-Rerun the same command to resume; use `-DJOBS=2` for lower memory use or
-`-DBUILD_DIR=/another/directory` to choose the build directory. Initial builds need internet access.
-The default configuration is Release. Add `-DCMAKE_BUILD_TYPE=Debug` for unoptimized
-native code with debug symbols, or `-DCMAKE_BUILD_TYPE=RelWithDebInfo` for optimized
-code with symbols. Changing configurations reuses the translation.
-Use an external native profiler with the matching executable and symbols; translated
-functions retain `func_<guest address>` names.
-On x86-64, add `-DMKW_HOST_ISA=v1` for baseline x86-64/SSE2, `v2` for
-SSE4.2/POPCNT, or `v3` for AVX2/FMA (the current default). The choice persists
-in the build directory. CPU instruction compatibility does not establish graphics-driver
-compatibility or performance on older machines.
+ISO, CISO and split WBFS images work; keep `.wbf1`, `.wbf2`, etc. beside the `.wbfs`. The build downloads what it
+needs (so the first one needs internet access), keeps everything it makes in `build/`, and produces
+`build/native/WiiCompiled` (`WiiCompiled.exe` on Windows), set up to use the extracted disc, with its settings and
+saves in `build/native/UserData`. Rerun it to resume. Options for `build.cmake`:
 
-Fixed-address guest mapping is enabled by default on supported targets. Add
-`-DMKW_FLAT_MEMORY=OFF` to use ordinary allocated RAM with shared guest aliases
-and explicit memory-access checks, without reserving a fixed 4 GiB host address
-range. Use `ON` to re-enable the optimization; the choice persists in the build directory.
+- `-DJOBS=2` uses less memory (the default is 4 jobs)
+- `-DBUILD_DIR=<folder>` builds somewhere other than `build/`
+- `-DGAME=<folder>` uses an extracted disc other than `Disc/DATA` (give it to `extract.cmake` too)
+- `-DCMAKE_BUILD_TYPE=Debug` or `RelWithDebInfo` builds with debug symbols (the default is `Release`)
+- `-DMKW_HOST_ISA=v1` (SSE2) or `v2` (SSE4.2) builds for x86-64 processors older than the default `v3` (AVX2)
+- `-DMKW_FLAT_MEMORY=OFF` uses ordinary memory instead of reserving a fixed 4 GiB address range
 
-The build needs CMake 3.25+, Python 3.12+, Git, Clang and Ninja on `PATH`. On Windows the Clang
-must be llvm-mingw. It downloads its pinned .NET SDK locally and does not install system packages.
-On a machine without development tools:
-
-```sh
-# Ubuntu
-sudo apt install cmake python3 git clang lld ninja-build build-essential pkg-config libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libasound2-dev libwayland-dev libxkbcommon-dev
-# Windows (open a new terminal afterwards so PATH updates)
-winget install Kitware.CMake Python.Python.3.12 Git.Git Ninja-build.Ninja MartinStorsjo.LLVM-MinGW.UCRT
-```
-
-### Translator and arithmetic tests
-
-Run `BRAWL_NATIVE_TESTS=1 build/dotnet/dotnet test wiicompiled/translator/tests/Translator.Tests/Translator.Tests.csproj`
-to include tests that compile and execute the native PowerPC helpers. Set `MKW_HOST_ISA=v1`, `v2`
-or `v3` to select their x86 instruction baseline. Native tests use allocated guest RAM
-by default; set `MKW_FLAT_MEMORY=1` to exercise fixed mapping. `BRAWL_NATIVE_RUNNER` may name an
-executable wrapper that receives the test binary as its argument, for CPU emulation.
+The translator's tests are described in [`wiicompiled/translator/tests/README.md`](wiicompiled/translator/tests/README.md).
 
 ### Release packaging
 
-After `extract.cmake`, `tools\build-brawl.ps1` runs the same `build.cmake` with the release's pinned llvm-mingw, the engine
-as a DLL behind a small loader, and the media-session headers, and copies the result to `Play\` (`-OldCpu` adds the
-x86-64-v2 engine). The release (`Brawl Recompiled.exe` plus a hidden `engine\` folder) is made by
-`tools\build-launcher.ps1` (the launcher, Windows and Linux, with a portable .NET SDK) and
-`tools\package-brawl.ps1 -Zip`; `tools/package-linux.sh` makes the Linux download from a Linux `build.cmake` build.
+After `extract.cmake`, `tools\build-brawl.ps1` builds the Windows release into `Play\` (`-OldCpu` adds the build for
+processors without AVX2). The release (`Brawl Recompiled.exe` plus a hidden `engine\` folder) is made by
+`tools\build-launcher.ps1` (the launcher, Windows and Linux) and `tools\package-brawl.ps1 -Zip`;
+`tools/package-linux.sh` makes the Linux download from a `build.cmake` build on Linux.
 
 | Folder | What it is |
 |---|---|
