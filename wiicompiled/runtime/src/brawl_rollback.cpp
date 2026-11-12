@@ -527,7 +527,7 @@ bool NextSceneIsMelee() {
 // the stage's constructor.
 void SeedMatchAtLoopTop() {
     const char* seed=std::getenv("BRAWL_PROTOCOL_SEED");
-    if(!seed || matchSeeded || !session.live) return;
+    if(!seed || matchSeeded || !(session.live || session.hasRecordedCountdown)) return;
     const bool melee=SaveStates::SceneName()=="scMelee" && !IsWaitingRoom();
     if(!melee && !NextSceneIsMelee()) return;
     matchSeeded=true;
