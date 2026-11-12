@@ -14,12 +14,13 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 SDK = '8.0.425'
-# Keyed by .NET runtime identifier; Windows ships the SDK as a .zip, Linux as a .tar.gz.
+# Keyed by .NET runtime identifier; Windows ships the SDK as a .zip, Linux and macOS as a .tar.gz.
 SDK_HASHES = {
     'linux-x64': '934b8060a7190e5909ad1fd0785db542f487b3bbf6cdd14826b02095fdd0d0394298b1634085eff302928fccc33f7c1a7253e9b87df555fc36fce819bcd2e798',
     'linux-arm64': '84a4d017d74d7aa842e981679d1b044e6be1f35b9b2b214021e30bc40871d016d29611cca373d8502ad5c890e3ad360ee698f9cf2d7a4d5a9fba102d88ba310f',
     'win-x64': 'f0b6f15bf6f1a0507205c0cb102ab99e1dee875c4682c8ed94665be1d580186a06b21455e83b3a01a0ff7f4cd887b67420f2e2fe09ed985534a4cea488ae1af9',
     'win-arm64': '2a75864daac54fe8360498d0a7260e3f8d851c3d811d864d7229f00ae51eac9e534998b7c3d221fc423319b9c8147dd43fa80690c969e43b2045cc2f1f93e537',
+    'osx-arm64': 'd42156be70b489236479a415536013a89a9fd6eaca57d5716a7017612fcc65bdb459068973d7cffd6fe710f2799af8bee95b2046ba032762d47df176f5c4a7d6',
 }
 DECOMP = '70744045f8ceba62d5a77c052c8f7bcb76fc21d1'
 
@@ -96,7 +97,7 @@ def build_game(args, game, build):
     downloads = build / 'downloads'
     downloads.mkdir(exist_ok=True)
     arch = {'x86_64': 'x64', 'amd64': 'x64', 'aarch64': 'arm64', 'arm64': 'arm64'}[platform.machine().lower()]
-    rid = f'{"win" if os.name == "nt" else "linux"}-{arch}'
+    rid = f'{"win" if os.name == "nt" else "osx" if sys.platform == "darwin" else "linux"}-{arch}'
     dotnet_dir = build / 'dotnet'
     sdk_stamp = dotnet_dir / '.sdk-ready'
     if not sdk_stamp.exists():
