@@ -82,7 +82,7 @@ void Check() {
     if (Launcher().empty()) return;
     const fs::path out = RuntimeConfigFile::ApplicationDataDirectory() / "update-check.json";
     const std::string command = "curl -s -L -m 15 -H \"User-Agent: BrawlRecompiled\" -o \"" + RuntimeConfigFile::PathToUtf8(out) +
-                                "\" https://api.github.com/repos/josiahg2502-glitch/BrawlRecompiled/releases/latest";
+                                "\" https://api.github.com/repos/kalomaze/EmissaryRecomp/releases/latest";
     if (!Run(command)) {
         RT_LOGF(RT_TAG_RUNTIME, "[update] could not reach GitHub\n");
         return;

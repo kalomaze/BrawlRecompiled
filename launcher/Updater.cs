@@ -10,7 +10,7 @@ namespace BrawlRecompiled;
 // download, and the running launcher is renamed aside first (Windows keeps a running program's file locked).
 static class Updater
 {
-    const string Repo = "josiahg2502-glitch/BrawlRecompiled";
+    const string Repo = "kalomaze/EmissaryRecomp";
 
     public sealed record Release(string Version, string AssetUrl, string AssetName);
 

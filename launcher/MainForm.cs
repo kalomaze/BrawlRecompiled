@@ -154,7 +154,7 @@ sealed class MainForm : Form
             Enabled = true;
             UseWaitCursor = false;
             Text = title;
-            MessageBox.Show(this, "The update could not be installed:\n" + e.Message + "\n\nDownload it from github.com/josiahg2502-glitch/BrawlRecompiled/releases instead.",
+            MessageBox.Show(this, "The update could not be installed:\n" + e.Message + "\n\nDownload it from github.com/kalomaze/EmissaryRecomp/releases instead.",
                 "Update", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }

@@ -161,7 +161,7 @@ sealed class MainWindow : Window
         {
             IsEnabled = true;
             Title = title;
-            await Message("Update", "The update could not be installed:\n" + e.Message + "\n\nDownload it from github.com/josiahg2502-glitch/BrawlRecompiled/releases instead.");
+            await Message("Update", "The update could not be installed:\n" + e.Message + "\n\nDownload it from github.com/kalomaze/EmissaryRecomp/releases instead.");
         }
     }
 
