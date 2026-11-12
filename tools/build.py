@@ -177,12 +177,13 @@ def build_game(args, game, build):
         project = 'projects/brawl/recomp.yml'
         # Rev 2 matches doldecomp's 127 input hashes and the checked-in runtime module
         # layout. Retain upstream's rev 1 pin; select this additional known executable
-        # only in the staged build configuration. Unknown images still fail validation.
+        # only in the staged build configuration. Unknown images still fail validation. Starting from the
+        # checked-in file each time lets a build directory switch between the two revisions.
         actual = hashlib.sha256((inputs / 'main_translate.dol').read_bytes()).hexdigest()
+        config = (ROOT / 'wiicompiled' / project).read_text()
         if actual == '27e3afd3e877e64c84cad2de5f0c0b04fe338813aa7aea5d8b19b509b7ab2ac6':
-            config = wc / project
-            config.write_text(re.sub(r'(?m)^(    sha256:) [a-f0-9]+$',
-                                     rf'\1 {actual}', config.read_text(), count=1))
+            config = re.sub(r'(?m)^(    sha256:) [a-f0-9]+$', rf'\1 {actual}', config, count=1)
+        (wc / project).write_text(config)
         run(dotnet, translator, 'translate-recursive', '0x8000403C', '--project', project,
             '--outdir', 'generated/functions', '--output-metadata', 'generated/base_translation_output.json',
             '--production-source-bundle', 'generated/base_translation_sources.bin', '--no-function-files',
