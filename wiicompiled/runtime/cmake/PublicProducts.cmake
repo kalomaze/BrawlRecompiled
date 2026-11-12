@@ -72,13 +72,10 @@ function(mkw_configure_translated_target target)
 endfunction()
 
 add_library(mkw_runtime_common OBJECT ${SOURCES})
-# Validation branch: use the existing client's GekkoNet implementation.
-set(BRAWL_GEKKONET_SOURCE "" CACHE PATH "External GekkoLib source for rollback validation")
-if(NOT EXISTS "${BRAWL_GEKKONET_SOURCE}/CMakeLists.txt")
-    message(FATAL_ERROR "Set BRAWL_GEKKONET_SOURCE to the validation client's GekkoLib checkout")
-endif()
+# Brawl Online's GekkoNet (brawlonline.net dolphin/Source/Core/Core/Brawlback/include/gekkonet, without
+# ASIO): rollback has to run the same GekkoNet as the Dolphin client it plays against.
 set(NO_ASIO_BUILD ON CACHE BOOL "Use application transport" FORCE)
-add_subdirectory("${BRAWL_GEKKONET_SOURCE}" "${CMAKE_CURRENT_BINARY_DIR}/gekkonet")
+add_subdirectory("${MKW_RUNTIME_SOURCE_DIR}/third_party/gekkonet/GekkoLib" "${CMAKE_CURRENT_BINARY_DIR}/gekkonet")
 target_include_directories(GekkoNet PRIVATE "${MKW_RUNTIME_SOURCE_DIR}/third_party/gekkonet_compat")
 target_link_libraries(mkw_runtime_common PRIVATE GekkoNet)
 mkw_configure_object_target(mkw_runtime_common)
