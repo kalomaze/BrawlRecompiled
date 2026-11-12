@@ -11,7 +11,7 @@
 #include <mutex>
 #include <thread>
 
-#if defined(_WIN32)
+#if defined(_WIN32) && defined(MKW_HAVE_CPPWINRT)
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
@@ -167,7 +167,7 @@ bool ShouldAttenuate() noexcept {
            g_externalMediaPlaying.load(std::memory_order_acquire);
 }
 
-#if defined(_WIN32)
+#if defined(_WIN32) && defined(MKW_HAVE_CPPWINRT)
 void MonitorWindowsMediaSessions() noexcept {
     using namespace winrt::Windows::Media::Control;
     using namespace std::chrono_literals;
@@ -470,7 +470,7 @@ void MonitorMacOSAudio() noexcept {
 #endif
 
 void StartMonitor() noexcept {
-#if defined(_WIN32)
+#if defined(_WIN32) && defined(MKW_HAVE_CPPWINRT)
     // The process owns this monitor for its remaining lifetime. Keeping it
     // detached avoids shutdown ordering between WinRT and static audio state.
     std::thread(MonitorWindowsMediaSessions).detach();

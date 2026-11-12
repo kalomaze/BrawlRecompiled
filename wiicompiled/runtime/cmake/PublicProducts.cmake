@@ -110,6 +110,10 @@ if(MKW_CPPWINRT_INCLUDE_DIR)
             "MKW_CPPWINRT_INCLUDE_DIR does not contain winrt/base.h: ${MKW_CPPWINRT_INCLUDE_DIR}")
     endif()
     target_include_directories(mkw_runtime_common PRIVATE "${MKW_CPPWINRT_INCLUDE_DIR}")
+    target_compile_definitions(mkw_runtime_common PRIVATE MKW_HAVE_CPPWINRT=1)
+elseif(MKW_PLATFORM_WINDOWS)
+    message(WARNING "No C++/WinRT headers (MKW_CPPWINRT_INCLUDE_DIR): the option to mute game music while other "
+                    "media plays is built without media detection and reports it as unavailable.")
 endif()
 
 # Keep runtime unity units small and semantically related. The old generated-TU
