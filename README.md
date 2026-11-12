@@ -104,8 +104,18 @@ connection adds input delay (2 to 8 frames, picked from the ping when the room s
 
 ## Building from source
 
-You need your own disc image (USA, RSBE01), and CMake 3.25+, Python 3.12+, Git, Clang and Ninja on `PATH`. On
-Windows, the Clang must be llvm-mingw. On Ubuntu:
+You need your own disc image (USA, RSBE01), and CMake 3.25+, Python 3.12+, Git, Clang and Ninja on `PATH`.
+
+On Windows, install [Python 3.12](https://www.python.org/downloads/windows/) (with "Add python.exe to PATH") and
+[Git](https://git-scm.com/download/win). Then, in PowerShell in the clone, fetch the pinned llvm-mingw, CMake and Ninja
+and put them on `PATH`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File wiicompiled\Launcher\Prepare-PortableTools.ps1 -Destination "$PWD\toolchain"
+$env:PATH = "$PWD\toolchain\llvm-mingw\bin;$PWD\toolchain\CMake\bin;$PWD\toolchain\Ninja;$env:PATH"
+```
+
+On Ubuntu:
 
 ```sh
 sudo apt install cmake python3 git clang lld ninja-build build-essential pkg-config libicu-dev \
