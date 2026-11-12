@@ -13,7 +13,7 @@
 // ============================================================================
 // OSMessageQueue HLE
 // ============================================================================
-extern "C" void OS__InitMessageQueue_HLE_801a72fc(CpuContext* ctx)
+extern "C" void OS__InitMessageQueue_HLE(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
     const uint32_t queuePtr = cpu->gpr[3];
@@ -39,7 +39,7 @@ extern "C" void OS__InitMessageQueue_HLE_801a72fc(CpuContext* ctx)
         LogMemoryError(RT_TAG_OS, "OS__InitMessageQueue", e);
     }
 }
-REGISTER_NATIVE_FUNCTION(0x801DE094, OS__InitMessageQueue_HLE_801a72fc);
+REGISTER_NATIVE_FUNCTION(0x801DE094, OS__InitMessageQueue_HLE);
 
 static bool MsgQueueIsFull(uint32_t queuePtr)
 {
@@ -113,38 +113,38 @@ template <typename Ready, typename Apply>
 int32_t MsgQueueOp(CpuContext* cpu, const char* who, uint32_t queuePtr, bool block,
                    Ready ready, Apply apply, uint32_t wakeOffset, uint32_t blockOffset)
 {
-    const int32_t irqState = OS__DisableInterrupts_801a65ac();
+    const int32_t irqState = OS__DisableInterrupts_HLE();
 
     while (true) {
         try {
             if (ready(queuePtr)) {
                 apply(queuePtr);
                 cpu->gpr[3] = queuePtr + wakeOffset;
-                OSWakeupThread_HLE_801aaaa4(cpu);
+                OSWakeupThread_HLE(cpu);
                 cpu->gpr[3] = 1;
-                OS__RestoreInterrupts_801a65d4(irqState);
+                OS__RestoreInterrupts_HLE(irqState);
                 return 1;
             }
         } catch (const ::Memory::AccessViolation& e) {
             LogMemoryError(RT_TAG_OS, who, e);
             cpu->gpr[3] = 0;
-            OS__RestoreInterrupts_801a65d4(irqState);
+            OS__RestoreInterrupts_HLE(irqState);
             return 0;
         }
 
         if (!block) {
             cpu->gpr[3] = 0;
-            OS__RestoreInterrupts_801a65d4(irqState);
+            OS__RestoreInterrupts_HLE(irqState);
             return 0;
         }
 
         cpu->gpr[3] = queuePtr + blockOffset;
-        OSSleepThread_HLE_801aa9b8(cpu);
+        OSSleepThread_HLE(cpu);
     }
 }
 } // namespace
 
-extern "C" int32_t OS__SendMessage_HLE_801a735c(CpuContext* ctx)
+extern "C" int32_t OS__SendMessage_HLE(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
     const uint32_t queuePtr = cpu->gpr[3];
@@ -165,9 +165,9 @@ extern "C" int32_t OS__SendMessage_HLE_801a735c(CpuContext* ctx)
         [msg](uint32_t queue) { MsgQueueEnqueue(queue, msg); },
         kMsgQueueRecvOffset, kMsgQueueSendOffset);
 }
-REGISTER_NATIVE_FUNCTION(0x801DE0F4, OS__SendMessage_HLE_801a735c);
+REGISTER_NATIVE_FUNCTION(0x801DE0F4, OS__SendMessage_HLE);
 
-extern "C" int32_t OS__ReceiveMessage_HLE_801a7424(CpuContext* ctx)
+extern "C" int32_t OS__ReceiveMessage_HLE(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
     const uint32_t queuePtr = cpu->gpr[3];
@@ -193,7 +193,7 @@ extern "C" int32_t OS__ReceiveMessage_HLE_801a7424(CpuContext* ctx)
         },
         kMsgQueueSendOffset, kMsgQueueRecvOffset);
 }
-REGISTER_NATIVE_FUNCTION(0x801DE1BC, OS__ReceiveMessage_HLE_801a7424);
+REGISTER_NATIVE_FUNCTION(0x801DE1BC, OS__ReceiveMessage_HLE);
 
 extern "C" int32_t OS__JamMessage_HLE_801a7500(CpuContext* ctx)
 {
@@ -215,10 +215,3 @@ extern "C" int32_t OS__JamMessage_HLE_801a7500(CpuContext* ctx)
         [msg](uint32_t queue) { MsgQueueJam(queue, msg); },
         kMsgQueueRecvOffset, kMsgQueueSendOffset);
 }
-#if 0  // NSMBW: OSJamMessage is not linked into NSMBW (was MKW-only)
-#if 0  // SPM: 0x801a7500: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-REGISTER_NATIVE_FUNCTION(0x801A7500, OS__JamMessage_HLE_801a7500);
-#endif
-#endif
-#endif

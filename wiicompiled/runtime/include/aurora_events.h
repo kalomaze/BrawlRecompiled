@@ -10,23 +10,11 @@
 
 #include <cstdio>
 #include <cstdlib>
-#include <atomic>
 #include <chrono>
 
 #if defined(_WIN32)
 #include <windows.h>
 #endif
-
-extern "C" bool g_dynamicAspectRatioEnabled;
-void ConfigureMkwDynamicAspect(bool widescreen, bool forceAspect169, uint32_t surfaceWidth, uint32_t surfaceHeight);
-void SetMkwForceAspect169(bool enabled);
-bool MkwForceAspect169Requested();
-void UpdateMkwDynamicAspectSurface(uint32_t surfaceWidth, uint32_t surfaceHeight);
-// Arms the "keep EGG::Frustum's projection scale" flag on every screen that
-// renders to a fixed-size offscreen target. Cheap and idempotent; called from
-// the GX viewport path so it beats bakes that never cross a frame boundary.
-void AssertMkwOffscreenScreenBypass();
-inline std::atomic_bool g_mkwDynamicAspectSurfacePending{false};
 
 namespace WindowPlacementPersistence {
 inline bool sizeDirty = false;
@@ -70,7 +58,7 @@ namespace SdCard { void Shutdown(); }  // hle/storage/sd_card.h
     // that does it never runs on this path.
     SdCard::Shutdown();
 #if defined(_WIN32)
-    // Not ExitProcess: the engine is a DLL (engine_usa/engine_pal), and ExitProcess runs its static destructors after
+    // Not ExitProcess: the engine is a DLL, and ExitProcess runs its static destructors after
     // the other threads are gone; a still-joinable std::thread then calls std::terminate and the fatal popup hangs
     // the close (issue #38).
     std::fflush(nullptr);
@@ -87,7 +75,6 @@ inline void ProcessAuroraEvents(const AuroraEvent* events) {
         return;
     }
 
-    bool surfaceChanged = false;
     for (const AuroraEvent* event = events; event->type != AURORA_NONE; ++event) {
         switch (event->type) {
         case AURORA_WINDOW_MOVED:
@@ -106,10 +93,6 @@ inline void ProcessAuroraEvents(const AuroraEvent* events) {
                 WindowPlacementPersistence::sizeDirty = true;
                 WindowPlacementPersistence::changedAt = std::chrono::steady_clock::now();
             }
-            surfaceChanged = true;
-            break;
-        case AURORA_DISPLAY_SCALE_CHANGED:
-            surfaceChanged = true;
             break;
         case AURORA_EXIT:
             ExitForAuroraWindowClose();
@@ -120,35 +103,20 @@ inline void ProcessAuroraEvents(const AuroraEvent* events) {
 
     WindowPlacementPersistence::Flush();
 
-    if (surfaceChanged) {
-        // Applying the viewport policy drains GX. Event dispatch can run
-        // between asynchronous end_frame and the next begin_frame, while the
-        // frame worker is intentionally waiting for begin permission. Joining
-        // it here creates a circular wait. Record the newest native size and
-        // apply it immediately after the next frame has been prepared.
-        g_mkwDynamicAspectSurfacePending.store(true, std::memory_order_release);
-    }
     settings_overlay::HandleEvents(events);
-}
-
-inline void ApplyPendingMkwDynamicAspectSurface() {
-    // The OS can adjust a window without a resize event reaching the queue
-    // (observed with hidden windows clamped to the work area), so re-read the
-    // surface at every frame boundary instead of only on queued events.
-    // NSMBW: DisplaySettings owns the aspect (the viewport policy and the game's
-    // widened canvas for Fill); it is idempotent and cheap for a stable size.
-    (void)g_mkwDynamicAspectSurfacePending.exchange(false, std::memory_order_acq_rel);
-    uint32_t surfaceWidth = 0;
-    uint32_t surfaceHeight = 0;
-    AuroraGetSurfaceSize(&surfaceWidth, &surfaceHeight);
-    DisplaySettings::OnFrameBoundary(surfaceWidth, surfaceHeight);
 }
 
 inline bool BeginAuroraFrame() {
     if (!aurora_begin_frame()) {
         return false;
     }
-    ApplyPendingMkwDynamicAspectSurface();
+    // Apply only after begin_frame: changing viewport policy during event dispatch
+    // can deadlock the asynchronous frame worker. Re-read every frame because the
+    // OS can resize a window without delivering a resize event.
+    uint32_t surfaceWidth = 0;
+    uint32_t surfaceHeight = 0;
+    AuroraGetSurfaceSize(&surfaceWidth, &surfaceHeight);
+    DisplaySettings::OnFrameBoundary(surfaceWidth, surfaceHeight);
     return true;
 }
 

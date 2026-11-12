@@ -1,7 +1,7 @@
 #include "clear.hpp"
 
 #include "../webgpu/gpu.hpp"
-#include "tracy/Tracy.hpp"
+#include "aurora/profiling.hpp"
 
 #include <algorithm>
 #include <array>

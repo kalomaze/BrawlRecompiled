@@ -47,9 +47,6 @@ extern PageEntry g_pageTable[kPageCount];
 // page is contiguous. This permits any native access up to 8 bytes without a
 // per-access mask/limit check. Zero retains the general PageEntry fallback.
 extern uintptr_t g_fullPageBias[kPageCount];
-// Runtime-active readable biases. Deferred-read pages clear these entries once
-// instead of paying a mode branch on every translated read.
-extern uintptr_t g_fullReadablePageBias[kPageCount];
 // Same encoding, but only for pages proven not to contain executable bytes.
 // Executable-range registration invalidates entries before guest execution.
 extern uintptr_t g_fullWritablePageBias[kPageCount];
@@ -62,12 +59,6 @@ struct SparseWritablePageTable {
     uintptr_t encodedBias[kWritableSubPagesPerPage]{};
 };
 extern const SparseWritablePageTable* g_sparseWritablePageTables[kPageCount];
-
-// Nonzero while any registered deferred read overlaps the page. Small
-// mappings (e.g. the 16 KiB locked cache) have no coarse bias entry, so a
-// zero readable bias alone cannot distinguish "deferred content pending"
-// from "small but plain memory"; range resolution needs the explicit flag.
-extern uint8_t g_deferredReadCoveredPages[kPageCount];
 
 MKW_MEMORY_NO_INLINE MKW_MEMORY_COLD uint8_t Read8Slow(uint32_t addr);
 MKW_MEMORY_NO_INLINE MKW_MEMORY_COLD uint16_t Read16Slow(uint32_t addr);
@@ -89,22 +80,21 @@ template <typename T>
 MKW_MEMORY_NO_INLINE MKW_MEMORY_COLD void WriteResolvedFallback(uint32_t addr, T value);
 MKW_MEMORY_NO_INLINE MKW_MEMORY_COLD void WriteResolvedFallbackFloat32(uint32_t addr, double val);
 MKW_MEMORY_NO_INLINE MKW_MEMORY_COLD void WriteResolvedFallbackFloat64(uint32_t addr, double val);
-bool ResolveDeferredReads(uint32_t addr, size_t length);
 
 constexpr bool IsMmioAddress(uint32_t addr) {
     return addr >= 0xCC000000u && addr < 0xCE000000u;
 }
 
-// The device register blocks (Flipper at 0xCC000000/0xCD000000, Hollywood at 0xCD800000). The rest of the MMIO
-// range has nothing on the bus: like the console and Dolphin, such accesses read 0 and drop writes (the flat
-// memory fault turns the page into scratch), as mods reach them through an 0xCC-filled pointer (Brawl Minus).
+// Modeled device blocks. Other MMIO addresses currently read zero through the
+// compatibility path and discard helper-based writes. This is not a complete
+// hardware model: Dolphin also has MMIO aliases that this policy does not model.
 constexpr bool IsDeviceMmioAddress(uint32_t addr) {
     const uint32_t block = addr & 0xFFFF0000u;
     return IsMmioAddress(addr) && (block == 0xCC000000u || block == 0xCD000000u || block == 0xCD800000u);
 }
 
 constexpr bool IsGpuFifoAddress(uint32_t addr) {
-    return addr >= 0xCC008000u && addr < 0xCC008100u;
+    return addr >= 0xCC008000u && addr < 0xCC009000u;
 }
 
 // Page protections can't cover this: an MMIO write must reach GX HLE with its value or be
@@ -158,7 +148,7 @@ MKW_MEMORY_FORCE_INLINE bool TryGetPointerFast(uint32_t address, size_t length, 
     }
     const uint32_t offset = address & kPageMask;
     const auto& entry = g_pageTable[page];
-    if (!entry.base || offset + length > entry.limit) {
+    if (!entry.base || offset > entry.limit || length > entry.limit - offset) {
         pointer = nullptr;
         return false;
     }
@@ -230,26 +220,32 @@ MKW_MEMORY_FORCE_INLINE bool TryGetWritablePointerFast(
     return true;
 }
 
-// Flat form: guest_flat_memory.h's page protections already answer mapped/non-deferred/non-executable, so resolving is pure address arithmetic.
+// Flat form: guest_flat_memory.h's page protections already answer mapped/non-executable, so resolving is pure address arithmetic.
 // Two checks stay inline: a wrapped guest address can't survive 64-bit `host + rangeOffset`, and an MMIO write's value isn't recoverable from a
 // fault record, so a write touching that window must resolve null and fall back to Memory::Write*. Checking both range endpoints is a complete
 // proof since length <= kPageSize (1 MiB) can't straddle the 32 MiB MMIO window.
 MKW_MEMORY_FORCE_INLINE uint8_t* ResolveRangeHost(uint32_t base, int32_t minOffset, uint32_t length,
-                                                 bool needsRead, bool needsWrite) {
-    (void)needsRead;
+                                                 bool needsWrite) {
     const uint32_t guestStart = base + static_cast<uint32_t>(minOffset);
     if (length == 0 || length > kPageSize || guestStart > UINT32_MAX - (length - 1)) return nullptr;
-    if (GuestFlat::RequiresCheckedAccess()) {
-        // A host page can cover multiple independently-special Wii pages.
-        // Returning null keeps resolved accesses on the checked Memory::*
-        // path, which materializes deferred reads and applies write policy.
-        (void)needsWrite;
-        return nullptr;
-    }
+#if MKW_FLAT_MEMORY
+    if (GuestFlat::RequiresCheckedAccess()) return nullptr;
     if (needsWrite &&
         (FlatWriteNeedsPolicy(guestStart) || FlatWriteNeedsPolicy(guestStart + (length - 1))))
         [[unlikely]] return nullptr;
     return MKW_FLAT_GUEST_BASE + guestStart;
+#else
+    const uint32_t last = guestStart + length - 1;
+    const uint32_t page = guestStart >> kPageShift;
+    if ((last >> kPageShift) != page || IsMmioAddress(guestStart) || IsMmioAddress(last))
+        return nullptr;
+    if (needsWrite) {
+        for (uint32_t p = guestStart >> kWritableSubPageShift; p <= (last >> kWritableSubPageShift); ++p)
+            if (RecompMod::g_executableWriteGuardPages[p].load(std::memory_order_relaxed))
+                return nullptr;
+    }
+    return GetPointerFast(guestStart, length);
+#endif
 }
 
 // Guest-address byte order. Distinct from isa/big_endian.h, which is the
@@ -362,7 +358,7 @@ inline bool TryReadMappedScalar(uint32_t address, T& outValue) {
 
 template <typename T>
 MKW_MEMORY_FORCE_INLINE bool TryReadGuestScalar(uint32_t address, T& outValue) {
-    const uintptr_t encodedBias = g_fullReadablePageBias[address >> kPageShift];
+    const uintptr_t encodedBias = g_fullPageBias[address >> kPageShift];
     if (encodedBias == 0) [[unlikely]]
         return false;
     auto* ptr = reinterpret_cast<uint8_t*>((encodedBias - 1u) + address);
@@ -540,22 +536,29 @@ MKW_MEMORY_FORCE_INLINE void WriteResolvedFloat64(uint8_t* r, uint32_t o, uint32
 //
 // When a host VM page is larger than a 4 KiB Wii page, guest-view protections
 // cannot distinguish adjacent special Wii pages. The general FlatRead*/
-// FlatWrite* helpers then use the checked page-table path, which materializes
-// deferred reads and applies executable-write/MMIO policy before touching RAM.
+// FlatWrite* helpers then use the checked page-table path, which applies executable-write/MMIO policy before touching RAM.
 // FlatWriteRam* remains direct because the translator emits it only for
 // addresses it has proven are ordinary RAM.
 
 template <typename T>
 MKW_MEMORY_FORCE_INLINE T FlatLoad(uint32_t address) {
+#if MKW_FLAT_MEMORY
     T value{};
     std::memcpy(&value, MKW_FLAT_GUEST_BASE + address, sizeof(T));
     return MaybeByteSwap(value);
+#else
+    return ReadResolvedFallback<T>(address);
+#endif
 }
 
 template <typename T>
 MKW_MEMORY_FORCE_INLINE void FlatStore(uint32_t address, T value) {
+#if MKW_FLAT_MEMORY
     const T swapped = MaybeByteSwap(value);
     std::memcpy(MKW_FLAT_GUEST_BASE + address, &swapped, sizeof(T));
+#else
+    WriteResolvedFallback<T>(address, value);
+#endif
 }
 
 MKW_MEMORY_FORCE_INLINE uint8_t FlatRead8(uint32_t address) {

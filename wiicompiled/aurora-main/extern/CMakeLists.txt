@@ -205,7 +205,15 @@ if (AURORA_ENABLE_GX)
       DOWNLOAD_EXTRACT_TIMESTAMP FALSE
       EXCLUDE_FROM_ALL
     )
-    FetchContent_MakeAvailable(PNG)
+    block(SCOPE_FOR VARIABLES)
+      # libpng's genout.cmake invokes the preprocessor directly and omits
+      # CMAKE_C_COMPILER_TARGET. Pass it through the flags that script reads,
+      # without changing compiler flags for the rest of the dependency tree.
+      if (CMAKE_C_COMPILER_ID MATCHES "Clang" AND CMAKE_C_COMPILER_TARGET)
+        string(APPEND CMAKE_C_FLAGS " --target=${CMAKE_C_COMPILER_TARGET}")
+      endif ()
+      FetchContent_MakeAvailable(PNG)
+    endblock()
     if (TARGET png_shared AND _USE_SHARED)
       add_library(PNG::PNG ALIAS png_shared)
     elseif (TARGET png_static)
@@ -247,7 +255,6 @@ if (AURORA_ENABLE_GX)
 
     add_library(imgui STATIC
       ${imgui_SOURCE_DIR}/imgui.cpp
-      ${imgui_SOURCE_DIR}/imgui_demo.cpp
       ${imgui_SOURCE_DIR}/imgui_draw.cpp
       ${imgui_SOURCE_DIR}/imgui_tables.cpp
       ${imgui_SOURCE_DIR}/imgui_widgets.cpp
@@ -339,11 +346,9 @@ if (AURORA_ENABLE_GX)
   endif ()
 endif ()
 
-if (NOT TARGET TracyClient)
+option(TRACY_ENABLE "Enable Tracy profiling" OFF)
+if (TRACY_ENABLE AND NOT TARGET TracyClient)
   message(STATUS "aurora: Fetching Tracy")
-
-  # Default to off, users can enable the cache variable if they want to use it.
-  set(TRACY_ENABLE OFF CACHE BOOL "Enable Tracy profiling")
 
   FetchContent_Declare(
           tracy

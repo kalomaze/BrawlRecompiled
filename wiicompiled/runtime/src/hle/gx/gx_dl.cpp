@@ -1293,8 +1293,6 @@ void ForgetAppliedAuroraArray(int attr) {
     if (attr >= 0 && attr < GX_VA_MAX_ATTR) s_appliedArrays[attr].valid = false;
 }
 
-extern "C" unsigned g_spmAudit[8];  // aurora command_processor (SPM diagnostics)
-extern "C" int g_spmSweepDump;
 extern "C" void GxNotifyDisplayListMemoryWrite(uint32_t addr, uint32_t size) {
     GxGuestWrite::NotifyWrite(addr, size);
 }
@@ -1326,31 +1324,14 @@ extern "C" void GxNotifyDisplayListMemoryWrite(uint32_t addr, uint32_t size) {
     return false;
 }
 
-extern "C" void GX__CallDisplayList_80172f64(uint32_t listAddr, uint32_t nbytes) {
+extern "C" void GX__CallDisplayList_HLE(uint32_t listAddr, uint32_t nbytes) {
     if (nbytes == 0 || listAddr == 0) return;
-    static const int s_skipId = std::getenv("SPM_SKIP_MATDL") ? std::atoi(std::getenv("SPM_SKIP_MATDL")) : -1;  // diagnostic: drop the geometry list drawn after material list <id>
-    static bool s_skipNext = false;
     try {
         const uint8_t* list = static_cast<const uint8_t*>(GuestToHostPtr(listAddr, nbytes));
         if (!list) return;
         if (const uint8_t* hostDl = nullptr; true) {
             uint32_t hostSize = 0;
             if (SpmHostDisplayList(list, nbytes, hostDl, hostSize)) {
-                s_skipNext = s_skipId >= 0 && ((uint32_t(list[8]) << 24) | (uint32_t(list[9]) << 16) | (uint32_t(list[10]) << 8) | list[11]) == uint32_t(s_skipId);
-                { static int k = 0;
-                  if (g_spmSweepDump && k++ < 6000) {
-                      // name the MapObj being drawn (spm-headers MapObj: +0 flag0, +4 flag4, +8 blendMode, +0xC joint -> name, +0x10 colour)
-                      std::string obj;
-                      if (const CpuContext* x = TryGetCpuContext()) for (int r = 24; r <= 31; ++r) {
-                          const uint32_t o = x->gpr[r]; uint32_t j = 0, n = 0;
-                          if (!Memory::Contains(o, 0x144) || !Memory::TryRead32(o + 0xC, j) || !Memory::Contains(j, 4) || !Memory::TryRead32(j, n) || !Memory::Contains(n, 16)) continue;
-                          std::string nm; for (int c = 0; c < 31; ++c) { const char ch = char(Memory::Read8(n + c)); if (!ch) break; if (ch < 0x20 || ch > 0x7e) { nm.clear(); break; } nm += ch; }
-                          if (nm.size() < 2) continue;
-                          char b[160]; std::snprintf(b, sizeof b, " r%d %s f0 %08X f4 %08X bm %u col %08X", r, nm.c_str(), Memory::Read32(o), Memory::Read32(o + 4), Memory::Read8(o + 8), Memory::Read32(o + 0x10));
-                          obj = b; break;
-                      }
-                      RT_LOGF(RT_TAG_GX, "[spmcall] draw %u id %u addr %08X%s\n", g_spmAudit[0], (uint32_t(list[8]) << 24) | (uint32_t(list[9]) << 16) | (uint32_t(list[10]) << 8) | list[11], listAddr, obj.c_str());
-                  } }
                 g_boundTexMaps.fill(BoundTexInfo{});
                 EnsureAuroraFrameActive();
                 GXMarkFrameWork();
@@ -1358,7 +1339,6 @@ extern "C" void GX__CallDisplayList_80172f64(uint32_t listAddr, uint32_t nbytes)
                 return;
             }
         }
-        if (s_skipNext) { s_skipNext = false; return; }
 
         const bool allowScanCache = nbytes <= kDlScanCacheMaxEntryBytes;
         const uint64_t scanLayoutHash = allowScanCache ? HashScanLayoutState() : 0;
@@ -1563,7 +1543,7 @@ extern "C" void GX__CallDisplayList_80172f64(uint32_t listAddr, uint32_t nbytes)
     } catch (...) {}
 }
 
-PPC_NATIVE_OVERRIDE_VOID(801F4EAC, GX__CallDisplayList_80172f64, (uint32_t listAddr, uint32_t nbytes), (listAddr, nbytes));
+PPC_NATIVE_OVERRIDE_VOID(801F4EAC, GX__CallDisplayList_HLE, (uint32_t listAddr, uint32_t nbytes), (listAddr, nbytes));
 
 extern "C" void nw4r__lyt__detail__DrawQuad_800847c0(CpuContext* ctx) {
     uint32_t colors[4];
@@ -1580,9 +1560,6 @@ extern "C" void nw4r__lyt__detail__DrawQuad_800847c0(CpuContext* ctx) {
     EmitLytDrawQuad(ctx->gpr[3], ctx->gpr[4], static_cast<int32_t>(ctx->gpr[5]), ctx->gpr[6], colorPtr);
 }
 
-#if 0  // SPM: DrawQuad__Q34nw4r3lyt6detailFRCQ34nw4r4math4VEC2RCQ34nw4r3lyt4SizeUcPA4_CQ34nw4r4math4VEC2PCQ34nw4r2ut5Color: name not in SPM
-REGISTER_NATIVE_FUNCTION(0x80248E40, nw4r__lyt__detail__DrawQuad_800847c0);  // NSMBW: DrawQuad(VEC2&, Size&, u8, VEC2[4]*, Color*)
-#endif
 
 extern "C" void nw4r__lyt__detail__DrawQuad_80084d20(CpuContext* ctx) {
     uint32_t colors[4];
@@ -1599,7 +1576,3 @@ extern "C" void nw4r__lyt__detail__DrawQuad_80084d20(CpuContext* ctx) {
 
     EmitLytDrawQuad(ctx->gpr[3], ctx->gpr[4], static_cast<int32_t>(ctx->gpr[5]), ctx->gpr[6], colorPtr);
 }
-
-#if 0  // SPM: DrawQuad__Q34nw4r3lyt6detailFRCQ34nw4r4math4VEC2RCQ34nw4r3lyt4SizeUcPA4_CQ34nw4r4math4VEC2PCQ34nw4r2ut5ColorUc: name not in SPM
-REGISTER_NATIVE_FUNCTION(0x802493A0, nw4r__lyt__detail__DrawQuad_80084d20);  // NSMBW: DrawQuad(..., Color*, u8 alpha)
-#endif

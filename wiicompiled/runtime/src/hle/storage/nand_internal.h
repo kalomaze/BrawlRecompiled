@@ -13,7 +13,6 @@
 #include "hle/net/network.h"
 #include "recomp_mod_loader.h"
 #include "runtime_config.h"
-#include "runtime_product.h"
 #include "wii_es_crypto.h"
 
 #include <algorithm>

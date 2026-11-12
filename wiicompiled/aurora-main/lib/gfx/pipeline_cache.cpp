@@ -21,7 +21,7 @@
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 #include <fmt/format.h>
-#include <tracy/Tracy.hpp>
+#include <aurora/profiling.hpp>
 
 namespace aurora::gfx {
 static Module Log("aurora::gfx::pipeline_cache");

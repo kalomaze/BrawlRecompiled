@@ -246,54 +246,23 @@ public sealed partial class CxxLinearCodeGenerator
         return string.Join(", ", parameters);
     }
 
-    private static string StateFreeCallArguments(GuestAbiContract contract, uint? callSiteLr = null)
+    private static string StateFreeCallArguments(
+        GuestAbiContract contract, uint? callSiteLr = null, RegisterResidency? residency = null)
     {
         var arguments = new List<string>();
         var gprInputs = StateFreeGprInputMask(contract);
         for (var gpr = 0; gpr < 32; ++gpr)
         {
             if ((gprInputs & (1u << gpr)) != 0)
-                arguments.Add($"ctx->gpr[{gpr}]");
+                arguments.Add(residency is null ? $"ctx->gpr[{gpr}]" : residency.Gpr(gpr, written: false));
         }
         for (var fpr = 0; fpr < 32; ++fpr)
             if (((contract.FprReadBeforeWriteMask | contract.FprPossibleWriteMask) & (1u << fpr)) != 0)
-                arguments.Add($"ctx->fpr[{fpr}]");
-        if (contract.CrReadBeforeWriteMask != 0 || contract.CrPossibleWriteMask != 0) arguments.Add("ctx->cr");
-        if (contract.ReadsXerBeforeWrite || contract.MayWriteXer) arguments.Add("ctx->xer");
-        if (contract.ReadsCtrBeforeWrite || contract.MayWriteCtr) arguments.Add("ctx->ctr");
-        if (contract.ReadsLrBeforeWrite || contract.MayWriteLr)
-            arguments.Add(callSiteLr.HasValue ? $"0x{callSiteLr.Value:X8}u" : "ctx->lr");
-        if (contract.ReadsFpscrBeforeWrite || contract.MayWriteFpscr) arguments.Add("ctx->fpscr");
-        for (var gqr = 0; gqr < 8; ++gqr)
-            if (((contract.GqrReadBeforeWriteMask | contract.GqrPossibleWriteMask) & (1 << gqr)) != 0)
-                arguments.Add($"ctx->gqr[{gqr}]");
-        for (var hid = 0; hid < 3; ++hid)
-            if (((contract.HidReadBeforeWriteMask | contract.HidPossibleWriteMask) & (1 << hid)) != 0)
-                arguments.Add($"ctx->hid{hid}");
-        return string.Join(", ", arguments);
-    }
-
-    // Resident marshalling: pass/receive the resident locals directly instead of naming ctx, which would
-    // force a full CpuContext spill/reload around every call even though residency already holds the
-    // values in host registers. The slow arm still flushes/reloads CpuContext; see EmitResidentStateFreeCall.
-
-    private static string StateFreeResidentCallArguments(
-        RegisterResidency residency, GuestAbiContract contract, uint? callSiteLr)
-    {
-        var arguments = new List<string>();
-        var gprInputs = StateFreeGprInputMask(contract);
-        for (var gpr = 0; gpr < 32; ++gpr)
-        {
-            if ((gprInputs & (1u << gpr)) != 0)
-                arguments.Add(residency.Gpr(gpr, written: false));
-        }
-        for (var fpr = 0; fpr < 32; ++fpr)
-            if (((contract.FprReadBeforeWriteMask | contract.FprPossibleWriteMask) & (1u << fpr)) != 0)
-                arguments.Add(residency.FprStorage(fpr, written: false));
+                arguments.Add(residency is null ? $"ctx->fpr[{fpr}]" : residency.FprStorage(fpr, written: false));
         if (contract.CrReadBeforeWriteMask != 0 || contract.CrPossibleWriteMask != 0)
-            arguments.Add(residency.Cr(written: false));
-        if (contract.ReadsXerBeforeWrite || contract.MayWriteXer) arguments.Add(residency.Xer(written: false));
-        if (contract.ReadsCtrBeforeWrite || contract.MayWriteCtr) arguments.Add(residency.Ctr(written: false));
+            arguments.Add(residency is null ? "ctx->cr" : residency.Cr(written: false));
+        if (contract.ReadsXerBeforeWrite || contract.MayWriteXer) arguments.Add(residency is null ? "ctx->xer" : residency.Xer(written: false));
+        if (contract.ReadsCtrBeforeWrite || contract.MayWriteCtr) arguments.Add(residency is null ? "ctx->ctr" : residency.Ctr(written: false));
         // LR, FPSCR, the GQRs and the HID registers are never localized, so they
         // keep their architectural spelling exactly as the ctx form uses.
         if (contract.ReadsLrBeforeWrite || contract.MayWriteLr)
@@ -309,13 +278,13 @@ public sealed partial class CxxLinearCodeGenerator
     }
 
     /// <summary>
-    /// Result unpacking into the resident locals. Field/value order must match
+    /// Result unpacking into resident locals or CpuContext. Field/value order must match
     /// <see cref="StateFreeReturnExpression"/> exactly, since this is a positional carrier for the
     /// callee's packed one- and two-output shapes.
     /// </summary>
-    private static void AppendStateFreeResidentResultStores(
-        StringBuilder sb, string pad, RegisterResidency residency,
-        GuestAbiContract contract, string resultName)
+    private static void AppendStateFreeResultStores(
+        StringBuilder sb, string pad, GuestAbiContract contract, string resultName,
+        RegisterResidency? residency = null)
     {
         var outputCount = StateFreeOutputCount(contract);
         var resultIndex = 0;
@@ -329,21 +298,21 @@ public sealed partial class CxxLinearCodeGenerator
             if ((contract.GprPossibleWriteMask & (1u << gpr)) != 0)
             {
                 var value = Value($"r{gpr}");
-                sb.AppendLine($"{pad}{residency.Gpr(gpr, written: true)} = static_cast<uint32_t>({value});");
+                sb.AppendLine($"{pad}{residency?.Gpr(gpr, written: true) ?? $"ctx->gpr[{gpr}]"} = static_cast<uint32_t>({value});");
             }
         for (var fpr = 0; fpr < 32; ++fpr)
             if ((contract.FprPossibleWriteMask & (1u << fpr)) != 0)
             {
                 var value = Value($"f{fpr}");
                 if (outputCount > 2) value += ".raw";
-                sb.AppendLine($"{pad}{residency.FprStorage(fpr, written: true)}.raw = static_cast<uint64_t>({value});");
+                sb.AppendLine($"{pad}{residency?.FprStorage(fpr, written: true) ?? $"ctx->fpr[{fpr}]"}.raw = static_cast<uint64_t>({value});");
             }
         if (contract.CrPossibleWriteMask != 0)
-            sb.AppendLine($"{pad}{residency.Cr(written: true)} = static_cast<uint32_t>({Value("cr")});");
+            sb.AppendLine($"{pad}{residency?.Cr(written: true) ?? "ctx->cr"} = static_cast<uint32_t>({Value("cr")});");
         if (contract.MayWriteXer)
-            sb.AppendLine($"{pad}{residency.Xer(written: true)} = static_cast<uint32_t>({Value("xer")});");
+            sb.AppendLine($"{pad}{residency?.Xer(written: true) ?? "ctx->xer"} = static_cast<uint32_t>({Value("xer")});");
         if (contract.MayWriteCtr)
-            sb.AppendLine($"{pad}{residency.Ctr(written: true)} = static_cast<uint32_t>({Value("ctr")});");
+            sb.AppendLine($"{pad}{residency?.Ctr(written: true) ?? "ctx->ctr"} = static_cast<uint32_t>({Value("ctr")});");
         if (contract.MayWriteLr) sb.AppendLine($"{pad}ctx->lr = static_cast<uint32_t>({Value("lr")});");
         if (contract.MayWriteFpscr) sb.AppendLine($"{pad}ctx->fpscr = static_cast<uint32_t>({Value("fpscr")});");
         for (var gqr = 0; gqr < 8; ++gqr)
@@ -377,14 +346,14 @@ public sealed partial class CxxLinearCodeGenerator
         AppendFlush(sb, pad, ResidencyBoundarySync.StateFreeResidentOuter);
         var inner = pad + "    ";
         sb.AppendLine($"{pad}if ({StateFreeAvailabilityCondition(address, stateFreeAbiContracts, stateFreeCallSymbols)}) {{");
-        var arguments = StateFreeResidentCallArguments(residency, contract, callSiteLr);
+        var arguments = StateFreeCallArguments(contract, callSiteLr, residency);
         if (StateFreeHasOutputs(contract))
         {
             // Uniquified by the call site's position in the translation unit,
             // exactly like the CpuContext form.
             var resultName = $"state_free_result_{address:X8}_{bufferBaseLength + sb.Length:X}";
             sb.AppendLine($"{inner}const auto {resultName} = {symbol}({arguments});");
-            AppendStateFreeResidentResultStores(sb, inner, residency, contract, resultName);
+            AppendStateFreeResultStores(sb, inner, contract, resultName, residency);
         }
         else
         {
@@ -396,41 +365,6 @@ public sealed partial class CxxLinearCodeGenerator
         sb.AppendLine($"{inner}InvokeDirectCpu<0x{address:X8}u>(ctx);");
         AppendReload(sb, inner, ResidencyBoundarySync.Full);
         sb.AppendLine($"{pad}}}");
-    }
-
-    private static void AppendStateFreeResultStores(
-        StringBuilder sb, string pad, uint address, GuestAbiContract contract, string resultName)
-    {
-        var outputCount = StateFreeOutputCount(contract);
-        var resultIndex = 0;
-        string Value(string field) => outputCount switch
-        {
-            1 => resultName,
-            2 => $"{resultName}[{resultIndex++}]",
-            _ => $"{resultName}.{field}"
-        };
-        for (var gpr = 0; gpr < 32; ++gpr)
-            if ((contract.GprPossibleWriteMask & (1u << gpr)) != 0)
-            {
-                var value = Value($"r{gpr}");
-                sb.AppendLine($"{pad}ctx->gpr[{gpr}] = static_cast<uint32_t>({value});");
-            }
-        for (var fpr = 0; fpr < 32; ++fpr)
-            if ((contract.FprPossibleWriteMask & (1u << fpr)) != 0)
-            {
-                var value = Value($"f{fpr}");
-                if (outputCount > 2) value += ".raw";
-                sb.AppendLine($"{pad}ctx->fpr[{fpr}].raw = static_cast<uint64_t>({value});");
-            }
-        if (contract.CrPossibleWriteMask != 0) sb.AppendLine($"{pad}ctx->cr = static_cast<uint32_t>({Value("cr")});");
-        if (contract.MayWriteXer) sb.AppendLine($"{pad}ctx->xer = static_cast<uint32_t>({Value("xer")});");
-        if (contract.MayWriteCtr) sb.AppendLine($"{pad}ctx->ctr = static_cast<uint32_t>({Value("ctr")});");
-        if (contract.MayWriteLr) sb.AppendLine($"{pad}ctx->lr = static_cast<uint32_t>({Value("lr")});");
-        if (contract.MayWriteFpscr) sb.AppendLine($"{pad}ctx->fpscr = static_cast<uint32_t>({Value("fpscr")});");
-        for (var gqr = 0; gqr < 8; ++gqr)
-            if ((contract.GqrPossibleWriteMask & (1 << gqr)) != 0) sb.AppendLine($"{pad}ctx->gqr[{gqr}] = static_cast<uint32_t>({Value($"gqr{gqr}")});");
-        for (var hid = 0; hid < 3; ++hid)
-            if ((contract.HidPossibleWriteMask & (1 << hid)) != 0) sb.AppendLine($"{pad}ctx->hid{hid} = static_cast<uint32_t>({Value($"hid{hid}")});");
     }
 
     private static string StateFreeReturnExpression(GuestAbiContract contract, string body)

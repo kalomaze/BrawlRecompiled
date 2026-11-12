@@ -4,11 +4,9 @@
 #include "hle/net/network.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
-#include "runtime_product.h"
 
 namespace NetworkHle {
 
-bool RetroRewindProfileActive();
 
 static std::mutex g_mutex;
 static std::map<int32_t, DeviceKind> g_devices;
@@ -60,16 +58,12 @@ std::string Lower(std::string_view text) {
     return RuntimeHle::Lower(text);
 }
 
-bool RetroRewindProfileActive() {
-    return RuntimeProduct::IsRetroRewind();
-}
 
 bool StartsWith(std::string_view text, std::string_view prefix) {
     return text.size() >= prefix.size() && text.compare(0, prefix.size(), prefix) == 0;
 }
 
-// No host rewriting here: the Retro-WFC payload already redirects Nintendo
-// hostnames at its own resolver hooks before the name reaches this HLE.
+// Guest hostnames are passed to the host resolver without rewriting.
 
 std::vector<IoVector> ReadVectors(uint32_t vectorPtr, uint32_t count) {
     std::vector<IoVector> vectors;

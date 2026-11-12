@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Text;
 using Translator.Core.Loading;
@@ -9,118 +8,225 @@ namespace Translator.Tests;
 
 public class PpcRuntimeHelperTests
 {
-    private static (int ExitCode, string Output) RunProcess(string fileName, string arguments, TimeSpan? timeout = null)
+    [NativeFact]
+    public void FpscrWritesMatchReferenceInHelpersAndInterpreter()
     {
-        using var process = new Process
-        {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = fileName,
-                Arguments = arguments,
-                RedirectStandardError = true,
-                RedirectStandardOutput = true,
-                UseShellExecute = false
-            }
-        };
-
-        process.Start();
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        var exitedInTime = timeout.HasValue
-            ? process.WaitForExit((int)timeout.Value.TotalMilliseconds)
-            : process.WaitForExit(60000);
-
-        if (!exitedInTime)
-        {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch
-            {
-                // ignored
-            }
-
-            process.WaitForExit();
-            var staleOutput = stdoutTask.GetAwaiter().GetResult() + stderrTask.GetAwaiter().GetResult();
-            throw new TimeoutException($"Process '{fileName}' timed out. Output before kill:\n{staleOutput}");
-        }
-
-        var output = stdoutTask.GetAwaiter().GetResult() + stderrTask.GetAwaiter().GetResult();
-        return (process.ExitCode, output);
-    }
-
-    private static string CppCompiler()
-    {
-        var envCompiler = Environment.GetEnvironmentVariable("CXX");
-        if (!string.IsNullOrWhiteSpace(envCompiler) && ExecutableExists(envCompiler))
-        {
-            return envCompiler;
-        }
-
-        foreach (var candidate in new[] { "g++", "clang++" })
-        {
-            if (ExecutableExists(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        throw new FileNotFoundException("No C++ compiler found. Set CXX or install g++/clang++ on PATH.");
-    }
-
-    private static bool ExecutableExists(string fileName)
-    {
-        if (Path.IsPathFullyQualified(fileName))
-        {
-            return File.Exists(fileName);
-        }
-
-        var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-        var extensions = OperatingSystem.IsWindows()
-            ? (Environment.GetEnvironmentVariable("PATHEXT") ?? ".EXE;.BAT;.CMD").Split(';', StringSplitOptions.RemoveEmptyEntries)
-            : new[] { string.Empty };
-
-        foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            foreach (var extension in extensions)
-            {
-                var candidate = Path.Combine(directory, fileName);
-                if (!candidate.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
-                {
-                    candidate += extension;
+        // Dolphin 36982a2b: Interpreter_SystemRegisters.cpp and UpdateFPExceptionSummary.
+        const string harness = """
+            #include "ppc_runtime.h"
+            #include "ppc_interpreter.h"
+            #include <iostream>
+            #include <cstdlib>
+            int main() {
+                enum Op { Fi, F, B1, B0, Cr };
+                struct Case { Op op; uint32_t before, arg, value, after, cr = 0x12345678; };
+                const Case cases[] = {
+                    {Fi, 0, 0, 6, 0}, // FEX/VX cannot be written independently.
+                    {Fi, 0x01000000, 6, 8, 0x61000080}, // Enable an existing invalid exception.
+                    {Fi, 0x80, 1, 1, 0x61000080}, // Field writes do not implicitly set FX.
+                    {F, 0, 0xFF, 0x60000000, 0},
+                    {F, 0, 0xFF, 0x01000080, 0x61000080},
+                    {F, 0x61000080, 0, 0, 0x61000080}, // Empty mask preserves state.
+                    {B1, 0x80, 7, 0, 0xE1000080}, // New exception sets sticky FX.
+                    {B1, 0x61000080, 7, 0, 0x61000080}, // Existing exception does not set FX again.
+                    {B0, 0xE1000080, 7, 0, 0x80000080},
+                    {B0, 0x61000080, 2, 0, 0x61000080}, // VX remains set while a cause exists.
+                    {B1, 0, 1, 0, 0},
+                    {B1, 0x40, 3, 0, 0xD0000040}, // Overflow enable/summary.
+                    {B1, 0x20, 4, 0, 0xC8000020}, // Underflow.
+                    {B1, 0x10, 5, 0, 0xC4000010}, // Divide by zero.
+                    {B1, 0x08, 6, 0, 0xC2000008}, // Inexact.
+                    {B1, 0x80, 21, 0, 0xE0000480}, // Software invalid cause in a different field.
+                    {Cr, 0xE0000480, 5, 0, 0x80000080},
+                    {Cr, 0xE1000080, 1, 0, 0x80000080, 0x12315678},
+                    {Cr, 0xE1000080, 0, 0, 0x61000080, 0x123E5678},
+                    {Fi, 0, 7, 7, 7}, // NI and rounding controls remain writable.
+                };
+                Memory::Init(0x10000);
+                constexpr uint32_t entry = 0x80003000;
+                Memory::Write32(entry + 4, 0x4E800020);
+                for (bool interpreted : {false, true}) for (const auto& t : cases) {
+                    CpuContext cpu{}; cpu.fpscr = t.before; cpu.cr = 0x12345678;
+                    cpu.lr = 0x80004000; cpu.gpr[1] = 0x80008000; cpu.fpr[2].raw = t.value;
+                    CpuContextScope scope(&cpu);
+                    if (interpreted) {
+                        uint32_t word = 63u << 26;
+                        switch (t.op) {
+                        case Fi: word |= (t.arg << 23) | (t.value << 12) | (134u << 1); break;
+                        case F: word |= (t.arg << 17) | (2u << 11) | (711u << 1); break;
+                        case B1: word |= (t.arg << 21) | (38u << 1); break;
+                        case B0: word |= (t.arg << 21) | (70u << 1); break;
+                        case Cr: word |= (3u << 23) | (t.arg << 18) | (64u << 1); break;
+                        }
+                        Memory::Write32(entry, word);
+                        PpcInterpreter::Run(&cpu, entry);
+                    } else {
+                        switch (t.op) {
+                        case Fi: PPC_Mtfsfi(t.arg, t.value); break;
+                        case F: PPC_Mtfsf(t.arg, cpu.fpr[2].d); break;
+                        case B1: PPC_Mtfsb1(t.arg); break;
+                        case B0: PPC_Mtfsb0(t.arg); break;
+                        case Cr: PPC_Mcrfs(3, t.arg); break;
+                        }
+                    }
+                    if (cpu.fpscr != t.after || cpu.cr != t.cr) {
+                        std::cerr << interpreted << ':' << t.op << " FPSCR " << std::hex << cpu.fpscr
+                                  << " expected " << t.after << " CR " << cpu.cr << " expected " << t.cr;
+                        std::abort();
+                    }
                 }
+                std::cout << "ok";
+            }
+            """;
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness, includeInterpreter: true));
+    }
 
-                if (File.Exists(candidate))
-                {
-                    return true;
+    [NativeFact]
+    public void PairedArithmeticUsesGuestNanBits()
+    {
+        const string harness = """
+            #include "ppc_runtime.h"
+            #include <iostream>
+            #include <cstdlib>
+            extern "C" void GX_HLE_FIFO_Write8(uint8_t) {}
+            extern "C" void GX_HLE_FIFO_Write16(uint16_t) {}
+            extern "C" void GX_HLE_FIFO_Write32(uint32_t) {}
+            extern "C" void GX_HLE_FIFO_WriteFloat(float) {}
+            static double pair(float x) { return PpcPackPairedInline(x, x); }
+            static void check(double value, uint32_t bits) {
+                const uint64_t expected = (uint64_t(bits) << 32) | bits;
+                if (PpcBitCastToU64Inline(value) != expected) {
+                    std::cerr << std::hex << PpcBitCastToU64Inline(value) << " != " << expected;
+                    std::abort();
                 }
             }
-        }
-
-        return false;
-    }
-
-    private static string RunnerPath(string runnerBasePath)
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            var exePath = runnerBasePath + ".exe";
-            if (File.Exists(exePath))
-            {
-                return exePath;
+            int main() {
+                using Op = double (*)(double, double);
+                const Op ops[] = {PPC_PsMulInline, PPC_PsAddInline, PPC_PsSubInline, PPC_PsDivInline,
+                                  PPC_PsMulNoNiInline, PPC_PsAddNoNiInline, PPC_PsSubNoNiInline};
+                const double zero = pair(0.0f), inf = pair(std::numeric_limits<float>::infinity());
+                const double lhs[] = {zero, inf, inf, zero};
+                const double rhs[] = {inf, pair(-std::numeric_limits<float>::infinity()), inf, zero};
+                for (unsigned i = 0; i < sizeof(ops) / sizeof(ops[0]); ++i) {
+                    check(ops[i](lhs[i % 4], rhs[i % 4]), 0x7FC00000u);
+                    check(ops[i](pair(PpcBitCastToFloatInline(0xFFC12345u)),
+                                 pair(PpcBitCastToFloatInline(0x7F823456u))), 0xFFC12345u);
+                    check(ops[i](pair(2.0f), pair(PpcBitCastToFloatInline(0xFF823456u))), 0xFFC23456u);
+                }
+                std::cout << "ok";
             }
-        }
-
-        return runnerBasePath;
+            """;
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness));
     }
 
-    [Fact]
+    [NativeFact]
+    public void ScalarFmaPreservesGuestNanPriorityAndSign()
+    {
+        const string harness = """
+            #include "ppc_runtime.h"
+            #include <iostream>
+            #include <cstdlib>
+            extern "C" void GX_HLE_FIFO_Write8(uint8_t) {}
+            extern "C" void GX_HLE_FIFO_Write16(uint16_t) {}
+            extern "C" void GX_HLE_FIFO_Write32(uint32_t) {}
+            extern "C" void GX_HLE_FIFO_WriteFloat(float) {}
+            int main() {
+                using Op = double (*)(double, double, double);
+                const Op ops[] = {PpcFmaddInline, PpcFmsubInline, PpcFnmaddInline, PpcFnmsubInline,
+                                  PpcFmaddsInline, PpcFmsubsInline, PpcFnmaddsInline, PpcFnmsubsInline};
+                // Payloads survive the single-precision narrowing exactly.
+                const double a = PpcBitCastToDoubleInline(0xFFF82468A0000000ull);
+                const double b = PpcBitCastToDoubleInline(0x7FF0468AC0000000ull);
+                const double c = PpcBitCastToDoubleInline(0x7FF868ACE0000000ull);
+                for (Op op : ops) {
+                    const auto check = [](double got, uint64_t expected) {
+                        if (PpcBitCastToU64Inline(got) != expected) std::abort();
+                    };
+                    check(op(a, c, b), 0xFFF82468A0000000ull);
+                    check(op(2.0, c, b), 0x7FF8468AC0000000ull);
+                    check(op(2.0, 3.0, b), 0x7FF8468AC0000000ull);
+                    check(op(2.0, c, 1.0), 0x7FF868ACE0000000ull);
+                    check(op(0.0, std::numeric_limits<double>::infinity(), 1.0),
+                          0x7FF8000000000000ull);
+                }
+                std::cout << "ok";
+            }
+            """;
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness));
+    }
+
+    [NativeFact]
+    public void GuestMemoryAliasesAndCheckedAccessPreserveSemantics()
+    {
+        const string harness = """
+            #include "ppc_runtime.h"
+            #include <iostream>
+            #include <cstdlib>
+            static unsigned fifo = 0;
+            extern "C" void GX_HLE_FIFO_Write8(uint8_t) {}
+            extern "C" void GX_HLE_FIFO_Write16(uint16_t) {}
+            extern "C" void GX_HLE_FIFO_Write32(uint32_t value) { fifo = value; }
+            extern "C" void GX_HLE_FIFO_WriteFloat(float) {}
+            static void require(bool value) { if (!value) std::abort(); }
+            int main() {
+                auto config = Memory::Config::WiiDefaults();
+                Memory::Init(config);
+                require(GuestFlat::IsActive() == bool(MKW_FLAT_MEMORY));
+                require(Memory::Contains(0x817FFFFFu));
+                require(!Memory::Contains(0x81800000u));
+                // Oversized native lengths must not wrap into an apparently valid guest range.
+                const bool fastRejectsOverflow = MemoryInline::GetPointerFast(0x80000001u, SIZE_MAX) == nullptr;
+                const bool regionRejectsOverflow = !Memory::Contains(0x80000000u, SIZE_MAX);
+                if (!fastRejectsOverflow || !regionRejectsOverflow) {
+                    std::cerr << "overflow rejection: fast=" << fastRejectsOverflow
+                              << " region=" << regionRejectsOverflow;
+                    return 1;
+                }
+                require(Memory::Contains(0x817FFFF8u, 8));
+                require(!Memory::Contains(0x817FFFF8u, 9));
+                require(!Memory::Contains(0x81800000u, SIZE_MAX));
+                for (uint32_t bank : {0u, 0x10000000u}) {
+                    auto* physical = Memory::GetPointer(bank + 0x100u, 8);
+                    auto* cached = Memory::GetPointer(bank + 0x80000100u, 8);
+                    auto* uncached = Memory::GetPointer(bank + 0xC0000100u, 8);
+                    require(physical == cached && cached == uncached);
+                    MemoryInline::FlatWriteRam32(bank + 0x80000100u, 0x12345678u);
+                    require(MemoryInline::FlatRead32(bank + 0x100u) == 0x12345678u);
+                    require(physical[0] == 0x12 && physical[3] == 0x78);
+                    Memory::Write64(bank + 0xC0000100u, 0x123456789ABCDEF0ull);
+                    require(Memory::Read64(bank + 0x80000100u) == 0x123456789ABCDEF0ull);
+                }
+                require(MemoryInline::ResolveRangeHost(0x80000100u, 0, 4, true) != nullptr);
+                require(MemoryInline::ResolveRangeHost(0xFFFFFFFCu, 0, 8, true) == nullptr);
+                MemoryInline::FlatWrite32(0xCC008000u, 0xAABBCCDDu);
+                require(fifo == 0xAABBCCDDu);
+            #if !MKW_FLAT_MEMORY
+                const uint32_t page = 0x80000100u >> RecompMod::kExecutableWriteGuardPageShift;
+                RecompMod::g_executableWriteGuardPages[page].store(1);
+                require(MemoryInline::ResolveRangeHost(0x80000100u, 0, 4, true) == nullptr);
+                RecompMod::g_executableWriteGuardPages[page].store(0);
+                try { MemoryInline::FlatRead32(0x60000000u); return 1; }
+                catch (const Memory::AccessViolation&) {}
+            #endif
+                // Reinitializing the same layout must clear both RAM banks and
+                // retain the physical/cached/uncached alias relationship.
+                Memory::Init(config);
+                for (uint32_t bank : {0u, 0x10000000u}) {
+                    require(Memory::Read64(bank + 0x80000100u) == 0);
+                    Memory::Write32(bank + 0xC0000100u, 0x87654321u);
+                    require(Memory::Read32(bank + 0x100u) == 0x87654321u);
+                    require(Memory::Read32(bank + 0x80000100u) == 0x87654321u);
+                }
+                Memory::Reset();
+                std::cout << "ok";
+            }
+            """;
+        Assert.EndsWith("ok", TranslatorCppTestHarness.CompileAndRun(harness));
+    }
+
+    [NativeFact]
     public void FselAndPsSelMatchDolphinForNaNAndSignedZeroControls()
     {
-        var root = ProjectPaths.FindRepositoryRoot();
-        var tempRoot = Path.Combine(root, "test_output", "ppc_runtime_helpers");
-        Directory.CreateDirectory(tempRoot);
 
         var harness = new StringBuilder();
         harness.AppendLine("#include <cmath>");
@@ -154,34 +260,12 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("    return 0;");
         harness.AppendLine("}");
 
-        var harnessPath = Path.Combine(tempRoot, "harness_ppc_runtime_helpers.cpp");
-        File.WriteAllText(harnessPath, harness.ToString());
-
-        var runnerBasePath = Path.Combine(tempRoot, "runner_ppc_runtime_helpers");
-        var args = TranslatorCppTestHarness.BuildCompileArguments(
-            root,
-            tempRoot,
-            Array.Empty<string>(),
-            harnessPath,
-            runnerBasePath,
-            includeDataSections: false);
-
-        var compiler = CppCompiler();
-        var (compileExitCode, compileOutput) = RunProcess(compiler, args, TimeSpan.FromSeconds(60));
-        Assert.True(compileExitCode == 0, $"{compiler} failed: {compileOutput}");
-
-        var runnerPath = RunnerPath(runnerBasePath);
-        var (runExitCode, runOutput) = RunProcess(runnerPath, "", TimeSpan.FromSeconds(10));
-        Assert.True(runExitCode == 0, $"Runner failed ({runExitCode}). Output:\n{runOutput}");
-        Assert.Equal("ok", runOutput.Trim());
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness.ToString()));
     }
 
-    [Fact]
+    [NativeFact]
     public void InlinePsqFloatFastPathPreservesGuestLaneOrder()
     {
-        var root = ProjectPaths.FindRepositoryRoot();
-        var tempRoot = Path.Combine(root, "test_output", "ppc_runtime_psq_lane_order");
-        Directory.CreateDirectory(tempRoot);
 
         var harness = new StringBuilder();
         harness.AppendLine("#include <cstdint>");
@@ -240,7 +324,7 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("    constexpr uint32_t base = 0x80010000u;");
         harness.AppendLine("    Memory::Write32(base, Bits(12.5f));");
         harness.AppendLine("    Memory::Write32(base + 4, Bits(-7.25f));");
-        harness.AppendLine("    auto* range = MemoryInline::ResolveRangeHost(base, 0, 2048, true, true);");
+        harness.AppendLine("    auto* range = MemoryInline::ResolveRangeHost(base, 0, 2048, true);");
         harness.AppendLine("    if (!range) return 20;");
         harness.AppendLine("    PPC_FPR loaded{};");
         harness.AppendLine("    loaded.d = PPC_PsqLInline<0u, 0u>(base);");
@@ -289,34 +373,12 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("    return 0;");
         harness.AppendLine("}");
 
-        var harnessPath = Path.Combine(tempRoot, "harness_psq_lane_order.cpp");
-        File.WriteAllText(harnessPath, harness.ToString());
-
-        var runnerBasePath = Path.Combine(tempRoot, "runner_psq_lane_order");
-        var args = TranslatorCppTestHarness.BuildCompileArguments(
-            root,
-            tempRoot,
-            Array.Empty<string>(),
-            harnessPath,
-            runnerBasePath,
-            includeDataSections: false);
-
-        var compiler = CppCompiler();
-        var (compileExitCode, compileOutput) = RunProcess(compiler, args, TimeSpan.FromSeconds(60));
-        Assert.True(compileExitCode == 0, $"{compiler} failed: {compileOutput}");
-
-        var runnerPath = RunnerPath(runnerBasePath);
-        var (runExitCode, runOutput) = RunProcess(runnerPath, "", TimeSpan.FromSeconds(10));
-        Assert.True(runExitCode == 0, $"Runner failed ({runExitCode}). Output:\n{runOutput}");
-        Assert.Equal("ok", runOutput.Trim());
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness.ToString()));
     }
 
-    [Fact]
+    [NativeFact]
     public void KnownU8Scale61PairedStoreMatchesExactQuantizationOnFastAndColdPaths()
     {
-        var root = ProjectPaths.FindRepositoryRoot();
-        var tempRoot = Path.Combine(root, "test_output", "ppc_runtime_psq_u8_scale61");
-        Directory.CreateDirectory(tempRoot);
 
         var harness = new StringBuilder();
         harness.AppendLine("#include <cmath>");
@@ -364,7 +426,7 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("    PPC_PsqStKnownInline<0u, 6u, 0x3D043D04u>(&ctx, base + 2, pair.d);");
         harness.AppendLine("    MemoryInline::g_fullWritablePageBias[page] = savedBias;");
         harness.AppendLine("    if (Memory::Read16(base + 2) != expected) return 5;");
-        harness.AppendLine("    uint8_t* range = MemoryInline::ResolveRangeHost(base, 0, 64, false, true);");
+        harness.AppendLine("    uint8_t* range = MemoryInline::ResolveRangeHost(base, 0, 64, true);");
         harness.AppendLine("    if (!range) return 6;");
         harness.AppendLine("    PPC_PsqStKnownResolvedInline<0u, 6u, 0x3D043D04u>(&ctx, range, 4, base + 4, pair.d);");
         harness.AppendLine("    if (Memory::Read16(base + 4) != expected) return 7;");
@@ -376,34 +438,12 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("    std::cout << \"ok\"; return 0;");
         harness.AppendLine("}");
 
-        var harnessPath = Path.Combine(tempRoot, "harness_psq_u8_scale61.cpp");
-        File.WriteAllText(harnessPath, harness.ToString());
-
-        var runnerBasePath = Path.Combine(tempRoot, "runner_psq_u8_scale61");
-        var args = TranslatorCppTestHarness.BuildCompileArguments(
-            root,
-            tempRoot,
-            Array.Empty<string>(),
-            harnessPath,
-            runnerBasePath,
-            includeDataSections: false);
-
-        var compiler = CppCompiler();
-        var (compileExitCode, compileOutput) = RunProcess(compiler, args, TimeSpan.FromSeconds(60));
-        Assert.True(compileExitCode == 0, $"{compiler} failed: {compileOutput}");
-
-        var runnerPath = RunnerPath(runnerBasePath);
-        var (runExitCode, runOutput) = RunProcess(runnerPath, "", TimeSpan.FromSeconds(10));
-        Assert.True(runExitCode == 0, $"Runner failed ({runExitCode}). Output:\n{runOutput}");
-        Assert.Equal("ok", runOutput.Trim());
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness.ToString()));
     }
 
-    [Fact]
+    [NativeFact]
     public void InlinePairedSingleArithmeticPreservesLaneOrder()
     {
-        var root = ProjectPaths.FindRepositoryRoot();
-        var tempRoot = Path.Combine(root, "test_output", "ppc_runtime_ps_arithmetic");
-        Directory.CreateDirectory(tempRoot);
 
         var harness = new StringBuilder();
         harness.AppendLine("#include <cmath>");
@@ -482,6 +522,22 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("    out.d = PPC_PsMaddInline(edgeA.d, edgeC.d, edgeB.d);");
         harness.AppendLine("    if (PpcBitCastToU32Inline(out.paired.ps0) != 0xBF55BF17u || PpcBitCastToU32Inline(out.paired.ps1) != 0xBF55BF17u) return 38;");
         harness.AppendLine("    if (PpcBitCastToU32Inline(static_cast<float>(PpcFmaddsInline(edgeA.paired.ps0, edgeC.paired.ps0, edgeB.paired.ps0))) != 0xBF55BF17u) return 39;");
+        harness.AppendLine("    // FMSUB must quiet a NaN subtractor without flipping its sign or payload.");
+        harness.AppendLine("    PPC_FPR nanSub{}; nanSub.paired.ps0 = FloatFromBits(0x7FBB76B6u); nanSub.paired.ps1 = FloatFromBits(0xFFED442Au);");
+        harness.AppendLine("    out.d = PPC_PsMsubInline(a.d, b.d, nanSub.d);");
+        harness.AppendLine("    if (PpcBitCastToU32Inline(out.paired.ps0) != 0x7FFB76B6u || PpcBitCastToU32Inline(out.paired.ps1) != 0xFFED442Au) return 49;");
+        harness.AppendLine("    // Multiple NaNs follow guest register priority A, B, C, not host operand order.");
+        harness.AppendLine("    PPC_FPR nanA{}, nanB{}, nanC{};");
+        harness.AppendLine("    nanA.paired.ps0 = FloatFromBits(0xFFC12345u); nanA.paired.ps1 = 2.0f;");
+        harness.AppendLine("    nanB.paired.ps0 = FloatFromBits(0x7F812345u); nanB.paired.ps1 = FloatFromBits(0x7FC23456u);");
+        harness.AppendLine("    nanC.paired.ps0 = FloatFromBits(0x7FC34567u); nanC.paired.ps1 = FloatFromBits(0xFF834567u);");
+        harness.AppendLine("    for (auto op : {PPC_PsMaddInline, PPC_PsMsubInline, PPC_PsNmaddInline, PPC_PsNmsubInline}) {");
+        harness.AppendLine("      out.d = op(nanA.d, nanC.d, nanB.d);");
+        harness.AppendLine("      if (PpcBitCastToU32Inline(out.paired.ps0) != 0xFFC12345u || PpcBitCastToU32Inline(out.paired.ps1) != 0x7FC23456u) return 50;");
+        harness.AppendLine("    }");
+        harness.AppendLine("    a.paired.ps0 = a.paired.ps1 = 0.0f; b.paired.ps0 = b.paired.ps1 = std::numeric_limits<float>::infinity();");
+        harness.AppendLine("    out.d = PPC_PsMaddInline(a.d, b.d, c.d);");
+        harness.AppendLine("    if (PpcBitCastToU32Inline(out.paired.ps0) != 0x7FC00000u || PpcBitCastToU32Inline(out.paired.ps1) != 0x7FC00000u) return 51;");
         harness.AppendLine("    // Double fused arithmetic must retain the product error cancelled by B.");
         harness.AppendLine("    const double fmaA = 1.0 + 0x1p-27;");
         harness.AppendLine("    const double fmaC = 1.0 - 0x1p-27;");
@@ -507,34 +563,12 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("    return 0;");
         harness.AppendLine("}");
 
-        var harnessPath = Path.Combine(tempRoot, "harness_ps_arithmetic.cpp");
-        File.WriteAllText(harnessPath, harness.ToString());
-
-        var runnerBasePath = Path.Combine(tempRoot, "runner_ps_arithmetic");
-        var args = TranslatorCppTestHarness.BuildCompileArguments(
-            root,
-            tempRoot,
-            Array.Empty<string>(),
-            harnessPath,
-            runnerBasePath,
-            includeDataSections: false);
-
-        var compiler = CppCompiler();
-        var (compileExitCode, compileOutput) = RunProcess(compiler, args, TimeSpan.FromSeconds(60));
-        Assert.True(compileExitCode == 0, $"{compiler} failed: {compileOutput}");
-
-        var runnerPath = RunnerPath(runnerBasePath);
-        var (runExitCode, runOutput) = RunProcess(runnerPath, "", TimeSpan.FromSeconds(10));
-        Assert.True(runExitCode == 0, $"Runner failed ({runExitCode}). Output:\n{runOutput}");
-        Assert.Equal("ok", runOutput.Trim());
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness.ToString()));
     }
 
-    [Fact]
+    [NativeFact]
     public void NonvolatileFprGuardPreservesPackedPairedAndScalarFprs()
     {
-        var root = ProjectPaths.FindRepositoryRoot();
-        var tempRoot = Path.Combine(root, "test_output", "ppc_nonvolatile_fpr_guard");
-        Directory.CreateDirectory(tempRoot);
 
         var harness = new StringBuilder();
         harness.AppendLine("#include <cstdint>");
@@ -572,7 +606,7 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("    if (ctx.fpr[31].raw != saved31.raw) return 5;");
         harness.AppendLine("    ctx.fpr[14] = saved14;");
         harness.AppendLine("    TranslatedFunctionInfo info{};");
-        harness.AppendLine("    info.entryPoint = reinterpret_cast<void*>(&ClobberNonvolatileFprs);");
+        harness.AppendLine("    info.rawCpuInvoker = &ClobberNonvolatileFprs;");
         harness.AppendLine("    info.nonvolatileFprWriteMask = 1u << 31;");
         harness.AppendLine("    if (!TryDispatchResolvedCpuTarget(&info, &ctx)) return 6;");
         harness.AppendLine("    if (ctx.fpr[14].raw == saved14.raw) return 7;");
@@ -591,32 +625,12 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("    return 0;");
         harness.AppendLine("}");
 
-        var harnessPath = Path.Combine(tempRoot, "harness_nonvolatile_fpr_guard.cpp");
-        File.WriteAllText(harnessPath, harness.ToString());
-
-        var runnerBasePath = Path.Combine(tempRoot, "runner_nonvolatile_fpr_guard");
-        var args =
-            "-std=c++17 " +
-            $"\"{harnessPath}\" " +
-            $"-I\"{Path.Combine(root, "runtime", "include")}\" " +
-            $"-o \"{runnerBasePath}\"";
-
-        var compiler = CppCompiler();
-        var (compileExitCode, compileOutput) = RunProcess(compiler, args, TimeSpan.FromSeconds(60));
-        Assert.True(compileExitCode == 0, $"{compiler} failed: {compileOutput}");
-
-        var runnerPath = RunnerPath(runnerBasePath);
-        var (runExitCode, runOutput) = RunProcess(runnerPath, "", TimeSpan.FromSeconds(10));
-        Assert.True(runExitCode == 0, $"Runner failed ({runExitCode}). Output:\n{runOutput}");
-        Assert.Equal("ok", runOutput.Trim());
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness.ToString()));
     }
 
-    [Fact]
+    [NativeFact]
     public void DirectCpuDispatchSeesModOverrideRegisteredAfterFirstBaseCall()
     {
-        var root = ProjectPaths.FindRepositoryRoot();
-        var tempRoot = Path.Combine(root, "test_output", "ppc_direct_mod_override_refresh");
-        Directory.CreateDirectory(tempRoot);
 
         var harness = new StringBuilder();
         harness.AppendLine("#include <cstdint>");
@@ -629,19 +643,13 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("extern \"C\" void GX_HLE_FIFO_WriteFloat(float) {}");
         harness.AppendLine("extern \"C\" void BaseTranslated(CpuContext* ctx) { ctx->gpr[3] = 0xBACE0001u; }");
         harness.AppendLine("extern \"C\" void ModTranslated(CpuContext* ctx) { ctx->gpr[3] = 0xC0DE0002u; }");
-        harness.AppendLine("template <> struct KnownTranslatedCpuCall<0x81234568u> {");
-        harness.AppendLine("    static constexpr bool kAvailable = true;");
-        harness.AppendLine("    static constexpr uint32_t kNonvolatileFprWriteMask = 0;");
-        harness.AppendLine("    static constexpr bool kMayBeOverridden = true;");
-        harness.AppendLine("    static constexpr void (*Entry)(CpuContext*) = &BaseTranslated;");
-        harness.AppendLine("};");
         harness.AppendLine("static void Register(uint32_t priority, FunctionKind kind, const char* name, void (*entry)(CpuContext*)) {");
         harness.AppendLine("    TranslatedFunctionInfo info{};");
         harness.AppendLine("    info.address = 0x81234568u;");
         harness.AppendLine("    info.name = name;");
         harness.AppendLine("    info.kind = kind;");
         harness.AppendLine("    info.priority = priority;");
-        harness.AppendLine("    info.entryPoint = reinterpret_cast<void*>(entry);");
+        harness.AppendLine("    info.rawCpuInvoker = entry;");
         harness.AppendLine("    info.nonvolatileFprWriteMask = 0;");
         harness.AppendLine("    TranslatedFunctionRegistry::Register(std::move(info));");
         harness.AppendLine("}");
@@ -662,25 +670,6 @@ public class PpcRuntimeHelperTests
         harness.AppendLine("    return 0;");
         harness.AppendLine("}");
 
-        var harnessPath = Path.Combine(tempRoot, "harness_direct_mod_override_refresh.cpp");
-        File.WriteAllText(harnessPath, harness.ToString());
-
-        var runnerBasePath = Path.Combine(tempRoot, "runner_direct_mod_override_refresh");
-        var args = TranslatorCppTestHarness.BuildCompileArguments(
-            root,
-            tempRoot,
-            Array.Empty<string>(),
-            harnessPath,
-            runnerBasePath,
-            includeDataSections: false);
-
-        var compiler = CppCompiler();
-        var (compileExitCode, compileOutput) = RunProcess(compiler, args, TimeSpan.FromSeconds(60));
-        Assert.True(compileExitCode == 0, $"{compiler} failed: {compileOutput}");
-
-        var runnerPath = RunnerPath(runnerBasePath);
-        var (runExitCode, runOutput) = RunProcess(runnerPath, "", TimeSpan.FromSeconds(10));
-        Assert.True(runExitCode == 0, $"Runner failed ({runExitCode}). Output:\n{runOutput}");
-        Assert.Contains("ok", runOutput);
+        Assert.Equal("ok", TranslatorCppTestHarness.CompileAndRun(harness.ToString()));
     }
 }

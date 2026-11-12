@@ -22,8 +22,8 @@ public sealed class GuestMemoryRangeLoweringTests
 
         var resolves = lowered.OfType<IrResolveGuestMemoryRange>().ToArray();
         Assert.Equal(2, resolves.Length);
-        Assert.Contains(resolves, resolve => resolve.NeedsReadAccess && !resolve.NeedsWriteAccess);
-        Assert.Contains(resolves, resolve => !resolve.NeedsReadAccess && resolve.NeedsWriteAccess);
+        Assert.Contains(resolves, resolve => !resolve.NeedsWriteAccess);
+        Assert.Contains(resolves, resolve => resolve.NeedsWriteAccess);
         Assert.Single(lowered.OfType<IrResolvedLoadPair>());
         Assert.Single(lowered.OfType<IrResolvedStorePair>());
     }
@@ -385,7 +385,6 @@ public sealed class GuestMemoryRangeLoweringTests
             new IrCall("f3", "PPC_PsqLKnown_00050000", [IrValue.Register("r3"), IrValue.Imm(1), IrValue.Imm(2)]));
 
         var resolve = Assert.Single(lowered.OfType<IrResolveGuestMemoryRange>());
-        Assert.True(resolve.NeedsReadAccess);
         Assert.False(resolve.NeedsWriteAccess);
         Assert.Equal(8, resolve.Length);
         var loads = lowered.OfType<IrResolvedPsqLoad>().ToArray();

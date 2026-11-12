@@ -1,5 +1,4 @@
 #include "settings_overlay.h"
-#include "netplay_ui.h"
 #include "frame_input.h"
 #include "hle_stubs.h"
 #include "input_bindings.h"
@@ -283,7 +282,6 @@ bool ReadSample(uint32_t chan, WiiRemoteInput::KpadSample& sample) {
     if (!WiiRemoteInput::ReadKpadSample(chan, sample)) {
         return false;
     }
-    NetplayUi::FilterGameInput(chan, sample);
     // The startup cover (settings_overlay) waits for A or 2; the press itself never reaches the game.
     constexpr uint32_t kWpadA = 0x0800u, kWpadTwo = 0x0100u;
     if (settings_overlay::StartupScreenVisible() && (sample.hold & (kWpadA | kWpadTwo)) != 0) {
@@ -344,12 +342,6 @@ extern "C" int32_t KPAD__ReadEx_HLE(uint32_t chan, uint32_t statusPtr, uint32_t 
     }
     return read;
 }
-#if 0  // SPM: KPADReadEx: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE(801ED3B0, KPAD__ReadEx_HLE, int32_t,
-         (uint32_t chan, uint32_t statusPtr, uint32_t count, uint32_t errPtr), (chan, statusPtr, count, errPtr));
-#endif
-#endif
 
 // KPADGetUnifiedWpadStatus: the raw WPAD status behind KPADStatus. The game
 // reads the Classic Controller's buttons, sticks and triggers from here. The
@@ -374,11 +366,3 @@ extern "C" int32_t KPAD__GetUnifiedWpadStatus_HLE(uint32_t chan, uint32_t status
     }
     return have ? 1 : 0;
 }
-#if 0  // NSMBW: KPADGetUnifiedWpadStatus is not linked into NSMBW (was MKW-only)
-#if 0  // SPM: 0x8019812c: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE(8019812C, KPAD__GetUnifiedWpadStatus_HLE, int32_t,
-         (uint32_t chan, uint32_t statusPtr, uint32_t count), (chan, statusPtr, count));
-#endif
-#endif
-#endif

@@ -163,9 +163,9 @@ public class FunctionTranslatorCoverageTests
             entry,
             TranslationOptions.Default with { MaxBytes = 0x1C });
 
-        Assert.Contains("MemoryInline::ResolveRangeHost((r11 + -28), 0, 28u, false, true)", result.CxxCode,
+        Assert.Contains("MemoryInline::ResolveRangeHost((r11 + -28), 0, 28u, true)", result.CxxCode,
             StringComparison.Ordinal);
-        Assert.Contains("MemoryInline::ResolveRangeHost((r11 + -28), 0, 28u, true, false)", result.CxxCode,
+        Assert.Contains("MemoryInline::ResolveRangeHost((r11 + -28), 0, 28u, false)", result.CxxCode,
             StringComparison.Ordinal);
         Assert.DoesNotContain("MemoryInline::FlatWrite32((r11 + -28)", result.CxxCode,
             StringComparison.Ordinal);

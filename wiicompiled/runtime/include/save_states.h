@@ -7,7 +7,7 @@
 //
 // Guest threads are host fibers running translated code, so a thread's state is its host stack as much as its guest
 // registers. Every fiber switch goes through SwitchFiber, which leaves the switched-out thread's resume point
-// (__builtin_setjmp) in a per-fiber slot on the heap and its registers on its own stack; a snapshot copies each stack
+// (setjmp) in an opaque per-fiber jump buffer on the heap; a snapshot copies each stack
 // from that point up to where the thread started (MarkStackTop). A load copies them back and longjmps each thread to
 // its saved point the next time it runs. Both happen on a helper fiber, from the main thread's frame boundary, so no
 // stack being copied is running. Host addresses differ between runs, so states last until the game is closed, and a

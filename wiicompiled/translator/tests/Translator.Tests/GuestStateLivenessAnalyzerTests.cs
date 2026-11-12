@@ -6,6 +6,25 @@ namespace Translator.Tests;
 
 public sealed class GuestStateLivenessAnalyzerTests
 {
+    [Theory]
+    [InlineData("r3_ca", false)]
+    [InlineData("r3_ca_1", false)]
+    [InlineData("r3_not_2", false)]
+    [InlineData("r3_2", true)]
+    public void TemporaryNamesDoNotKillHardwareRegisterLiveness(string destination, bool hardwareWrite)
+    {
+        // Carry and complement temporaries are emitted by the lifter; their r3 prefix is not a guest write.
+        var function = Function(new IrAssign(destination, IrValue.Imm(1)),
+            new IrReturn(IrValue.Register(hardwareWrite ? destination : "r3")));
+        var abi = GuestAbiContractAnalyzer.Analyze(function);
+        var liveness = GuestStateLivenessAnalyzer.Analyze(function,
+            new Dictionary<uint, GuestAbiContract>(), GuestStateMask.Empty);
+        var incoming = hardwareWrite ? 0u : 1u << 3;
+        Assert.Equal(incoming, abi.GprReadBeforeWriteMask);
+        Assert.Equal(incoming, liveness.BlockLiveIn["entry"].Gpr);
+        Assert.Equal(hardwareWrite ? 1u << 3 : 0u, abi.GprPossibleWriteMask);
+    }
+
     [Fact]
     public void IndirectControlFlowRequiresMaterializedContext()
     {

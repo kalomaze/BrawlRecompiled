@@ -61,9 +61,6 @@ extern "C" int32_t WPADGetStatus_HLE()
     // Reading r3 here would leak a caller's stale register value into the result.
     return g_state.contract.GetLibraryStatus();
 }
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE(802CCBB4, WPADGetStatus_HLE, int32_t, (), ());
-#endif
 
 extern "C" uint32_t WPADGetDpdSensitivity_HLE()
 {
@@ -88,13 +85,6 @@ extern "C" int32_t WPADInitSub_HLE()
     }
     return kStatusOk;
 }
-#if 0  // NSMBW: WPADInitSub is not linked into NSMBW (was MKW-only)
-#if 0  // SPM: 0x801bf3b4: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE(801BF3B4, WPADInitSub_HLE, int32_t, (), ());
-#endif
-#endif
-#endif
 
 extern "C" int32_t WPADInit_HLE()
 {
@@ -200,12 +190,6 @@ extern "C" int32_t WPADControlLed_HLE(uint32_t chan, uint32_t ledMask, uint32_t 
     (void)ledMask;
     return CompleteWpadRequest(chan, callback, WpadContract::kErrorNoController);
 }
-#if 0  // SPM: WPADControlLed: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE(801E1630, WPADControlLed_HLE, int32_t,
-         (uint32_t chan, uint32_t ledMask, uint32_t callback), (chan, ledMask, callback));
-#endif
-#endif
 
 extern "C" int32_t WPADStartSimpleSync_HLE()
 {
@@ -215,20 +199,6 @@ extern "C" int32_t WPADStartSimpleSync_HLE()
     g_state.simpleSyncActive = true;
     return 1;
 }
-#if 0  // NSMBW: WPADStartSimpleSync is not linked into NSMBW (was MKW-only)
-#if 0  // SPM: 0x801bf634: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE(801BF634, WPADStartSimpleSync_HLE, int32_t, (), ()); // WUDStartSyncSimple
-#endif
-#endif
-#endif
-#if 0  // NSMBW: WPADStartSimpleSync is not linked into NSMBW (was MKW-only)
-#if 0  // SPM: 0x801bf638: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE(801BF638, WPADStartSimpleSync_HLE, int32_t, (), ()); // WPADStartSimpleSync (HBM)
-#endif
-#endif
-#endif
 
 // due to multiplayer controller screen hle this to avoid startsyncdevice to return fail every frame
 // causing you to get softlocked in the game
@@ -251,10 +221,3 @@ extern "C" uint32_t WPADSetSyncDeviceCallback_HLE(uint32_t callback)
     g_state.syncDeviceCallback = callback;
     return previous;
 }
-#if 0  // NSMBW: WPADSetSyncDeviceCallback is not linked into NSMBW (was MKW-only)
-#if 0  // SPM: 0x801bf640: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE(801BF640, WPADSetSyncDeviceCallback_HLE, uint32_t, (uint32_t callback), (callback));
-#endif
-#endif
-#endif

@@ -7,46 +7,20 @@
 #include <string>
 #include <string_view>
 
-#include <csetjmp>
-
 #include "memory.h"
-
-// Windows' SehLogger longjmps out of a vectored exception handler, where plain setjmp/longjmp is
-// the norm. A POSIX signal handler jumping back to here must use the sig-prefixed pair instead:
-// only sigsetjmp/siglongjmp save and restore the process signal mask, which is what keeps SIGSEGV
-// from staying blocked (and a second fault during the same ctor loop from escalating instead of
-// trapping) after the first recovered fault.
-#if defined(_WIN32)
-using MkwJmpBuf = jmp_buf;
-#define MKW_SETJMP(buf) setjmp(buf)
-#else
-using MkwJmpBuf = sigjmp_buf;
-#define MKW_SETJMP(buf) sigsetjmp(buf, 1)
-#endif
-
-// Global flag to suppress SEH reporting (caught by system_bridge)
-extern bool g_suppressSehReporting;
-// Jump buffer for SEH recovery
-extern thread_local MkwJmpBuf* g_sehJumpTarget;
-// SEH details for the most recent trapped exception (used during ctor execution).
-extern thread_local uint32_t g_sehLastExceptionCode;
-extern thread_local uintptr_t g_sehLastExceptionAddress;
-extern thread_local uintptr_t g_sehLastAccessedAddress;
-extern thread_local uint32_t g_sehLastAccessType;
 
 void WriteFatalLog(std::string_view reason);
 void SetRuntimeExitCode(int code);
 void MarkFatalErrorReported();
 
-// Centralized crash reporting (defined in main.cpp). Every fatal path funnels
-// through these so the per-run log folder always receives the same artifact
-// set: crash_<reason>.txt with registers/backtrace/heuristics, plus MEM1/MEM2
-// snapshots a developer can walk offline.
+// Detailed diagnostics for ordinary runtime error paths (defined in main.cpp).
+// Native fault/signal handlers use FaultReport instead: these helpers allocate,
+// use streams, and traverse guest state.
 namespace RuntimeCrash {
 
 // Writes crash_<reason>.txt (and, once per process, the guest memory
-// snapshots) into the current run's log folder. Safe to call from any fatal
-// path; never throws.
+// snapshots) into the current run's log folder. Never throws; must not be
+// called from a native fault or signal handler.
 void WriteCrashArtifacts(std::string_view reason,
                          std::string_view extraDetails = {},
                          const uint32_t* missingGuestTarget = nullptr) noexcept;

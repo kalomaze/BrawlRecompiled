@@ -55,7 +55,6 @@ public sealed class InlineArithmeticTableCodeGenTests
         yield return Case("PPC_FmulsNoNi", "PpcFmulsNoNiInline");
         yield return Case("PPC_Fdivs", "PpcForceSingleValueInline");
         yield return Case("PPC_FdivsNoNi", "static_cast<float>");
-        yield return Case("PPC_Fsqrt", "std::sqrt");
         yield return Case("PPC_Fmadd", "PpcFmaddInline");
         yield return Case("PPC_Fmsub", "PpcFmsubInline");
         yield return Case("PPC_Fnmadd", "PpcFnmaddInline");

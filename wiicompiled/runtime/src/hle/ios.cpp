@@ -88,7 +88,7 @@ void IosBufferAsync(CpuContext* ctx, int32_t (*op)(uint32_t fd, uint32_t bufferP
 // ============================================================================
 
 // 0x80225500 -> IOS_IoctlAsync
-extern "C" void IOS_IoctlAsync_80194158(CpuContext* ctx)
+extern "C" void IOS_IoctlAsync_HLE(CpuContext* ctx)
 {
     const uint32_t fd = ctx->gpr[3];
     const uint32_t cmd = ctx->gpr[4];
@@ -116,7 +116,7 @@ extern "C" void IOS_IoctlAsync_80194158(CpuContext* ctx)
     }
     CompleteAsync(ctx, callback, result, callbackArg); // Success
 }
-PPC_NATIVE_OVERRIDE_VOID(80212c08, IOS_IoctlAsync_80194158, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(80212c08, IOS_IoctlAsync_HLE, (CpuContext* ctx), (ctx));
 
 // 0x80224B50 -> IOS_OpenAsync
 extern "C" void IOS_OpenAsync_HLE(CpuContext* ctx) {

@@ -83,7 +83,7 @@ public static class GuestHelperEffectCatalog
         "PPC_StoreHalfwordByteReverse", "PPC_StoreWordByteReverse", "PPC_Stfiwx",
         "PPC_Fadds", "PPC_Fdivs", "PPC_Fmadd", "PPC_Fmadds", "PPC_Fmsub", "PPC_Fmsubs",
         "PPC_Fmuls", "PPC_Fnmadd", "PPC_Fnmadds", "PPC_Fnmsub", "PPC_Fnmsubs",
-        "PPC_Fres", "PPC_Frsqrte", "PPC_Fsel", "PPC_Fsqrt", "PPC_Fsubs",
+        "PPC_Fres", "PPC_Frsqrte", "PPC_Fsel", "PPC_Fsubs",
         "PPC_PsAbs", "PPC_PsAdd", "PPC_PsDiv", "PPC_PsMadd", "PPC_PsMadds0",
         "PPC_PsMadds1", "PPC_PsMerge00", "PPC_PsMerge01", "PPC_PsMerge10",
         "PPC_PsMerge11", "PPC_PsMsub", "PPC_PsMul", "PPC_PsMuls0", "PPC_PsMuls1",

@@ -1,7 +1,7 @@
 # Builds Brawl Recompiled's release folder and updates the player's game folder (-Install, default
 # Desktop\My recomps\BrawlRecompiled).
 #   powershell -ExecutionPolicy Bypass -File tools\package-brawl.ps1 [-Build] [-Zip] [-Install <folder>]
-# -Build first rebuilds the game (build-brawl.ps1 -SkipTools) and the launcher. -Zip also writes dist\BrawlRecompiled.zip.
+# -Build first rebuilds the game (build-brawl.ps1) and the launcher. -Zip also writes dist\BrawlRecompiled.zip.
 # Layout: Brawl Recompiled.exe (launcher), README.txt, engine\ (brawl-engine.exe = Play\SuperSmashBrosBrawl.exe
 # renamed, engine_usa.dll = the recompiled game, DLLs, wii_bootstrap\, UserData\ = saves, settings, the virtual SD
 # card (UserData\SD: Project+ and other SD mods) and UserData\mods (file and texture replacement mods)).
@@ -12,7 +12,7 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $launcher = "$root\launcher\publish\Brawl Recompiled.exe"
-if ($Build) { & "$PSScriptRoot\build-brawl.ps1" -SkipTools; & "$PSScriptRoot\build-launcher.ps1" }
+if ($Build) { & "$PSScriptRoot\build-brawl.ps1"; &"$PSScriptRoot\build-launcher.ps1" }
 elseif (-not (Test-Path -LiteralPath $launcher)) { & "$PSScriptRoot\build-launcher.ps1" }
 $version = 'v' + ([xml](Get-Content -LiteralPath "$root\launcher\BrawlRecompiled.Launcher.csproj")).Project.PropertyGroup.Version
 function Mirror([string]$From, [string]$To) {

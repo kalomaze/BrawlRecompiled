@@ -586,9 +586,10 @@ void GuestFiberManager::FiberProc(void* param)
     uint32_t entryArg = 0;
     
     {
-        std::lock_guard<std::mutex> lock(s_mutex);
+        std::unique_lock<std::mutex> lock(s_mutex);
         auto it = s_fibers.find(guestThreadAddr);
         if (it == s_fibers.end()) {
+            lock.unlock();
             RT_LOG(RT_TAG_OS) << "FiberProc: fiber not found!" << std::endl;
             HostContext::Switch(s_schedulerFiber);
             return;

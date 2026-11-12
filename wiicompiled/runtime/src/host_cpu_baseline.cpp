@@ -1,14 +1,7 @@
-// Host ISA guard. Every other product target builds with -march=x86-64-v3, so a pre-Haswell
-// Intel or pre-Excavator AMD machine would otherwise die on an illegal-instruction fault with no
-// explanation. This TU alone skips that flag (own CMake object library, excluded from unity
-// build/PCH) and runs from a priority-101 C initializer, ahead of every C++ dynamic initializer
-// and thus the first AVX2 code that could execute. Keep it free of anything that could pull in
-// vectorized code: no iostreams, no std::string, no runtime-wide headers.
-//
-// x86-64-v3 is an x86-specific optional-feature baseline (AVX2/BMI2/FMA and friends are not
-// guaranteed present on every x86_64 chip); nothing here applies on AArch64, where ASIMD/NEON is
-// mandatory in the base architecture and PublicProducts.cmake never applies an -march=x86-64-v3
-// equivalent flag to begin with. That branch below is a no-op stub, not a port of this check.
+// Check the selected x86 instruction floor before C++ dynamic initialization.
+// This translation unit uses baseline x86-64, outside unity builds and PCH, so
+// it can report missing CPU features before optimized code executes. Keep it
+// free of runtime-wide headers and allocating library facilities.
 
 #if defined(__x86_64__)
 
@@ -58,11 +51,11 @@ struct CpuFeature {
     bool isOsXsave;
 };
 
-// Everything x86-64-v3 implies, which includes all of x86-64-v2. Spelled out so
-// the error message can name the exact instruction sets the machine lacks
-// rather than only "AVX2", which is merely the best known member of the set.
-// The older-processor build (MKW_HOST_ISA_V2, engine_usa_v2.dll) needs x86-64-v2 only.
+// Match the selected compiler baseline and name each missing feature.
+// SSE2 is architectural in x86-64; v2 and v3 add optional feature groups.
 constexpr CpuFeature kRequiredFeatures[] = {
+    {"SSE2", 1, 0, 3, 26, false},
+#if !defined(MKW_HOST_ISA_V1)
     {"SSE3", 1, 0, 2, 0, false},
     {"SSSE3", 1, 0, 2, 9, false},
     {"CMPXCHG16B", 1, 0, 2, 13, false},
@@ -80,6 +73,7 @@ constexpr CpuFeature kRequiredFeatures[] = {
     {"AVX2", 7, 0, 1, 5, false},
     {"BMI2", 7, 0, 1, 8, false},
     {"LZCNT", 0x80000001u, 0, 2, 5, false},
+#endif
 #endif
 };
 
@@ -178,6 +172,14 @@ void WriteStdErrEarly(const char* text) {
 
 [[noreturn]] void ReportUnsupportedCpu(const char* missing) {
     TextBuffer message;
+#if defined(MKW_HOST_ISA_V1)
+    message.Append("This build needs the baseline x86-64 instruction set (SSE2).\n\nMissing on this machine: ");
+    message.Append(missing);
+#elif defined(MKW_HOST_ISA_V2)
+    message.Append("This build needs a processor that supports the "
+                   "x86-64-v2 instruction set.\n\nMissing on this machine: ");
+    message.Append(missing);
+#else
     message.Append(
         "This build needs a processor that supports AVX2 and the rest of the "
         "x86-64-v3 instruction set.\n\nMissing on this machine: ");
@@ -185,6 +187,7 @@ void WriteStdErrEarly(const char* text) {
     message.Append(
         "\n\nx86-64-v3 covers Intel Core processors from Haswell (4th "
         "generation, 2013) onward and AMD processors from Excavator (2015) onward.");
+#endif
 
     // The tag matches RT_TAG_RUNTIME in runtime_log.h. It is spelled out here
     // because this translation unit must not include runtime-wide headers (see

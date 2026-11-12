@@ -4,7 +4,11 @@
 #include "nand_path.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
+#include "platform/host_platform.h"
 
+#include <cerrno>
+#include <climits>
+#include <cstring>
 #include <chrono>
 #include <cstdlib>
 #include <ctime>
@@ -22,6 +26,10 @@
 #if !defined(_WIN32) && !defined(__ANDROID__)
 #include <fcntl.h>
 #include <unistd.h>
+#if defined(__linux__) && __has_include(<linux/close_range.h>)
+#include <linux/close_range.h>
+#include <sys/syscall.h>
+#endif
 void RuntimeShutdownProcessTranscript();  // main.cpp
 #endif
 
@@ -46,6 +54,10 @@ std::filesystem::path SessionNand() {
     return NetplayDirectory() / "SessionNAND";
 }
 
+std::filesystem::path HostMarker() {
+    return SessionNand() / ".host";
+}
+
 std::vector<std::string> g_names;
 bool g_isHost = false;
 
@@ -59,49 +71,90 @@ constexpr const char* kSaveFiles[] = {
 };
 
 // Copies the session's save over the player's own. Call with the NAND override cleared.
-void KeepSessionSave(const char* what) {
+bool KeepSessionSave(const char* what) {
+    bool complete = true;
     for (const char* file : kSaveFiles) {
         std::error_code ec;
         const auto played = SessionNand() / std::filesystem::u8path(file);
         const auto mine = RuntimeNandPath::ResolveNandRootPath() / std::filesystem::u8path(file);
-        if (!std::filesystem::exists(played, ec)) continue;
-        std::filesystem::create_directories(mine.parent_path(), ec);
-        std::filesystem::copy_file(played, mine, std::filesystem::copy_options::overwrite_existing, ec);
-        RT_LOGF(RT_TAG_RUNTIME, "netplay: kept %s %s (%s)\n", what, file, ec ? ec.message().c_str() : "ok");
+        const bool exists = std::filesystem::exists(played, ec);
+        if (!ec && !exists) continue;
+        if (!ec) std::filesystem::create_directories(mine.parent_path(), ec);
+        if (!ec) std::filesystem::copy_file(played, mine, std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec) {
+            complete = false;
+            RT_LOGF(RT_TAG_RUNTIME, "netplay: could not keep %s %s: %s\n", what, file, ec.message().c_str());
+        } else {
+            RT_LOGF(RT_TAG_RUNTIME, "netplay: kept %s %s\n", what, file);
+        }
     }
+    return complete;
 }
 
 [[noreturn]] void RestartProcess() {
+#if !defined(__ANDROID__)
+    const auto exe = RuntimePlatform::ExecutablePath();
+    if (!exe) {
+        RT_LOGF(RT_TAG_RUNTIME, "netplay: could not resolve the executable for restart\n");
+        std::_Exit(EXIT_FAILURE);
+    }
+#endif
 #if defined(_WIN32)
-    wchar_t exe[MAX_PATH] = {};
-    GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    std::wstring command = L"\"" + std::wstring(exe) + L"\"";
+    std::wstring command = L"\"" + exe->native() + L"\"";
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
-    if (CreateProcessW(exe, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+    if (CreateProcessW(exe->c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
     } else {
         RT_LOGF(RT_TAG_RUNTIME, "netplay: could not start the game again (error %lu)\n", GetLastError());
+        std::_Exit(EXIT_FAILURE);
     }
     TerminateProcess(GetCurrentProcess(), 0);
 #elif defined(__ANDROID__)
-    AndroidBridge::RestartGame();
+    if (!AndroidBridge::RestartGame()) {
+        RT_LOGF(RT_TAG_RUNTIME, "netplay: Android activity restart failed\n");
+        std::_Exit(EXIT_FAILURE);
+    }
 #else
-    // Linux: the same executable again, in place of this process, with the console's own output back and none of
-    // this process's other descriptors (the guest RAM, sockets, the window) carried over.
+    // Restore console output before replacing this process.
     RuntimeShutdownProcessTranscript();
-    for (int fd = 3; fd < 4096; ++fd) {
-        fcntl(fd, F_SETFD, FD_CLOEXEC);
+    bool descriptorsReady = false;
+#if defined(SYS_close_range) && defined(CLOSE_RANGE_UNSHARE) && defined(CLOSE_RANGE_CLOEXEC)
+    // Isolate this thread's descriptor table so concurrent opens cannot leak through exec.
+    if (syscall(SYS_close_range, 3u, ~0u, CLOSE_RANGE_UNSHARE | CLOSE_RANGE_CLOEXEC) == 0) {
+        descriptorsReady = true;
+    } else if (errno != ENOSYS && errno != EINVAL) {
+        RT_LOGF(RT_TAG_RUNTIME, "netplay: could not isolate restart descriptors: %s\n", std::strerror(errno));
+        std::_Exit(EXIT_FAILURE);
     }
-    char exe[4096] = {};
-    const ssize_t length = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-    if (length > 0) {
-        char* argv[] = {exe, nullptr};
-        execv(exe, argv);
+#endif
+    if (!descriptorsReady) {
+        // Older kernels and other POSIX hosts: use the reported limit, not a guessed cutoff.
+        // This scan still requires quiescent descriptor creation and an unchanged descriptor limit.
+        const long descriptorLimit = sysconf(_SC_OPEN_MAX);
+        if (descriptorLimit < 0) {
+            RT_LOGF(RT_TAG_RUNTIME, "netplay: could not determine descriptor limit for restart\n");
+            std::_Exit(EXIT_FAILURE);
+        }
+        for (int64_t fd = 3; fd < descriptorLimit && fd <= INT_MAX; ++fd) {
+            const int flags = fcntl(static_cast<int>(fd), F_GETFD);
+            if (flags < 0 && errno == EBADF) continue;
+            if (flags < 0 && errno == EINTR) { --fd; continue; }
+            if (flags >= 0 && ((flags & FD_CLOEXEC) != 0 ||
+                              fcntl(static_cast<int>(fd), F_SETFD, flags | FD_CLOEXEC) == 0)) continue;
+            if (errno == EBADF) continue;  // Another thread closed it between calls.
+            if (errno == EINTR) { --fd; continue; }
+            RT_LOGF(RT_TAG_RUNTIME, "netplay: could not mark descriptor %lld close-on-exec: %s\n",
+                    static_cast<long long>(fd), std::strerror(errno));
+            std::_Exit(EXIT_FAILURE);
+        }
     }
-    RT_LOGF(RT_TAG_RUNTIME, "netplay: could not start the game again\n");
+    char* argv[] = {const_cast<char*>(exe->c_str()), nullptr};
+    execv(exe->c_str(), argv);
+    RT_LOGF(RT_TAG_RUNTIME, "netplay: could not start the game again: %s\n", std::strerror(errno));
+    std::_Exit(EXIT_FAILURE);
 #endif
     std::_Exit(0);
 }
@@ -110,14 +163,32 @@ void KeepSessionSave(const char* what) {
 
 bool Restart(const NetplayLobby::Plan& plan) {
     std::error_code ec;
+    if (std::filesystem::exists(HostMarker(), ec) || ec) {
+        RT_LOGF(RT_TAG_RUNTIME, "netplay: cannot replace session NAND while host-save recovery is pending or inaccessible\n");
+        return false;
+    }
     // A fresh NAND: the runtime's standard seeds (written at boot) plus the host's files.
     std::filesystem::remove_all(SessionNand(), ec);
+    if (ec) {
+        RT_LOGF(RT_TAG_RUNTIME, "netplay: could not clear the session NAND: %s\n", ec.message().c_str());
+        return false;
+    }
     std::filesystem::create_directories(SessionNand(), ec);
+    if (ec) {
+        RT_LOGF(RT_TAG_RUNTIME, "netplay: could not create the session NAND: %s\n", ec.message().c_str());
+        return false;
+    }
     for (const auto& [path, bytes] : plan.nandFiles) {
         const auto target = SessionNand() / std::filesystem::u8path(path);
         std::filesystem::create_directories(target.parent_path(), ec);
+        if (ec) {
+            RT_LOGF(RT_TAG_RUNTIME, "netplay: could not create the parent directory for %s: %s\n",
+                    path.c_str(), ec.message().c_str());
+            return false;
+        }
         std::ofstream out(target, std::ios::binary | std::ios::trunc);
         out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        out.close();  // Small writes may not reach the filesystem until close flushes the buffer.
         if (!out) {
             RT_LOGF(RT_TAG_RUNTIME, "netplay: could not write %s\n", path.c_str());
             return false;
@@ -130,7 +201,6 @@ bool Restart(const NetplayLobby::Plan& plan) {
     session << "players=" << static_cast<int>(plan.players) << "\n";
     session << "delay=" << plan.inputDelay << "\n";
     session << "host=" << plan.host << "\n";
-    session << "file=" << plan.saveFile << "\n";
     for (const auto& name : plan.names) {
         session << "name=" << name << "\n";
     }
@@ -144,10 +214,6 @@ bool Restart(const NetplayLobby::Plan& plan) {
     RestartProcess();
 }
 
-std::filesystem::path HostMarker() {
-    return SessionNand() / ".host";
-}
-
 // A host that closed the game during a session never went through EndSession: bring the session's
 // save back now, before anything reads the NAND.
 void RecoverHostSave() {
@@ -155,11 +221,12 @@ void RecoverHostSave() {
     if (!std::filesystem::exists(HostMarker(), ec)) {
         return;
     }
-    KeepSessionSave("from the last session you hosted:");
-    std::filesystem::remove(HostMarker(), ec);
+    if (KeepSessionSave("from the last session you hosted:")) {
+        std::filesystem::remove(HostMarker(), ec);
+    }
 }
 
-bool TakePendingSession(NetplaySession::Config& config, int& saveFile) {
+bool TakePendingSession(NetplaySession::Config& config) {
     std::ifstream in(SessionFile());
     if (!in) {
         RecoverHostSave();
@@ -198,16 +265,21 @@ bool TakePendingSession(NetplaySession::Config& config, int& saveFile) {
     config.playerCount = static_cast<uint8_t>(std::atoi(values["players"].c_str()));
     config.inputDelay = static_cast<uint32_t>(std::atoi(values["delay"].c_str()));
     config.host = values["host"];
-    saveFile = std::atoi(values["file"].c_str());
     if (config.sessionId == 0 || config.playerCount < 2 || config.localSlot >= config.playerCount ||
         config.inputDelay == 0 || (config.localSlot != 0 && config.host.empty())) {
         return false;
     }
+    if (config.localSlot == 0) {
+        std::ofstream marker(HostMarker());
+        marker << "1\n";
+        marker.close();
+        if (!marker) {
+            RT_LOGF(RT_TAG_RUNTIME, "netplay: could not create the host-save recovery marker\n");
+            return false;
+        }
+    }
     g_names = names;
     g_isHost = config.localSlot == 0;
-    if (g_isHost) {
-        std::ofstream(HostMarker()) << "1\n";
-    }
     RuntimeNandPath::NandRootOverride() = SessionNand();
     return true;
 }
@@ -220,9 +292,10 @@ void PrepareToLeave() {
     // The host keeps what was played: the session's save goes back over the player's own.
     if (g_isHost) {
         std::error_code markerError;
-        std::filesystem::remove(HostMarker(), markerError);
         RuntimeNandPath::NandRootOverride().clear();
-        KeepSessionSave("from the session:");
+        if (KeepSessionSave("from the session:")) {
+            std::filesystem::remove(HostMarker(), markerError);
+        }
     }
     std::error_code ec;
     std::filesystem::remove(SessionFile(), ec);

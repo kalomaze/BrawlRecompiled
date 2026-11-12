@@ -36,7 +36,7 @@ static std::string ReadGuestStringSafe(uint32_t addr)
 } // namespace
 
 // 0x801A9BA0 -> PPCHalt
-extern "C" void PPCHalt_8012E5A4()
+extern "C" void PPCHalt_HLE()
 {
     // A halt is never a clean shutdown: the guest reaches it after OSPanic or an
     // unrecoverable OS error. Report it like every other fatal path so the run
@@ -52,7 +52,7 @@ extern "C" void PPCHalt_8012E5A4()
     std::exit(EXIT_FAILURE);
 }
 
-PPC_NATIVE_OVERRIDE_VOID(801D50A8, PPCHalt_8012E5A4, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801D50A8, PPCHalt_HLE, (), ());
 
 // 0x801AD4E0 -> OS::Panic
 extern "C" void OS__Panic_801A2660_Cpu(CpuContext* ctx)
@@ -140,7 +140,7 @@ extern "C" uint32_t OSResetSystem()
 PPC_NATIVE_OVERRIDE(801DF82C, OSResetSystem, uint32_t, (), ());
 
 // 0x801B89E0 -> exit(int status)
-extern "C" uint32_t Exit_801AE58C(int status)
+extern "C" uint32_t Exit_HLE(int status)
 {
     RT_LOGF(RT_TAG_OS, "exit(status=%d) called via 0x801E41A8\n", status);
     std::fflush(stderr);
@@ -156,4 +156,4 @@ extern "C" uint32_t Exit_801AE58C(int status)
     return static_cast<uint32_t>(status);
 }
 
-PPC_NATIVE_OVERRIDE(801E41A8, Exit_801AE58C, uint32_t, (int status), (status));
+PPC_NATIVE_OVERRIDE(801E41A8, Exit_HLE, uint32_t, (int status), (status));

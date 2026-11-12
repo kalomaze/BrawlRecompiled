@@ -20,16 +20,6 @@
 #include <vector>
 #include <toml.hpp>
 #include "platform/host_platform.h"
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#include <shlobj.h>
-#else
-#include <cstdlib>
-#include <unistd.h>
-#endif
 
 struct RuntimeUserConfig {
     std::optional<bool> widescreen;
@@ -89,15 +79,10 @@ struct RuntimeUserConfig {
     std::optional<std::string> onlineName;
     std::optional<std::string> onlineServer;  // [online] server: the online server's "host[:port]"  // [online] name: this player's name in rooms  // [mods] sd_codes: the SD folder whose codes load; "vanilla" = no mods
     std::optional<bool> discordPresenceEnabled;
-    // The application ID of the WiiCompiled Discord application. This is only
-    // used by the base product; Retro Rewind supplies its own ID through the
-    // standard Dolphin /dev/dolphin interface.
+    // Discord application ID for rich presence.
     std::optional<std::string> discordClientId;
     std::optional<std::string> nandRoot;
     std::optional<std::string> dvdRoot;
-    // The one canonical Retro Rewind installation, owned and updated by the frontend. Setup records
-    // it here instead of copying the pack, so an asset-only update is visible on the next launch.
-    std::optional<std::string> retroRewindRoot;
     std::vector<std::string> overlayRoots;
     // Controller mappings use Wii/GameCube button names as keys and up to two
     // comma-separated SDL-style physical button names ("south", or
@@ -205,48 +190,7 @@ inline bool IsSupportedFrameInterpolationFps(uint32_t value) {
 }
 
 inline std::optional<std::filesystem::path> ExecutableDirectory() {
-#ifdef _WIN32
-    std::wstring buffer(MAX_PATH, L'\0');
-    for (;;) {
-        const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-        if (length == 0) {
-            return std::nullopt;
-        }
-        if (length < buffer.size() - 1) {
-            buffer.resize(length);
-            return std::filesystem::path(buffer).parent_path();
-        }
-        buffer.resize(buffer.size() * 2);
-    }
-#elif defined(__APPLE__) || defined(__ANDROID__)
     return RuntimePlatform::ExecutableDirectory();
-#else
-    // /proc/self/exe is a Linux-specific magic symlink to the running executable; readlink()
-    // does not NUL-terminate and silently truncates if the buffer is too small, so this grows
-    // the buffer until the result no longer fills it completely, the same doubling strategy as
-    // the Windows branch above uses for GetModuleFileNameW.
-    std::string buffer(256, '\0');
-    for (;;) {
-        const ssize_t length = readlink("/proc/self/exe", buffer.data(), buffer.size());
-        if (length < 0) {
-            return std::nullopt;
-        }
-        if (static_cast<size_t>(length) < buffer.size()) {
-            buffer.resize(static_cast<size_t>(length));
-            return std::filesystem::path(buffer).parent_path();
-        }
-        buffer.resize(buffer.size() * 2);
-    }
-#endif
-}
-
-// NSMBW: the Windows downloads up to 0.0.7 shipped this marker; such a folder is an old release,
-// whose UserData moves to Documents\MarioWiiSaveData (AdoptEarlierUserData), not a portable root.
-inline bool IsReleasedNsmbwMarker(const std::filesystem::path& marker) {
-    std::ifstream input(marker);
-    std::string line;
-    std::getline(input, line);
-    return line.rfind("Keep this file: settings, saves and caches stay in the UserData", 0) == 0;
 }
 
 // The portable root this executable lives under, or nullopt for a normal installation. The answer
@@ -261,8 +205,7 @@ inline const std::optional<std::filesystem::path>& PortableRootDirectory() {
         std::filesystem::path current = *executableDirectory;
         for (int level = 0; level <= kPortableSearchDepth; ++level) {
             std::error_code ec;
-            if (std::filesystem::is_regular_file(current / kPortableMarkerFileName, ec) &&
-                !IsReleasedNsmbwMarker(current / kPortableMarkerFileName)) {
+            if (std::filesystem::is_regular_file(current / kPortableMarkerFileName, ec)) {
                 return current;
             }
             const auto parent = current.parent_path();
@@ -276,99 +219,11 @@ inline const std::optional<std::filesystem::path>& PortableRootDirectory() {
     return root;
 }
 
-#ifdef _WIN32
-// NSMBW: on Windows the settings (with the game folder), saves and caches live in
-// Documents\MarioWiiSaveData, so a new version extracted anywhere carries on where the last left off.
-inline constexpr const wchar_t* kDocumentsDataDirectoryName = L"MarioWiiSaveData";
-
-// The first start with an empty MarioWiiSaveData takes over the newest earlier data: a portable
-// UserData beside this executable or beside another version's NSMBW.exe in the folder above it
-// (each release extracts to its own NSMBW-x.y.z-windows-x64 folder), or %LOCALAPPDATA%\WiiCompiled.
-// Logs stay behind.
-inline void AdoptEarlierUserData(const std::filesystem::path& target) {
-    std::error_code ec;
-    if (std::filesystem::exists(target / kConfigFileName, ec)) {
-        return;
-    }
-    std::vector<std::filesystem::path> candidates;
-    if (const auto executableDirectory = ExecutableDirectory()) {
-        candidates.push_back(*executableDirectory / kPortableUserDataDirectoryName);
-        const auto parent = executableDirectory->parent_path();
-        for (std::filesystem::directory_iterator it(parent, ec), end; !ec && it != end; it.increment(ec)) {
-            if (it->is_directory(ec) && it->path() != *executableDirectory) {
-                candidates.push_back(it->path() / kPortableUserDataDirectoryName);
-            }
-        }
-    }
-    PWSTR localPath = nullptr;
-    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &localPath)) && localPath) {
-        candidates.push_back(std::filesystem::path(localPath) / kApplicationDirectoryName);
-        CoTaskMemFree(localPath);
-    }
-    std::optional<std::filesystem::path> newest;
-    std::filesystem::file_time_type newestTime{};
-    for (const auto& candidate : candidates) {
-        std::error_code timeError;
-        const auto time = std::filesystem::last_write_time(candidate / kConfigFileName, timeError);
-        if (!timeError && (!newest || time > newestTime)) {
-            newest = candidate;
-            newestTime = time;
-        }
-    }
-    if (!newest) {
-        return;
-    }
-    std::filesystem::create_directories(target, ec);
-    for (std::filesystem::directory_iterator it(*newest, ec), end; !ec && it != end; it.increment(ec)) {
-        if (it->path().filename() == "Logs") {
-            continue;
-        }
-        std::error_code copyError;
-        std::filesystem::copy(it->path(), target / it->path().filename(),
-                              std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing,
-                              copyError);
-    }
-}
-#endif
-
 inline std::filesystem::path ApplicationDataDirectory() {
     if (const auto& portableRoot = PortableRootDirectory()) {
         return *portableRoot / kPortableUserDataDirectoryName;
     }
-#ifdef _WIN32
-    static const std::optional<std::filesystem::path> documents = []() -> std::optional<std::filesystem::path> {
-        PWSTR documentsPath = nullptr;
-        if (FAILED(SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_CREATE, nullptr, &documentsPath)) ||
-            documentsPath == nullptr) {
-            return std::nullopt;
-        }
-        const std::filesystem::path directory = std::filesystem::path(documentsPath) / kDocumentsDataDirectoryName;
-        CoTaskMemFree(documentsPath);
-        AdoptEarlierUserData(directory);
-        return directory;
-    }();
-    if (documents) {
-        return *documents;
-    }
-    PWSTR rawPath = nullptr;
-    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &rawPath)) && rawPath) {
-        const std::filesystem::path directory = std::filesystem::path(rawPath) / kApplicationDirectoryName;
-        CoTaskMemFree(rawPath);
-        return directory;
-    }
-#elif defined(__APPLE__) || defined(__ANDROID__)
     return RuntimePlatform::ApplicationDataDirectory(kApplicationDirectoryName);
-#else
-    // XDG Base Directory spec equivalent of FOLDERID_LocalAppData: $XDG_DATA_HOME if set and
-    // non-empty, otherwise its default of $HOME/.local/share.
-    if (const char* xdgDataHome = std::getenv("XDG_DATA_HOME"); xdgDataHome && *xdgDataHome) {
-        return std::filesystem::path(xdgDataHome) / kApplicationDirectoryName;
-    }
-    if (const char* home = std::getenv("HOME"); home && *home) {
-        return std::filesystem::path(home) / ".local" / "share" / kApplicationDirectoryName;
-    }
-#endif
-    return std::filesystem::current_path() / kApplicationDirectoryName;
 }
 
 inline std::filesystem::path ResolveConfigPath() {
@@ -432,15 +287,12 @@ inline void EnsureConfigFile() {
               "enabled = true\n\n"
               "[discord]\n"
               "# Rich Presence talks only to a locally-running Discord client.\n"
-              "# Retro Rewind supplies its official app ID automatically. Set this\n"
-              "# to WiiCompiled's Discord application ID for basic base-game presence.\n"
               "enabled = true\n"
               "# client_id = \"123456789012345678\"\n\n"
               "[paths]\n"
               "# dvd_root = \"D:\\\\Games\\\\SuperSmashBrosBrawl\\\\DATA\"\n"
               "# nand_root = \"D:\\\\WiiNand\"\n"
-              "# retro_rewind_root = \"D:\\\\RetroRewind\\\\RetroRewind6\"\n"
-              "# overlay_roots = [\"D:\\\\RetroRewind\"]\n";
+              "# overlay_roots = [\"D:\\\\BrawlMods\"]\n";
 }
 
 template <typename T>
@@ -628,7 +480,6 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
 
     config.nandRoot = FindConfigValue<std::string>(document, "paths", "nand_root");
     config.dvdRoot = FindConfigValue<std::string>(document, "paths", "dvd_root");
-    config.retroRewindRoot = FindConfigValue<std::string>(document, "paths", "retro_rewind_root");
     if (auto roots = FindConfigValue<std::vector<std::string>>(document, "paths", "overlay_roots")) {
         for (auto& root : *roots) {
             root = Trim(root);
@@ -740,7 +591,7 @@ inline bool WriteSetting(std::string_view section, std::string_view key, std::st
             // Append after the section's last real line rather than after the blank line that
             // separates it from the next header: this file is edited by hand and by the host
             // installer as well, and a key parked below the separator reads as if it belonged to
-            // the next section. The host writer (Launcher/WiiCompiled.Setup/RuntimeConfiguration.cs)
+            // the next section. The host configuration writer
             // applies exactly this rule.
             size_t insertAt = sectionEnd;
             while (insertAt > sectionStart + 1 && Trim(lines[insertAt - 1]).empty()) {
@@ -1254,7 +1105,7 @@ inline std::filesystem::path ResolvedDvdRoot() {
 }
 
 // NSMBW: a game folder for this run only, not saved (a "game" folder beside the program, so each
-// install plays its own game while they all share Documents\MarioWiiSaveData).
+// install plays its own game while they all share the application data directory).
 inline void UseDvdRootForThisRun(const std::filesystem::path& path) {
     Mutable().dvdRoot = PathToUtf8(path);
 }
@@ -1264,11 +1115,6 @@ inline bool SetDvdRoot(const std::filesystem::path& path) {
     const std::string value = PathToUtf8(path);
     Mutable().dvdRoot = value;
     return WriteSetting("paths", "dvd_root", FormatString(value));
-}
-
-/// The canonical Retro Rewind installation the frontend owns, or "" when none is recorded.
-inline std::string RetroRewindRoot(std::string fallback = "") {
-    return Get().retroRewindRoot.value_or(std::move(fallback));
 }
 
 inline bool DiscordPresenceEnabled(bool fallback = true) {
@@ -1340,9 +1186,6 @@ inline void LogLoadedConfig() {
             }
             if (config.nandRoot) {
                 std::cout << " nand_root=" << *config.nandRoot;
-            }
-            if (config.retroRewindRoot) {
-                std::cout << " retro_rewind_root=" << *config.retroRewindRoot;
             }
         }
         std::cout << std::endl;

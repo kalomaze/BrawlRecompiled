@@ -1,5 +1,3 @@
-using System.Buffers.Binary;
-
 namespace Translator.Core.Disassembly;
 
 public static partial class PpcDecoder
@@ -15,8 +13,27 @@ public static partial class PpcDecoder
         var frc = GetField(word, 6);
         var xo5 = xo & 0x1F;
 
+        // A-form arithmetic uses a five-bit XO; the upper five bits are not an X-form opcode.
         switch (xo5)
         {
+            case 18: // fdiv
+                mnemonic = rc ? "fdiv." : "fdiv";
+                operands.Add(FReg(frt));
+                operands.Add(FReg(fra));
+                operands.Add(FReg(frb));
+                return;
+            case 20: // fsub
+                mnemonic = rc ? "fsub." : "fsub";
+                operands.Add(FReg(frt));
+                operands.Add(FReg(fra));
+                operands.Add(FReg(frb));
+                return;
+            case 21: // fadd
+                mnemonic = rc ? "fadd." : "fadd";
+                operands.Add(FReg(frt));
+                operands.Add(FReg(fra));
+                operands.Add(FReg(frb));
+                return;
             case 23: // fsel
                 mnemonic = rc ? "fsel." : "fsel";
                 operands.Add(FReg(frt));
@@ -29,6 +46,11 @@ public static partial class PpcDecoder
                 operands.Add(FReg(frt));
                 operands.Add(FReg(fra));
                 operands.Add(FReg(frc));
+                return;
+            case 26: // frsqrte
+                mnemonic = rc ? "frsqrte." : "frsqrte";
+                operands.Add(FReg(frt));
+                operands.Add(FReg(frb));
                 return;
             case 28: // fmsub
                 mnemonic = rc ? "fmsub." : "fmsub";
@@ -136,39 +158,6 @@ public static partial class PpcDecoder
 
             case 12: // frsp
                 mnemonic = rc ? "frsp." : "frsp";
-                operands.Add(FReg(frt));
-                operands.Add(FReg(frb));
-                break;
-
-            case 18: // fdiv
-                mnemonic = rc ? "fdiv." : "fdiv";
-                operands.Add(FReg(frt));
-                operands.Add(FReg(fra));
-                operands.Add(FReg(frb));
-                break;
-
-            case 20: // fsub
-                mnemonic = rc ? "fsub." : "fsub";
-                operands.Add(FReg(frt));
-                operands.Add(FReg(fra));
-                operands.Add(FReg(frb));
-                break;
-
-            case 21: // fadd
-                mnemonic = rc ? "fadd." : "fadd";
-                operands.Add(FReg(frt));
-                operands.Add(FReg(fra));
-                operands.Add(FReg(frb));
-                break;
-
-            case 24: // fres
-                mnemonic = rc ? "fres." : "fres";
-                operands.Add(FReg(frt));
-                operands.Add(FReg(frb));
-                break;
-
-            case 26: // frsqrte
-                mnemonic = rc ? "frsqrte." : "frsqrte";
                 operands.Add(FReg(frt));
                 operands.Add(FReg(frb));
                 break;

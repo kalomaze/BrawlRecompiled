@@ -154,14 +154,14 @@ using namespace OsHleInternal;
 // Cross-file HLE entry points, declared here for the same reason they were
 // declared at the top of the old single OS translation unit: the OS subsystems
 // call into each other.
-extern "C" int32_t OS__DisableInterrupts_801a65ac();
-extern "C" int32_t OS__EnableInterrupts_801a65c0();
-extern "C" int32_t OS__RestoreInterrupts_801a65d4(int32_t level);
-extern "C" void OS__ClearContext_801a2098(uint32_t contextAddr);
-extern "C" void OS__SetCurrentContext_801a1e70(uint32_t contextAddr);
-extern "C" [[noreturn]] void OS__LoadContext_801a1f58(CpuContext* ctx);
-extern "C" void OSSuspendThread_HLE_801aa6a8(CpuContext* ctx);
-extern "C" void OSResumeThread_HLE_801aa58c(CpuContext* ctx);
-extern "C" void OSWakeupThread_HLE_801aaaa4(CpuContext* ctx);
-extern "C" void OSSleepThread_HLE_801aa9b8(CpuContext* ctx);
-extern "C" void SelectThread_801a9c08(CpuContext* ctx);
+extern "C" int32_t OS__DisableInterrupts_HLE();
+extern "C" int32_t OS__EnableInterrupts_HLE();
+extern "C" int32_t OS__RestoreInterrupts_HLE(int32_t level);
+extern "C" void OS__ClearContext_HLE(uint32_t contextAddr);
+extern "C" void OS__SetCurrentContext_HLE(uint32_t contextAddr);
+extern "C" [[noreturn]] void OS__LoadContext_HLE(CpuContext* ctx);
+extern "C" void OSSuspendThread_HLE(CpuContext* ctx);
+extern "C" void OSResumeThread_HLE(CpuContext* ctx);
+extern "C" void OSWakeupThread_HLE(CpuContext* ctx);
+extern "C" void OSSleepThread_HLE(CpuContext* ctx);
+extern "C" void SelectThread_HLE(CpuContext* ctx);

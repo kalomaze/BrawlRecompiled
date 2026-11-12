@@ -71,14 +71,6 @@ int32_t ComputeThreadEffectivePriority(uint32_t threadPtr)
     return priority;
 }
 
-bool IsThpVideoDecoderEntry(uint32_t entryFunc)
-{
-    // Mario Kart Wii's THP decoder threads (0x805529A8 / 0x80552A74) needed GQR presets.
-    // NSMBW ships no THP video and no THP player code, so no thread entry qualifies.
-    (void)entryFunc;
-    return false;
-}
-
 void InsertThreadIntoQueueByPriority(uint32_t queuePtr, uint32_t threadPtr, int32_t priority)
 {
     ::Memory::Write32(threadPtr + kThreadQueueOffset, queuePtr);
@@ -203,7 +195,7 @@ void WakeThreadJoiners(CpuContext* cpu, uint32_t threadPtr)
         return;
     }
     cpu->gpr[3] = threadPtr + kThreadJoinQueueOffset;
-    OSWakeupThread_HLE_801aaaa4(cpu);
+    OSWakeupThread_HLE(cpu);
 }
 
 void UnlockAllThreadMutexes(CpuContext* cpu, uint32_t threadPtr)
@@ -221,7 +213,7 @@ void UnlockAllThreadMutexes(CpuContext* cpu, uint32_t threadPtr)
 void TerminateThreadCommon(CpuContext* cpu, uint32_t threadPtr, bool publishExitValue,
                            uint32_t exitValue)
 {
-    OS__ClearContext_801a2098(threadPtr);
+    OS__ClearContext_HLE(threadPtr);
 
     const uint16_t attributes = ::Memory::Read16(threadPtr + kThreadAttrOffset);
     const bool detached = (attributes & 1u) != 0;
@@ -244,9 +236,9 @@ void TerminateThreadCommon(CpuContext* cpu, uint32_t threadPtr, bool publishExit
 // Fiber-based threading HLE: each guest OSThread gets a host fiber for cooperative
 // context switching without blocking the main thread.
 
-// OSCreateThread (0x801b5130)
+// OSCreateThread
 // Creates a new guest thread and associates a host fiber with it.
-extern "C" void OSCreateThread_HLE_801a9e84(CpuContext* ctx)
+extern "C" void OSCreateThread_HLE(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
     
@@ -311,17 +303,6 @@ extern "C" void OSCreateThread_HLE_801a9e84(CpuContext* ctx)
             InvokeIndirectCpu(0x801D8218u, cpu); // OSInitContext
         }
 
-        if (IsThpVideoDecoderEntry(entryFunc)) {
-            // Decoder threads restore their own context via OSLoadContext, so the saved
-            // context needs these GQR2-GQR5 values or paired-single THP decode breaks
-            // under the all-zero OSInitContext defaults.
-            ::Memory::Write32(threadPtr + 0x1ACu, 0x00040004u);
-            ::Memory::Write32(threadPtr + 0x1B0u, 0x00050005u);
-            ::Memory::Write32(threadPtr + 0x1B4u, 0x00060006u);
-            ::Memory::Write32(threadPtr + 0x1B8u, 0x00070007u);
-
-        }
-
         ::Memory::Write32(threadPtr + 0x84u, 0x801E0F68u); // LR = OSExitThread
         ::Memory::Write32(threadPtr + 0x0Cu, entryArg);    // r3 = argument
 
@@ -338,10 +319,10 @@ extern "C" void OSCreateThread_HLE_801a9e84(CpuContext* ctx)
         // Match the original OSCreateThread: when a floating-point exception handler is installed
         // (__OSErrorTable[OS_ERROR_FPE] != NULL) the new thread gets FE0|FE1 in SRR1, the FPSAVED
         // state bit and an FPSCR built from __OSFpscrEnableBits.
-        constexpr uint32_t kSchedulerInitFlagAddr = 0x804DD1D0u;  // SPM OSCreateThread 0x80274F64: __OSErrorTable + 0x40.
-        constexpr uint32_t kThreadAttrSourceAddr = 0x8059E9C0u;   // __OSFpscrEnableBits
-        if (Memory::Contains(kSchedulerInitFlagAddr, 4) &&
-            ::Memory::Read32(kSchedulerInitFlagAddr) != 0) {
+        constexpr uint32_t kFpExceptionHandlerAddr = 0x804DD1D0u;  // Brawl __OSErrorTable[OS_ERR_FP_EXCEPTION].
+        constexpr uint32_t kFpscrEnableBitsAddr = 0x8059E9C0u;   // __OSFpscrEnableBits
+        if (Memory::Contains(kFpExceptionHandlerAddr, 4) &&
+            ::Memory::Read32(kFpExceptionHandlerAddr) != 0) {
             uint32_t srr1 = ::Memory::Read32(threadPtr + 0x19Cu);
             srr1 |= 0x900u;
             ::Memory::Write32(threadPtr + 0x19Cu, srr1);
@@ -350,8 +331,8 @@ extern "C" void OSCreateThread_HLE_801a9e84(CpuContext* ctx)
             modeFlags = static_cast<uint16_t>(modeFlags | 0x1u);
             ::Memory::Write16(threadPtr + 0x1A2u, modeFlags);
 
-            if (Memory::Contains(kThreadAttrSourceAddr, 4)) {
-                const uint32_t attr = (::Memory::Read32(kThreadAttrSourceAddr) & 0xF8u) | 0x4u;
+            if (Memory::Contains(kFpscrEnableBitsAddr, 4)) {
+                const uint32_t attr = (::Memory::Read32(kFpscrEnableBitsAddr) & 0xF8u) | 0x4u;
                 ::Memory::Write32(threadPtr + 0x194u, attr);
             }
 
@@ -362,7 +343,7 @@ extern "C" void OSCreateThread_HLE_801a9e84(CpuContext* ctx)
         }
 
         // Add to global thread list (matching original SDK logic exactly)
-        const int32_t irqState = OS__DisableInterrupts_801a65ac();
+        const int32_t irqState = OS__DisableInterrupts_HLE();
         
         // Read thread list tail (last added thread)
         const uint32_t tailThread = ::Memory::Read32(kThreadListTailAddr);
@@ -387,7 +368,7 @@ extern "C" void OSCreateThread_HLE_801a9e84(CpuContext* ctx)
         // New thread becomes the tail
         ::Memory::Write32(kThreadListTailAddr, threadPtr);
         
-        OS__RestoreInterrupts_801a65d4(irqState);
+        OS__RestoreInterrupts_HLE(irqState);
         
         cpu->gpr[3] = 1; // Return success
     } catch (const ::Memory::AccessViolation& e) {
@@ -395,18 +376,18 @@ extern "C" void OSCreateThread_HLE_801a9e84(CpuContext* ctx)
         cpu->gpr[3] = 0; // Return failure
     }
 }
-PPC_NATIVE_OVERRIDE_VOID(801E0CFC, OSCreateThread_HLE_801a9e84, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E0CFC, OSCreateThread_HLE, (CpuContext* ctx), (ctx));
 
-extern "C" void OSExitThread_HLE_801aa0f0(CpuContext* ctx)
+extern "C" void OSExitThread_HLE(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
     const uint32_t exitValue = cpu->gpr[3];
-    const int32_t irqState = OS__DisableInterrupts_801a65ac();
+    const int32_t irqState = OS__DisableInterrupts_HLE();
 
     try {
         const uint32_t threadPtr = ::Memory::Read32(kOSRunningContextAddr);
         if (threadPtr == 0) {
-            OS__RestoreInterrupts_801a65d4(irqState);
+            OS__RestoreInterrupts_HLE(irqState);
             return;
         }
 
@@ -414,16 +395,16 @@ extern "C" void OSExitThread_HLE_801aa0f0(CpuContext* ctx)
 
         ::Memory::Write32(kSchedulerReschedCounterAddr, 1);
         cpu->gpr[3] = 0;
-        SelectThread_801a9c08(cpu);
+        SelectThread_HLE(cpu);
     } catch (const ::Memory::AccessViolation& e) {
         LogMemoryError(RT_TAG_OS, "OSExitThread", e);
     }
 
-    OS__RestoreInterrupts_801a65d4(irqState);
+    OS__RestoreInterrupts_HLE(irqState);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E0F68, OSExitThread_HLE_801aa0f0, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E0F68, OSExitThread_HLE, (CpuContext* ctx), (ctx));
 
-extern "C" void OSCancelThread_HLE_801aa1d4(CpuContext* ctx)
+extern "C" void OSCancelThread_HLE(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
     const uint32_t threadPtr = cpu->gpr[3];
@@ -431,12 +412,12 @@ extern "C" void OSCancelThread_HLE_801aa1d4(CpuContext* ctx)
         return;
     }
 
-    const int32_t irqState = OS__DisableInterrupts_801a65ac();
+    const int32_t irqState = OS__DisableInterrupts_HLE();
 
     try {
         const uint16_t state = ::Memory::Read16(threadPtr + kThreadStateOffset);
         if (state == 3 || state == 0 || state > 4) {
-            OS__RestoreInterrupts_801a65d4(irqState);
+            OS__RestoreInterrupts_HLE(irqState);
             return;
         }
 
@@ -455,15 +436,15 @@ extern "C" void OSCancelThread_HLE_801aa1d4(CpuContext* ctx)
 
         if (::Memory::Read32(kSchedulerReschedCounterAddr) != 0) {
             cpu->gpr[3] = 0;
-            SelectThread_801a9c08(cpu);
+            SelectThread_HLE(cpu);
         }
     } catch (const ::Memory::AccessViolation& e) {
         LogMemoryError(RT_TAG_OS, "OSCancelThread", e);
     }
 
-    OS__RestoreInterrupts_801a65d4(irqState);
+    OS__RestoreInterrupts_HLE(irqState);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E104C, OSCancelThread_HLE_801aa1d4, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E104C, OSCancelThread_HLE, (CpuContext* ctx), (ctx));
 
 extern "C" void OSJoinThread_HLE_801aa3ac(CpuContext* ctx)
 {
@@ -475,7 +456,7 @@ extern "C" void OSJoinThread_HLE_801aa3ac(CpuContext* ctx)
         return;
     }
 
-    const int32_t irqState = OS__DisableInterrupts_801a65ac();
+    const int32_t irqState = OS__DisableInterrupts_HLE();
     uint32_t result = 0;
 
     try {
@@ -485,7 +466,7 @@ extern "C" void OSJoinThread_HLE_801aa3ac(CpuContext* ctx)
 
         if ((attributes & 1u) == 0 && state != kThreadStateMoribund && joinHead == 0) {
             cpu->gpr[3] = threadPtr + kThreadJoinQueueOffset;
-            OSSleepThread_HLE_801aa9b8(cpu);
+            OSSleepThread_HLE(cpu);
             state = ::Memory::Read16(threadPtr + kThreadStateOffset);
 
             bool foundInList = false;
@@ -500,7 +481,7 @@ extern "C" void OSJoinThread_HLE_801aa3ac(CpuContext* ctx)
             }
 
             if (!foundInList && state != kThreadStateMoribund) {
-                OS__RestoreInterrupts_801a65d4(irqState);
+                OS__RestoreInterrupts_HLE(irqState);
                 cpu->gpr[3] = 0;
                 return;
             }
@@ -519,14 +500,9 @@ extern "C" void OSJoinThread_HLE_801aa3ac(CpuContext* ctx)
         result = 0;
     }
 
-    OS__RestoreInterrupts_801a65d4(irqState);
+    OS__RestoreInterrupts_HLE(irqState);
     cpu->gpr[3] = result;
 }
-#if 0  // SPM: OSJoinThread: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801B5670, OSJoinThread_HLE_801aa3ac, (CpuContext* ctx), (ctx));
-#endif
-#endif
 
 extern "C" void OSDetachThread_HLE_801aa4ec(CpuContext* ctx)
 {
@@ -536,7 +512,7 @@ extern "C" void OSDetachThread_HLE_801aa4ec(CpuContext* ctx)
         return;
     }
 
-    const int32_t irqState = OS__DisableInterrupts_801a65ac();
+    const int32_t irqState = OS__DisableInterrupts_HLE();
 
     try {
         const uint16_t attributes = ::Memory::Read16(threadPtr + kThreadAttrOffset);
@@ -554,15 +530,10 @@ extern "C" void OSDetachThread_HLE_801aa4ec(CpuContext* ctx)
         LogMemoryError(RT_TAG_OS, "OSDetachThread", e);
     }
 
-    OS__RestoreInterrupts_801a65d4(irqState);
+    OS__RestoreInterrupts_HLE(irqState);
 }
-#if 0  // SPM: OSDetachThread: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801B57C0, OSDetachThread_HLE_801aa4ec, (CpuContext* ctx), (ctx));
-#endif
-#endif
 
-extern "C" void OSSuspendThread_HLE_801aa6a8(CpuContext* ctx)
+extern "C" void OSSuspendThread_HLE(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
     const uint32_t threadPtr = cpu->gpr[3];
@@ -571,7 +542,7 @@ extern "C" void OSSuspendThread_HLE_801aa6a8(CpuContext* ctx)
         return;
     }
 
-    const int32_t irqState = OS__DisableInterrupts_801a65ac();
+    const int32_t irqState = OS__DisableInterrupts_HLE();
 
     try {
         const int32_t suspendCount =
@@ -604,7 +575,7 @@ extern "C" void OSSuspendThread_HLE_801aa6a8(CpuContext* ctx)
 
             if (::Memory::Read32(kSchedulerReschedCounterAddr) != 0) {
                 cpu->gpr[3] = 0;
-                SelectThread_801a9c08(cpu);
+                SelectThread_HLE(cpu);
             }
         }
 
@@ -614,13 +585,13 @@ extern "C" void OSSuspendThread_HLE_801aa6a8(CpuContext* ctx)
         cpu->gpr[3] = 0;
     }
 
-    OS__RestoreInterrupts_801a65d4(irqState);
+    OS__RestoreInterrupts_HLE(irqState);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E15FC, OSSuspendThread_HLE_801aa6a8, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E15FC, OSSuspendThread_HLE, (CpuContext* ctx), (ctx));
 
-// OSResumeThread (0x801b5860)
+// OSResumeThread
 // Resumes a suspended thread, making it eligible for scheduling.
-extern "C" void OSResumeThread_HLE_801aa58c(CpuContext* ctx)
+extern "C" void OSResumeThread_HLE(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
     const uint32_t threadPtr = cpu->gpr[3];
@@ -630,7 +601,7 @@ extern "C" void OSResumeThread_HLE_801aa58c(CpuContext* ctx)
         return;
     }
     
-    const int32_t irqState = OS__DisableInterrupts_801a65ac();
+    const int32_t irqState = OS__DisableInterrupts_HLE();
     
     try {
         // Read current suspend count
@@ -705,7 +676,7 @@ extern "C" void OSResumeThread_HLE_801aa58c(CpuContext* ctx)
 
                 if (::Memory::Read32(kSchedulerReschedCounterAddr) != 0) {
                     cpu->gpr[3] = 0;
-                    SelectThread_801a9c08(cpu);
+                    SelectThread_HLE(cpu);
                 }
             }
         }
@@ -717,6 +688,6 @@ extern "C" void OSResumeThread_HLE_801aa58c(CpuContext* ctx)
         cpu->gpr[3] = 0;
     }
     
-    OS__RestoreInterrupts_801a65d4(irqState);
+    OS__RestoreInterrupts_HLE(irqState);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E1364, OSResumeThread_HLE_801aa58c, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E1364, OSResumeThread_HLE, (CpuContext* ctx), (ctx));

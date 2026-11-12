@@ -167,11 +167,9 @@ trees themselves (fetched by `Launcher/Prepare-Dependencies.ps1`) so end-user bu
 - **Zstandard** is offered under BSD-3-Clause or GPL-2.0. **This project elects BSD-3-Clause.**
   Copyright (c) Meta Platforms, Inc. and affiliates.
 
-## Bundled in the setup executable's toolkit payload
+## Windows development toolkit
 
-The distributed `WiiCompiled-Setup.exe` carries a build toolkit so that translation and
-compilation can run on a machine with nothing preinstalled. These tools are redistributed
-unmodified, with their license texts, in the installer's `licenses/` folder.
+The Windows preparation scripts download these tools with their upstream licenses.
 
 | Component | License | Upstream |
 | --- | --- | --- |
@@ -210,9 +208,7 @@ Not code, but the documentation this project depends on:
 - [WiiBrew](https://wiibrew.org/wiki/) - Wii hardware and IOS documentation.
 - [Custom Mario Kart Wiiki (Tockdom)](https://wiki.tockdom.com/) - Mario Kart Wii file formats and
   modding documentation.
-- [Retro Rewind](https://wiki.tockdom.com/wiki/Retro_Rewind) by ZPL - the mod distribution this
-  project can build as a static profile. No Retro Rewind content is redistributed here; users
-  supply their own copy.
+
 
 ---
 

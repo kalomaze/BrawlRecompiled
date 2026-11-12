@@ -180,10 +180,19 @@ sealed class WiiDisc : IDisposable
     // The raw (still encrypted) disc bytes behind each container format.
     abstract class Container : IDisposable
     {
-        protected readonly FileStream File;
+        readonly List<FileStream> parts = new();
         public int Holes;  // reads that landed on blocks the image does not store (read as zeros)
 
-        protected Container(string path) => File = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1, FileOptions.RandomAccess);
+        protected Container(string path)
+        {
+            parts.Add(OpenPart(path));
+            if (Path.GetExtension(path).Equals(".wbfs", StringComparison.OrdinalIgnoreCase))
+                for (int i = 1; System.IO.File.Exists(Path.ChangeExtension(path, $"wbf{i}")); i++)
+                    parts.Add(OpenPart(Path.ChangeExtension(path, $"wbf{i}")));
+        }
+
+        static FileStream OpenPart(string path) =>
+            new(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1, FileOptions.RandomAccess);
 
         public static Container Open(string path)
         {
@@ -214,11 +223,24 @@ sealed class WiiDisc : IDisposable
 
         protected void ReadFile(long fileOff, Span<byte> dst)
         {
-            int n = RandomAccess.Read(File.SafeFileHandle, dst, fileOff);
-            if (n < dst.Length) { Holes++; dst[n..].Clear(); }  // past the end of a truncated image
+            foreach (var part in parts)
+            {
+                if (fileOff >= part.Length) { fileOff -= part.Length; continue; }
+                while (!dst.IsEmpty && fileOff < part.Length)
+                {
+                    int count = (int)Math.Min(dst.Length, part.Length - fileOff);
+                    int n = RandomAccess.Read(part.SafeFileHandle, dst[..count], fileOff);
+                    if (n == 0) throw new EndOfStreamException("Disc image is truncated.");
+                    dst = dst[n..];
+                    fileOff += n;
+                }
+                if (dst.IsEmpty) return;
+                fileOff = 0;
+            }
+            throw new EndOfStreamException("Disc image is truncated; for split WBFS, keep all .wbf1, .wbf2, ... parts beside it.");
         }
 
-        public void Dispose() => File.Dispose();
+        public void Dispose() { foreach (var part in parts) part.Dispose(); }
     }
 
     sealed class Iso : Container

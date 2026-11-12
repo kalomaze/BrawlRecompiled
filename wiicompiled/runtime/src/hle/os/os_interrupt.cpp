@@ -15,7 +15,7 @@
 #include "runtime_log.h"
 #include "os_internal.h"
 
-extern "C" uint32_t SetInterruptMask_801a66e0(uint32_t mask, uint32_t enable);
+extern "C" uint32_t SetInterruptMask_HLE(uint32_t mask, uint32_t enable);
 
 namespace OsHleInternal {
 std::atomic<bool> g_interrupts_enabled{true};
@@ -50,21 +50,21 @@ inline void UpdateCurrentContextInterruptFlag(bool enabled)
 } // namespace
 
 // Minimal, host-side replacements for early OS interrupt/exception helpers.
-extern "C" int32_t OS__DisableInterrupts_801a65ac()
+extern "C" int32_t OS__DisableInterrupts_HLE()
 {
     const bool previous = g_interrupts_enabled.exchange(false);
     UpdateCurrentContextInterruptFlag(false);
     return previous ? 1 : 0;
 }
 
-extern "C" int32_t OS__RestoreInterrupts_801a65d4(int32_t level)
+extern "C" int32_t OS__RestoreInterrupts_HLE(int32_t level)
 {
     const bool prev = g_interrupts_enabled.exchange(level != 0);
     UpdateCurrentContextInterruptFlag(level != 0);
     return prev ? 1 : 0;
 }
 
-extern "C" int32_t OS__EnableInterrupts_801a65c0()
+extern "C" int32_t OS__EnableInterrupts_HLE()
 {
     const bool prev = g_interrupts_enabled.exchange(true);
     UpdateCurrentContextInterruptFlag(true);
@@ -76,7 +76,7 @@ bool OS_HLE_InterruptsEnabled() noexcept
     return g_interrupts_enabled.load(std::memory_order_acquire);
 }
 
-extern "C" uint32_t OS____InterruptInit_801a661c(uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8)
+extern "C" uint32_t OS____InterruptInit_HLE(uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8)
 {
     (void)r3;
     (void)r4;
@@ -86,7 +86,7 @@ extern "C" uint32_t OS____InterruptInit_801a661c(uint32_t r3, uint32_t r4, uint3
     (void)r8;
 
     std::call_once(interrupt_init_log_once, [&]() {
-        RT_LOG(RT_TAG_OS) << "OS____InterruptInit_801a661c called: r3=" << r3 << " r4=" << r4 << " r5=" << r5
+        RT_LOG(RT_TAG_OS) << "OS____InterruptInit_HLE called: r3=" << r3 << " r4=" << r4 << " r5=" << r5
                   << " r6=" << r6 << " r7=" << r7 << " r8=" << r8 << std::endl;
         RT_LOG(RT_TAG_OS) << "OSInterruptInit: skipped hardware MMIO setup; marking interrupts initialized" << std::endl;
     });
@@ -110,13 +110,13 @@ extern "C" uint32_t OS____InterruptInit_801a661c(uint32_t r3, uint32_t r4, uint3
         ::Memory::Write32(kInterruptMaskHiAddr, 0);
         g_interrupt_mask.store(0);
     } catch (const ::Memory::AccessViolation& e) {
-        LogMemoryError(RT_TAG_OS, "OS____InterruptInit_801a661c", e);
+        LogMemoryError(RT_TAG_OS, "OS____InterruptInit_HLE", e);
     }
 
     return 0;
 }
 
-extern "C" uint32_t OS__ExceptionInit_801a00e0(uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8, uint32_t r20)
+extern "C" uint32_t OS__ExceptionInit_HLE(uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8, uint32_t r20)
 {
     (void)r3;
     (void)r4;
@@ -127,7 +127,7 @@ extern "C" uint32_t OS__ExceptionInit_801a00e0(uint32_t r3, uint32_t r4, uint32_
     (void)r20;
 
     std::call_once(exception_init_log_once, [&]() {
-        RT_LOG(RT_TAG_OS) << "OS__ExceptionInit_801a00e0 called: r3=" << r3 << " r4=" << r4 << " r5=" << r5
+        RT_LOG(RT_TAG_OS) << "OS__ExceptionInit_HLE called: r3=" << r3 << " r4=" << r4 << " r5=" << r5
                   << " r6=" << r6 << " r7=" << r7 << " r8=" << r8 << " r20=" << r20 << std::endl;
         RT_LOG(RT_TAG_OS) << "OSExceptionInit: skipped exception vector setup" << std::endl;
     });
@@ -172,7 +172,7 @@ extern "C" uint32_t __OSSetInterruptHandler_801a65f8_hle(uint32_t interrupt, uin
 
 extern "C" uint32_t __OSUnmaskInterrupts_801a69bc_hle(uint32_t mask)
 {
-    const int32_t level = OS__DisableInterrupts_801a65ac();
+    const int32_t level = OS__DisableInterrupts_HLE();
 
     uint32_t previous = 0;
     try {
@@ -186,20 +186,20 @@ extern "C" uint32_t __OSUnmaskInterrupts_801a69bc_hle(uint32_t mask)
 
         const uint32_t combinedBefore = loMask | hiMask;
         const uint32_t combinedAfter = newLo | hiMask;
-        for (uint32_t pending = mask & combinedBefore; pending != 0; pending = SetInterruptMask_801a66e0(pending, combinedAfter)) {
+        for (uint32_t pending = mask & combinedBefore; pending != 0; pending = SetInterruptMask_HLE(pending, combinedAfter)) {
         }
     } catch (const ::Memory::AccessViolation& e) {
         LogMemoryError(RT_TAG_OS, "__OSUnmaskInterrupts_801a69bc", e);
     }
 
-    OS__RestoreInterrupts_801a65d4(level);
+    OS__RestoreInterrupts_HLE(level);
     return previous;
 }
 
 // EXI: early hardware init touches Hollywood registers (0xCD00xxxx). Provide a no-op stub.
-extern "C" uint32_t EXIInit_80168fa0()
+extern "C" uint32_t EXIInit_HLE()
 {
-    RT_LOG(RT_TAG_OS) << "EXIInit_80168fa0 called: skipping MMIO register setup" << std::endl;
+    RT_LOG(RT_TAG_OS) << "EXIInit_HLE called: skipping MMIO register setup" << std::endl;
     return 0;
 }
 
@@ -209,7 +209,7 @@ extern "C" uint32_t EXIInit_80168fa0()
 
 // SetInterruptMask (0x801b12b0): stub for Hollywood interrupt controller MMIO we don't emulate.
 // Callers loop on this until it returns 0, so always return 0 to break the loop.
-extern "C" uint32_t SetInterruptMask_801a66e0(uint32_t mask, uint32_t enable)
+extern "C" uint32_t SetInterruptMask_HLE(uint32_t mask, uint32_t enable)
 {
     // Keep the state tracking (useful for debugging)
     static std::atomic<int> call_count{0};
@@ -226,32 +226,32 @@ extern "C" uint32_t SetInterruptMask_801a66e0(uint32_t mask, uint32_t enable)
 
     // Log occasionally
     if (prev_count < 8 || (prev_count & 0x3FF) == 0) {
-        RT_LOG(RT_TAG_OS) << "SetInterruptMask_801a66e0 called: mask=0x" << std::hex << mask << std::dec
+        RT_LOG(RT_TAG_OS) << "SetInterruptMask_HLE called: mask=0x" << std::hex << mask << std::dec
                   << " enable=" << enable
                   << " (forcing return 0 to break loop)" << std::endl;
     }
     return 0;
 }
 
-PPC_NATIVE_OVERRIDE(801DCF10, OS__DisableInterrupts_801a65ac, int32_t, (), ());
-PPC_NATIVE_OVERRIDE(801DCF24, OS__EnableInterrupts_801a65c0, int32_t, (), ());
-PPC_NATIVE_OVERRIDE(801DCF38, OS__RestoreInterrupts_801a65d4, int32_t, (int32_t level), (level));
-PPC_NATIVE_OVERRIDE(801DCF80, OS____InterruptInit_801a661c, uint32_t, (uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8), (r3, r4, r5, r6, r7, r8));
-PPC_NATIVE_OVERRIDE(801DD044, SetInterruptMask_801a66e0, uint32_t, (uint32_t mask, uint32_t enable), (mask, enable));
-PPC_NATIVE_OVERRIDE(801D6168, OS__ExceptionInit_801a00e0, uint32_t, (uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8, uint32_t r20), (r3, r4, r5, r6, r7, r8, r20));
-PPC_NATIVE_OVERRIDE(801E531C, EXIInit_80168fa0, uint32_t, (), ());
+PPC_NATIVE_OVERRIDE(801DCF10, OS__DisableInterrupts_HLE, int32_t, (), ());
+PPC_NATIVE_OVERRIDE(801DCF24, OS__EnableInterrupts_HLE, int32_t, (), ());
+PPC_NATIVE_OVERRIDE(801DCF38, OS__RestoreInterrupts_HLE, int32_t, (int32_t level), (level));
+PPC_NATIVE_OVERRIDE(801DCF80, OS____InterruptInit_HLE, uint32_t, (uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8), (r3, r4, r5, r6, r7, r8));
+PPC_NATIVE_OVERRIDE(801DD044, SetInterruptMask_HLE, uint32_t, (uint32_t mask, uint32_t enable), (mask, enable));
+PPC_NATIVE_OVERRIDE(801D6168, OS__ExceptionInit_HLE, uint32_t, (uint32_t r3, uint32_t r4, uint32_t r5, uint32_t r6, uint32_t r7, uint32_t r8, uint32_t r20), (r3, r4, r5, r6, r7, r8, r20));
+PPC_NATIVE_OVERRIDE(801E531C, EXIInit_HLE, uint32_t, (), ());
 REGISTER_NATIVE_FUNCTION(0x801DCF5C, __OSSetInterruptHandler_801a65f8_hle);
 REGISTER_NATIVE_FUNCTION(0x801DD320, __OSUnmaskInterrupts_801a69bc_hle);
 
 // OS____MaskInterrupts (0x801b1510): stubbed out because its verification loop reads MMIO
 // registers we don't emulate, which would spin forever.
-extern "C" uint32_t OS____MaskInterrupts_801a693c(uint32_t mask, uint32_t unmask)
+extern "C" uint32_t OS____MaskInterrupts_HLE(uint32_t mask, uint32_t unmask)
 {
     static std::atomic<int> call_count{0};
     const int count = call_count.fetch_add(1);
     
     if (count < 5) {
-        RT_LOG(RT_TAG_OS) << "OS____MaskInterrupts_801a693c called: mask=0x" << std::hex << mask
+        RT_LOG(RT_TAG_OS) << "OS____MaskInterrupts_HLE called: mask=0x" << std::hex << mask
                   << " unmask=0x" << unmask << std::dec 
                   << " (stubbed to prevent MMIO verification loop)" << std::endl;
     }
@@ -272,19 +272,19 @@ extern "C" uint32_t OS____MaskInterrupts_801a693c(uint32_t mask, uint32_t unmask
     return old_mask;
 }
 
-PPC_NATIVE_OVERRIDE(801DD2A0, OS____MaskInterrupts_801a693c, uint32_t, (uint32_t mask, uint32_t unmask), (mask, unmask));
+PPC_NATIVE_OVERRIDE(801DD2A0, OS____MaskInterrupts_HLE, uint32_t, (uint32_t mask, uint32_t unmask), (mask, unmask));
 
 // ----------------------------------------------------------------------------
 // EXISelect / EXIDeselect - HLE Stubs (0x801b95c0 / 0x801b96f0)
 // Real implementation touches MMIO at 0xCD0068xx; stub returns 1 (success).
 // ----------------------------------------------------------------------------
 
-extern "C" uint32_t EXISelect_801689d0(uint32_t channel, uint32_t device, uint32_t frequency)
+extern "C" uint32_t EXISelect_HLE(uint32_t channel, uint32_t device, uint32_t frequency)
 {
     // Log occasionally to avoid spam if polled frequently
     static int log_counter = 0;
     if (log_counter++ < 10) {
-        RT_LOG(RT_TAG_OS) << "EXISelect_801689d0 called: channel=" << channel
+        RT_LOG(RT_TAG_OS) << "EXISelect_HLE called: channel=" << channel
                   << " device=" << device << " freq=" << frequency 
                   << " (stubbed success)" << std::endl;
     }
@@ -306,16 +306,16 @@ extern "C" uint32_t EXISelect_801689d0(uint32_t channel, uint32_t device, uint32
         return 1;                                                         \
     }
 
-EXI_CHANNEL_STUB(EXIDeselect_80168b00, 10, "channel=")
+EXI_CHANNEL_STUB(EXIDeselect_HLE, 10, "channel=")
 
 // Register the functions
-PPC_NATIVE_OVERRIDE(801E4D4C, EXISelect_801689d0, uint32_t, (uint32_t channel, uint32_t device, uint32_t frequency), (channel, device, frequency));
-PPC_NATIVE_OVERRIDE(801E4E7C, EXIDeselect_80168b00, uint32_t, (uint32_t channel), (channel));
+PPC_NATIVE_OVERRIDE(801E4D4C, EXISelect_HLE, uint32_t, (uint32_t channel, uint32_t device, uint32_t frequency), (channel, device, frequency));
+PPC_NATIVE_OVERRIDE(801E4E7C, EXIDeselect_HLE, uint32_t, (uint32_t channel), (channel));
 
 // ----------------------------------------------------------------------------
 // SetExiInterruptMask (0x801b8a30): stubbed no-op, our fake EXI devices need no interrupt masking.
 // ----------------------------------------------------------------------------
-extern "C" void SetExiInterruptMask_80167e78(uint32_t channel, uint32_t exi_struct_ptr)
+extern "C" void SetExiInterruptMask_HLE(uint32_t channel, uint32_t exi_struct_ptr)
 {
     // channel: r3 (0, 1, 2)
     // exi_struct_ptr: r4
@@ -324,7 +324,7 @@ extern "C" void SetExiInterruptMask_80167e78(uint32_t channel, uint32_t exi_stru
 }
 
 // Register the function
-PPC_NATIVE_OVERRIDE_VOID(801E41F4, SetExiInterruptMask_80167e78, (uint32_t channel, uint32_t exi_struct_ptr), (channel, exi_struct_ptr));
+PPC_NATIVE_OVERRIDE_VOID(801E41F4, SetExiInterruptMask_HLE, (uint32_t channel, uint32_t exi_struct_ptr), (channel, exi_struct_ptr));
 
 // ----------------------------------------------------------------------------
 // EXI Transaction Stubs (Imm, Dma, Sync, Unlock)
@@ -334,7 +334,7 @@ PPC_NATIVE_OVERRIDE_VOID(801E41F4, SetExiInterruptMask_80167e78, (uint32_t chann
 // Address: 0x801b8b20
 // Behavior: Performs an Immediate transfer (1-4 bytes) over EXI.
 //           Stub: Return 1 (success). If it's a read, we clear the buffer.
-extern "C" uint32_t EXIImm_80167f68(uint32_t channel, uint32_t buffer, uint32_t length, uint32_t type, uint32_t callback)
+extern "C" uint32_t EXIImm_HLE(uint32_t channel, uint32_t buffer, uint32_t length, uint32_t type, uint32_t callback)
 {
     // type: 0=Read, 1=Write, 2=RW
     // If reading, clear the destination buffer to 0 to be safe.
@@ -351,7 +351,7 @@ extern "C" uint32_t EXIImm_80167f68(uint32_t channel, uint32_t buffer, uint32_t 
     // Log only occasionally
     static int log_count = 0;
     if (log_count++ < 5) {
-        RT_LOG(RT_TAG_OS) << "EXIImm_80167f68 called: chan=" << channel << " len=" << length << " type=" << type << " (stubbed success)" << std::endl;
+        RT_LOG(RT_TAG_OS) << "EXIImm_HLE called: chan=" << channel << " len=" << length << " type=" << type << " (stubbed success)" << std::endl;
     }
     return 1; // Success
 }
@@ -360,11 +360,11 @@ extern "C" uint32_t EXIImm_80167f68(uint32_t channel, uint32_t buffer, uint32_t 
 // Address: 0x801B8E50
 // Behavior: Performs a DMA transfer over EXI.
 //           Stub: Return 1 (success).
-extern "C" uint32_t EXIDma_80168288(uint32_t channel, uint32_t buffer, uint32_t length, uint32_t type, uint32_t callback)
+extern "C" uint32_t EXIDma_HLE(uint32_t channel, uint32_t buffer, uint32_t length, uint32_t type, uint32_t callback)
 {
     static int log_count = 0;
     if (log_count++ < 5) {
-        RT_LOG(RT_TAG_OS) << "EXIDma_80168288 called: chan=" << channel << " len=" << length << " (stubbed success)" << std::endl;
+        RT_LOG(RT_TAG_OS) << "EXIDma_HLE called: chan=" << channel << " len=" << length << " (stubbed success)" << std::endl;
     }
     return 1; // Success
 }
@@ -373,19 +373,19 @@ extern "C" uint32_t EXIDma_80168288(uint32_t channel, uint32_t buffer, uint32_t 
 // Address: 0x801B8F50
 // Behavior: Waits for the current EXI transfer to complete.
 //           Stub: Return 1 (success) immediately.
-EXI_CHANNEL_STUB(EXISync_80168380, 5, "chan=")
+EXI_CHANNEL_STUB(EXISync_HLE, 5, "chan=")
 
 // RVL__EXIUnlock / EXIUnlock
 // Address: 0x801B9E70
 // Behavior: Unlocks the EXI channel and triggers any pending callbacks.
 //           Stub: Return 1 (success) to bypass internal callback logic that causes the 0x0 crash.
-EXI_CHANNEL_STUB(EXIUnlock_80169260, 5, "chan=")
+EXI_CHANNEL_STUB(EXIUnlock_HLE, 5, "chan=")
 
 // ----------------------------------------------------------------------------
 // OSSetPowerCallback (0x801B6730): sets the power-button callback pointer in the SDA (r13);
 // the real STM/IOS registration is stubbed.
 // ----------------------------------------------------------------------------
-extern "C" uint32_t OSSetPowerCallback_801ab75c(CpuContext* ctx)
+extern "C" uint32_t OSSetPowerCallback_HLE(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
     if (!cpu) return 0;
@@ -400,11 +400,11 @@ extern "C" uint32_t OSSetPowerCallback_801ab75c(CpuContext* ctx)
     const uint32_t kCallbackPtrAddr = r13 - 0x3d00u;    // PowerCallback (SPM)
     const uint32_t kHandlerActiveAddr = r13 - 0x3d08u;  // StmEhRegistered (SPM)
 
-    RT_LOG(RT_TAG_OS) << "OSSetPowerCallback_801ab75c called: newCB=0x"
+    RT_LOG(RT_TAG_OS) << "OSSetPowerCallback_HLE called: newCB=0x"
               << std::hex << newCallback << std::dec << std::endl;
 
     // 1. Disable Interrupts (Preserve atomicity as per SDK)
-    int32_t oldLevel = OS__DisableInterrupts_801a65ac();
+    int32_t oldLevel = OS__DisableInterrupts_HLE();
 
     uint32_t oldCallback = kDefaultCallbackAddr;
 
@@ -431,7 +431,7 @@ extern "C" uint32_t OSSetPowerCallback_801ab75c(CpuContext* ctx)
     }
 
     // 5. Restore Interrupts
-    OS__RestoreInterrupts_801a65d4(oldLevel);
+    OS__RestoreInterrupts_HLE(oldLevel);
 
     // 6. Return logic: If old callback was default, return NULL. Otherwise return old address.
     if (oldCallback == kDefaultCallbackAddr) {
@@ -441,52 +441,52 @@ extern "C" uint32_t OSSetPowerCallback_801ab75c(CpuContext* ctx)
 }
 
 // Register the function
-PPC_NATIVE_OVERRIDE(801E2504, OSSetPowerCallback_801ab75c, uint32_t, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE(801E2504, OSSetPowerCallback_HLE, uint32_t, (CpuContext* ctx), (ctx));
 
-PPC_NATIVE_OVERRIDE(801E42E4, EXIImm_80167f68, uint32_t, (uint32_t channel, uint32_t buffer, uint32_t length, uint32_t type, uint32_t callback), (channel, buffer, length, type, callback));
-PPC_NATIVE_OVERRIDE(801E4604, EXIDma_80168288, uint32_t, (uint32_t channel, uint32_t buffer, uint32_t length, uint32_t type, uint32_t callback), (channel, buffer, length, type, callback));
-PPC_NATIVE_OVERRIDE(801E46FC, EXISync_80168380, uint32_t, (uint32_t channel), (channel));
-PPC_NATIVE_OVERRIDE(801E55DC, EXIUnlock_80169260, uint32_t, (uint32_t channel), (channel));
+PPC_NATIVE_OVERRIDE(801E42E4, EXIImm_HLE, uint32_t, (uint32_t channel, uint32_t buffer, uint32_t length, uint32_t type, uint32_t callback), (channel, buffer, length, type, callback));
+PPC_NATIVE_OVERRIDE(801E4604, EXIDma_HLE, uint32_t, (uint32_t channel, uint32_t buffer, uint32_t length, uint32_t type, uint32_t callback), (channel, buffer, length, type, callback));
+PPC_NATIVE_OVERRIDE(801E46FC, EXISync_HLE, uint32_t, (uint32_t channel), (channel));
+PPC_NATIVE_OVERRIDE(801E55DC, EXIUnlock_HLE, uint32_t, (uint32_t channel), (channel));
 
 // ----------------------------------------------------------------------------
 // IPC Register Access Stubs (0x80224350 write / 0x80224340 read): Broadway-IOS MMIO,
 // unmapped here, so abort loudly instead of crashing silently.
 // ----------------------------------------------------------------------------
 
-extern "C" void IPCWriteReg_80193020(uint32_t index, uint32_t value)
+extern "C" void IPCWriteReg_HLE(uint32_t index, uint32_t value)
 {
     // index: Register index (0=Command, 1=Result, 2=Control, etc.)
     // value: 32-bit value to write
     // CRASH: We need to identify callers and stub them at a higher level
-    RT_LOG(RT_TAG_OS) << "IPCWriteReg_80193020 called: idx=" << index
+    RT_LOG(RT_TAG_OS) << "IPCWriteReg_HLE called: idx=" << index
               << " val=0x" << std::hex << value << std::dec << std::endl;
     RT_LOG(RT_TAG_OS) << "IPC hardware access detected - stub the caller instead!" << std::endl;
     std::fflush(stderr);
     std::abort();
 }
 
-extern "C" uint32_t IPCReadReg_80193010(uint32_t index)
+extern "C" uint32_t IPCReadReg_HLE(uint32_t index)
 {
     // index: Register index
     // CRASH: We need to identify callers and stub them at a higher level
-    RT_LOG(RT_TAG_OS) << "IPCReadReg_80193010 called: idx=" << index << std::endl;
+    RT_LOG(RT_TAG_OS) << "IPCReadReg_HLE called: idx=" << index << std::endl;
     RT_LOG(RT_TAG_OS) << "IPC hardware access detected - stub the caller instead!" << std::endl;
     std::fflush(stderr);
     std::abort();
 }
 
 // Register the functions
-PPC_NATIVE_OVERRIDE_VOID(80211ad0, IPCWriteReg_80193020, (uint32_t index, uint32_t value), (index, value));
-PPC_NATIVE_OVERRIDE(80211ac0, IPCReadReg_80193010, uint32_t, (uint32_t index), (index));
+PPC_NATIVE_OVERRIDE_VOID(80211ad0, IPCWriteReg_HLE, (uint32_t index, uint32_t value), (index, value));
+PPC_NATIVE_OVERRIDE(80211ac0, IPCReadReg_HLE, uint32_t, (uint32_t index), (index));
 
 // ----------------------------------------------------------------------------
 // IPCCltInit (0x802247D0): hardware parts (interrupt handler, MMIO) are stubbed, but we still
 // call translated IPCInit (0x802242A0) to init the IPC buffer globals; skip it and
 // IPCGetBufferLo/Hi return 0, so ISFS_OpenLib fails with "APP ERROR: Not enough IPC arena".
 // ----------------------------------------------------------------------------
-extern "C" int32_t IPCCltInit_80193478(CpuContext* ctx)
+extern "C" int32_t IPCCltInit_HLE(CpuContext* ctx)
 {
-    RT_LOG(RT_TAG_OS) << "IPCCltInit_80193478 called: calling IPCInit for buffer setup" << std::endl;
+    RT_LOG(RT_TAG_OS) << "IPCCltInit_HLE called: calling IPCInit for buffer setup" << std::endl;
     
     // Sets IPCBufferLo/Hi + Initialized (NSMBW 0x8056E004/B0/A0) from __OSGetIPCBufferLo/Hi.
     InvokeIndirectCpu(0x80211A2Cu, ctx);
@@ -503,4 +503,4 @@ extern "C" int32_t IPCCltInit_80193478(CpuContext* ctx)
     return 0; // Success
 }
 
-PPC_NATIVE_OVERRIDE(80211F28, IPCCltInit_80193478, int32_t, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE(80211F28, IPCCltInit_HLE, int32_t, (CpuContext* ctx), (ctx));

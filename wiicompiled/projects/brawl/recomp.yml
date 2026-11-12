@@ -8,8 +8,6 @@ project:
   display_name: Super Smash Bros. Brawl (USA)
   game_id: RSBE01
   region: E
-  base_manifest_format: brawl-recomp-base-manifest
-  base_manifest_stem: brawl_base
 
 memory:
   base: 0x80000000
@@ -46,4 +44,3 @@ output:
   functions: functions
   runtime_config: RuntimeConfig.h
   data_initializer: data_sections_init.cpp
-  base_manifest: ../build/base/brawl_base_manifest.json

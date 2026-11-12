@@ -10,10 +10,12 @@
 
 class Memory {
 public:
-    using DeferredReadCallback = bool (*)(void* user);
 
     static constexpr size_t kMem1Size = 24u * 1024u * 1024u;
     static constexpr size_t kMem2Size = 128u * 1024u * 1024u;
+    // Dolphin exposes a 256 KiB locked-cache compatibility window.
+    static constexpr uint32_t kLockedCacheBase = 0xE0000000u;
+    static constexpr size_t kLockedCacheSize = 0x40000u;
     static constexpr uint32_t kMem1PhysicalBase = 0x00000000u;
     static constexpr uint32_t kMem1CachedBase = 0x80000000u;
     static constexpr uint32_t kMem1UncachedBase = 0xC0000000u;
@@ -101,10 +103,6 @@ public:
     static uint8_t* GetPointer(uint32_t addr);
     static uint8_t* GetPointer(uint32_t addr, size_t length);
     static bool Contains(uint32_t addr, size_t length = 1);
-
-    static uint64_t RegisterDeferredRead(uint32_t addr, size_t length,
-                                         DeferredReadCallback callback, void* user);
-    static void ClearDeferredReads();
 
     // sizeBytes reports the storage actually allocated, which is not always the
     // configured size (aliased MEM1/MEM2 windows are clamped to what is behind

@@ -60,6 +60,41 @@ public readonly record struct GuestStateMask(
             contract.DefinitelyWritesCtr, contract.DefinitelyWritesLr,
             contract.DefinitelyWritesFpscr, contract.GqrDefiniteWriteMask,
             contract.HidDefiniteWriteMask);
+
+    public static GuestStateMask FromRegister(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return GuestStateMask.Empty;
+        // Strip only an SSA version. Named temporaries such as r3_ca must not
+        // acquire the architectural effects of the register in their prefix.
+        var baseName = RegisterNameUtils.StripNumericSuffixSpan(name.AsSpan());
+        if (baseName.Length >= 2 && baseName[0] == 'r' && int.TryParse(baseName[1..], out var gpr) && gpr is >= 0 and < 32)
+            return GuestStateMask.Empty with { Gpr = 1u << gpr };
+        if (baseName.Length >= 2 && baseName[0] == 'f' && int.TryParse(baseName[1..], out var fpr) && fpr is >= 0 and < 32)
+            return GuestStateMask.Empty with { Fpr = 1u << fpr };
+        if (baseName.Length == 3 && baseName.StartsWith("cr", StringComparison.OrdinalIgnoreCase) &&
+            baseName[2] is >= '0' and <= '7')
+            return GuestStateMask.Empty with { Cr = (byte)(1 << (baseName[2] - '0')) };
+        if (baseName.Length is >= 4 and <= 5 && baseName.StartsWith("crb", StringComparison.OrdinalIgnoreCase) &&
+            int.TryParse(baseName[3..], out var crBit) && crBit is >= 0 and < 32)
+            return GuestStateMask.Empty with { Cr = (byte)(1 << (crBit / 4)) };
+        if (baseName.Equals("cr", StringComparison.OrdinalIgnoreCase))
+            return GuestStateMask.Empty with { Cr = byte.MaxValue };
+        if (baseName.Equals("xer", StringComparison.OrdinalIgnoreCase))
+            return GuestStateMask.Empty with { Xer = true };
+        if (baseName.Equals("ctr", StringComparison.OrdinalIgnoreCase))
+            return GuestStateMask.Empty with { Ctr = true };
+        if (baseName.Equals("lr", StringComparison.OrdinalIgnoreCase))
+            return GuestStateMask.Empty with { Lr = true };
+        if (baseName.Equals("fpscr", StringComparison.OrdinalIgnoreCase))
+            return GuestStateMask.Empty with { Fpscr = true };
+        if (baseName.Length == 4 && baseName.StartsWith("gqr", StringComparison.OrdinalIgnoreCase) &&
+            baseName[3] is >= '0' and <= '7')
+            return GuestStateMask.Empty with { Gqr = (byte)(1 << (baseName[3] - '0')) };
+        if (baseName.Length == 4 && baseName.StartsWith("hid", StringComparison.OrdinalIgnoreCase) &&
+            baseName[3] is >= '0' and <= '2')
+            return GuestStateMask.Empty with { Hid = (byte)(1 << (baseName[3] - '0')) };
+        return GuestStateMask.Empty;
+    }
 }
 
 public sealed record GuestCallSiteStateContract(
@@ -254,7 +289,7 @@ public static class GuestStateLivenessAnalyzer
                 live = liveAfter.Except(definiteWrites).Union(inputs);
                 // The IR call destination (normally LR) is an instruction-level
                 // definition in addition to the callee's architectural effects.
-                var destination = Register(call.Destination);
+                var destination = GuestStateMask.FromRegister(call.Destination);
                 live = live.Except(destination);
                 continue;
             }
@@ -302,7 +337,7 @@ public static class GuestStateLivenessAnalyzer
             case IrSetCrField value:
                 AddValue(ref result, value.Left);
                 AddValue(ref result, value.Right);
-                // Same as unioning Register("xer").
+                // Same as unioning GuestStateMask.FromRegister("xer").
                 result = result with { Xer = true };
                 break;
             case IrPhi value: foreach (var source in value.Sources.Values) Add(ref result, source); break;
@@ -339,7 +374,7 @@ public static class GuestStateLivenessAnalyzer
         return result;
     }
 
-    private static void Add(ref GuestStateMask mask, string? name) => mask = mask.Union(Register(name));
+    private static void Add(ref GuestStateMask mask, string? name) => mask = mask.Union(GuestStateMask.FromRegister(name));
 
     private static void AddValue(ref GuestStateMask mask, IrValue value)
     {
@@ -348,36 +383,9 @@ public static class GuestStateLivenessAnalyzer
 
     private static void AddGqr(ref GuestStateMask mask, uint index)
     {
-        // Mirrors Register("gqr{index}"): only the eight architectural
+        // Mirrors GuestStateMask.FromRegister("gqr{index}"): only the eight architectural
         // quantization registers exist, anything else names nothing.
         if (index <= 7) mask = mask with { Gqr = (byte)(mask.Gqr | (1 << (int)index)) };
-    }
-
-    private static GuestStateMask Register(string? name)
-    {
-        if (string.IsNullOrWhiteSpace(name)) return GuestStateMask.Empty;
-        var baseName = RegisterNameUtils.HardwareBase(name.AsSpan());
-        if (baseName.Length >= 2 && baseName[0] == 'r' && int.TryParse(baseName[1..], out var gpr) && gpr is >= 0 and < 32)
-            return GuestStateMask.Empty with { Gpr = 1u << gpr };
-        if (baseName.Length >= 2 && baseName[0] == 'f' && int.TryParse(baseName[1..], out var fpr) && fpr is >= 0 and < 32)
-            return GuestStateMask.Empty with { Fpr = 1u << fpr };
-        if (baseName.Length == 3 && baseName.StartsWith("cr", StringComparison.OrdinalIgnoreCase) && baseName[2] is >= '0' and <= '7')
-            return GuestStateMask.Empty with { Cr = (byte)(1 << (baseName[2] - '0')) };
-        if (baseName.Length is >= 4 and <= 5 && baseName.StartsWith("crb", StringComparison.OrdinalIgnoreCase) &&
-            int.TryParse(baseName[3..], out var crBit) && crBit is >= 0 and < 32)
-            return GuestStateMask.Empty with { Cr = (byte)(1 << (crBit / 4)) };
-        if (baseName.Equals("cr", StringComparison.OrdinalIgnoreCase)) return GuestStateMask.Empty with { Cr = byte.MaxValue };
-        if (baseName.Equals("xer", StringComparison.OrdinalIgnoreCase)) return GuestStateMask.Empty with { Xer = true };
-        if (baseName.Equals("ctr", StringComparison.OrdinalIgnoreCase)) return GuestStateMask.Empty with { Ctr = true };
-        if (baseName.Equals("lr", StringComparison.OrdinalIgnoreCase)) return GuestStateMask.Empty with { Lr = true };
-        if (baseName.Equals("fpscr", StringComparison.OrdinalIgnoreCase)) return GuestStateMask.Empty with { Fpscr = true };
-        if (baseName.Length == 4 && baseName.StartsWith("gqr", StringComparison.OrdinalIgnoreCase) &&
-            baseName[3] is >= '0' and <= '7')
-            return GuestStateMask.Empty with { Gqr = (byte)(1 << (baseName[3] - '0')) };
-        if (baseName.Length == 4 && baseName.StartsWith("hid", StringComparison.OrdinalIgnoreCase) &&
-            baseName[3] is >= '0' and <= '2')
-            return GuestStateMask.Empty with { Hid = (byte)(1 << (baseName[3] - '0')) };
-        return GuestStateMask.Empty;
     }
 
     /// <summary>

@@ -64,14 +64,14 @@ constexpr uint32_t kGxDrawDoneFlagAddr = 0x805A08C0;  // DrawDone (NSMBW)
 
 // --- External Declarations ---
 extern "C" void GXInitTexObjTlut(GXTexObj* obj, u32 tlut);
-extern "C" int32_t OS__DisableInterrupts_801a65ac();
-extern "C" int32_t OS__RestoreInterrupts_801a65d4(int32_t level);
+extern "C" int32_t OS__DisableInterrupts_HLE();
+extern "C" int32_t OS__RestoreInterrupts_HLE(int32_t level);
 extern "C" uint32_t __OSSetInterruptHandler_801a65f8_hle(uint32_t interrupt, uint32_t handler);
 extern "C" uint32_t __OSUnmaskInterrupts_801a69bc_hle(uint32_t mask);
 extern "C" uint32_t OS__GetCurrentThread_801a98b0_hle();
-extern "C" void GX__SetCPUFifo_8016c94c(uint32_t fifoAddr);
-extern "C" void GX__SetDirtyState_8016ee78();
-extern "C" void GX__CallDisplayList_80172f64(uint32_t listAddr, uint32_t nbytes);
+extern "C" void GX__SetCPUFifo_HLE(uint32_t fifoAddr);
+extern "C" void GX__SetDirtyState_HLE();
+extern "C" void GX__CallDisplayList_HLE(uint32_t listAddr, uint32_t nbytes);
 
 extern std::atomic_bool g_auroraFrameActive;
 extern std::atomic_bool g_auroraFrameHadWork;
@@ -291,7 +291,7 @@ extern GxDisplayListState g_dlRecordState;
 
 inline bool IsDisplayListActive() noexcept { return g_dlRecordState.active; }
 
-// Mirrors GX__BeginDisplayList_80172e00's guest-side initialization.
+// Mirrors GX__BeginDisplayList_HLE's guest-side initialization.
 void BeginDisplayListRecording(uint32_t listAddr, uint32_t sizeBytes);
 void RegisterAuroraDisplayList(uint32_t addr, uint32_t size);
 bool IsAuroraDisplayList(uint32_t addr, uint32_t size);

@@ -419,22 +419,36 @@ inline double PpcPackIntegerWordInline(int32_t value)
         static_cast<uint64_t>(static_cast<uint32_t>(value)));
 }
 
-template <bool Subtract>
-inline float PpcAccuratePsMaddLaneInline(float a, float c, float b)
+// Select NaNs in guest operand order and preserve the chosen sign/payload.
+// FMA passes A, B, C even though it computes A*C +/- B.
+inline double PpcResolveNanInline(double result, double a, double b, double c = 0.0)
 {
-    const float signedB = Subtract ? -b : b;
-    // Paired values are stored as exact float32 lanes in this runtime.  An
-    // explicit float FMA therefore matches Gekko's single rounding point;
-    // multiplying and adding separately can differ by an ULP on ordinary
-    // vector and matrix workloads.
-    return PpcFlushSingleForNiInline(std::fma(a, c, signedB));
+    if (!std::isnan(result)) return result;
+    constexpr uint64_t quiet = 0x0008000000000000ull;
+    for (double operand : {a, b, c})
+        if (std::isnan(operand))
+            return PpcBitCastToDoubleInline(PpcBitCastToU64Inline(operand) | quiet);
+    return PpcBitCastToDoubleInline(0x7FF8000000000000ull);
 }
 
-template <bool Subtract>
-inline float PpcAccuratePsMaddLaneNoNiInline(float a, float c, float b)
+inline double PpcFaddInline(double a, double b)
 {
-    const float signedB = Subtract ? -b : b;
-    return std::fma(a, c, signedB);
+    return PpcResolveNanInline(a + b, a, b);
+}
+
+inline double PpcFsubInline(double a, double b)
+{
+    return PpcResolveNanInline(a - b, a, b);
+}
+
+inline double PpcFmulInline(double a, double b)
+{
+    return PpcResolveNanInline(a * b, a, b);
+}
+
+inline double PpcFdivInline(double a, double b)
+{
+    return PpcResolveNanInline(a / b, a, b);
 }
 
 template <bool Subtract>
@@ -445,7 +459,7 @@ inline double PpcAccurateSingleMaddIntermediateInline(double a, double c, double
     // to float32.  A double FMA is almost sufficient, but an exact result just
     // beyond a float32 halfway point can be rounded to a double tie first.
     // Recover the direction of that discarded error for those tie cases.
-    const double roundedC = PpcForce25BitInline(c);
+    const double roundedC = std::isnan(c) ? c : PpcForce25BitInline(c);
     const double signedB = Subtract ? -b : b;
     double result = std::fma(a, roundedC, signedB);
     const uint64_t resultBits = PpcBitCastToU64Inline(result);
@@ -464,39 +478,39 @@ inline double PpcAccurateSingleMaddIntermediateInline(double a, double c, double
                 (error > 0.0) == (result > 0.0) ? resultBits + 1 : resultBits - 1);
         }
     }
-    return result;
+    return PpcResolveNanInline(result, a, b, c);
 }
 
 inline double PpcFmulsInline(double a, double c)
 {
     return static_cast<double>(
-        PpcForceSingleValueInline(a * PpcForce25BitInline(c)));
+        PpcForceSingleValueInline(PpcFmulInline(a, std::isnan(c) ? c : PpcForce25BitInline(c))));
 }
 
 inline double PpcFmulsNoNiInline(double a, double c)
 {
-    return static_cast<double>(static_cast<float>(a * PpcForce25BitInline(c)));
+    return static_cast<double>(static_cast<float>(PpcFmulInline(a, std::isnan(c) ? c : PpcForce25BitInline(c))));
 }
 
 inline double PpcFmaddInline(double a, double c, double b)
 {
-    return std::fma(a, c, b);
+    return PpcResolveNanInline(std::fma(a, c, b), a, b, c);
 }
 
 inline double PpcFmsubInline(double a, double c, double b)
 {
-    return std::fma(a, c, -b);
+    return PpcResolveNanInline(std::fma(a, c, -b), a, b, c);
 }
 
 inline double PpcFnmaddInline(double a, double c, double b)
 {
-    const double result = std::fma(a, c, b);
+    const double result = PpcFmaddInline(a, c, b);
     return std::isnan(result) ? result : -result;
 }
 
 inline double PpcFnmsubInline(double a, double c, double b)
 {
-    const double result = std::fma(a, c, -b);
+    const double result = PpcFmsubInline(a, c, b);
     return std::isnan(result) ? result : -result;
 }
 
@@ -527,60 +541,55 @@ inline double PpcFnmsubsInline(double a, double c, double b)
 }
 
 #if defined(__aarch64__)
-// x86 resolves a single NaN source operand (SNaN or QNaN alike) to that operand quieted with
-// sign and payload kept, and an invalid op with no NaN input to 0xFFC00000; NEON prefers SNaNs,
-// checks the accumulator first, and yields the positive default NaN 0x7FC00000. NaN result
-// lanes (rare: one branch on the pair) are therefore rewritten to the x86 answer, keeping the
-// two hosts bit-identical for every case where x86 itself is deterministic. With two or more
-// NaN operands even x86 is not: the winning operand depends on which FMA form / commuted
-// operand order clang picked per call site, so this resolver's fixed first-operand priority is
-// one of the answers a real x86 build can give, not a guaranteed match.
 inline uint64_t PpcPairNanLaneBitsInline(PpcPairVec value)
 {
     return vget_lane_u64(vreinterpret_u64_u32(vmvn_u32(vceq_f32(value, value))), 0);
 }
 
-inline PpcPairVec PpcQuietPairInline(PpcPairVec value)
-{
-    return vreinterpret_f32_u32(vorr_u32(vreinterpret_u32_f32(value), vdup_n_u32(0x00400000u)));
-}
-
-inline PpcPairVec PpcResolveNanLanesInline(PpcPairVec result, PpcPairVec op1, PpcPairVec op2)
-{
-    const uint32x2_t op1Nan = vmvn_u32(vceq_f32(op1, op1));
-    const uint32x2_t op2Nan = vmvn_u32(vceq_f32(op2, op2));
-    PpcPairVec replacement = vreinterpret_f32_u32(vdup_n_u32(0xFFC00000u));
-    replacement = vbsl_f32(op2Nan, PpcQuietPairInline(op2), replacement);
-    replacement = vbsl_f32(op1Nan, PpcQuietPairInline(op1), replacement);
-    const uint32x2_t resultNan = vmvn_u32(vceq_f32(result, result));
-    return vbsl_f32(resultNan, replacement, result);
-}
-
-inline PpcPairVec PpcResolveNanLanes3Inline(
-    PpcPairVec result, PpcPairVec op1, PpcPairVec op2, PpcPairVec op3)
-{
-    const uint32x2_t op3Nan = vmvn_u32(vceq_f32(op3, op3));
-    PpcPairVec replacement = vreinterpret_f32_u32(vdup_n_u32(0xFFC00000u));
-    replacement = vbsl_f32(op3Nan, PpcQuietPairInline(op3), replacement);
-    const uint32x2_t op2Nan = vmvn_u32(vceq_f32(op2, op2));
-    replacement = vbsl_f32(op2Nan, PpcQuietPairInline(op2), replacement);
-    const uint32x2_t op1Nan = vmvn_u32(vceq_f32(op1, op1));
-    replacement = vbsl_f32(op1Nan, PpcQuietPairInline(op1), replacement);
-    const uint32x2_t resultNan = vmvn_u32(vceq_f32(result, result));
-    return vbsl_f32(resultNan, replacement, result);
-}
 #endif // defined(__aarch64__)
+
+#if defined(__x86_64__)
+inline uint64_t PpcPairNanLaneBitsInline(PpcPairVec value)
+{
+    // Only the low two lanes represent guest values. In particular, the unused
+    // upper lanes of a division can be 0/0 without making the guest result NaN.
+    return static_cast<uint64_t>(_mm_movemask_ps(_mm_cmpunord_ps(value, value)) & 3);
+}
+#endif
+
+// Select the first NaN in guest operand order, or positive canonical NaN for
+// an invalid operation without NaN inputs. Binary operations omit C; FMA passes
+// A, B, C even though it computes A*C +/- B. Host instructions and constant
+// folding can otherwise select different signs and payloads.
+inline PpcPairVec PpcResolveNanLanesInline(
+    PpcPairVec result, PpcPairVec a, PpcPairVec b, PpcPairVec c = {})
+{
+    constexpr size_t lanes = sizeof(PpcPairVec) / sizeof(uint32_t);
+    uint32_t r[lanes], x[lanes], y[lanes], z[lanes];
+    std::memcpy(r, &result, sizeof(result));
+    std::memcpy(x, &a, sizeof(a));
+    std::memcpy(y, &b, sizeof(b));
+    std::memcpy(z, &c, sizeof(c));
+    const auto isNan = [](uint32_t bits) { return (bits & 0x7FFFFFFFu) > 0x7F800000u; };
+    for (size_t i = 0; i < lanes; ++i)
+        if (isNan(r[i]))
+            r[i] = isNan(x[i]) ? x[i] | 0x00400000u
+                 : isNan(y[i]) ? y[i] | 0x00400000u
+                 : isNan(z[i]) ? z[i] | 0x00400000u : 0x7FC00000u;
+    std::memcpy(&result, r, sizeof(result));
+    return result;
+}
 
 inline PpcPairVec PpcMulPairInline(PpcPairVec lhs, PpcPairVec rhs)
 {
 #if defined(__x86_64__)
-    return _mm_mul_ps(lhs, rhs);
+    const PpcPairVec result = _mm_mul_ps(lhs, rhs);
 #elif defined(__aarch64__)
     const PpcPairVec result = vmul_f32(lhs, rhs);
+#endif
     if (PpcPairNanLaneBitsInline(result) != 0) [[unlikely]]
         return PpcResolveNanLanesInline(result, lhs, rhs);
     return result;
-#endif
 }
 
 inline double PPC_PsMulInline(double lhs, double rhs)
@@ -620,29 +629,29 @@ inline PpcPairVec PpcFmaLanesNoFmaInline(PpcPairVec a, PpcPairVec b, PpcPairVec 
 inline PpcPairVec PpcFmaddPairInline(PpcPairVec multiplicand, PpcPairVec multiplier, PpcPairVec addend)
 {
 #if defined(__x86_64__) && defined(__FMA__)
-    return _mm_fmadd_ps(multiplicand, multiplier, addend);
+    const PpcPairVec result = _mm_fmadd_ps(multiplicand, multiplier, addend);
 #elif defined(__x86_64__)
-    return PpcFmaLanesNoFmaInline(multiplicand, multiplier, addend, 1.0f);
+    const PpcPairVec result = PpcFmaLanesNoFmaInline(multiplicand, multiplier, addend, 1.0f);
 #elif defined(__aarch64__)
     const PpcPairVec result = vfma_f32(addend, multiplicand, multiplier);
-    if (PpcPairNanLaneBitsInline(result) != 0) [[unlikely]]
-        return PpcResolveNanLanes3Inline(result, multiplicand, multiplier, addend);
-    return result;
 #endif
+    if (PpcPairNanLaneBitsInline(result) != 0) [[unlikely]]
+        return PpcResolveNanLanesInline(result, multiplicand, addend, multiplier);
+    return result;
 }
 
 inline PpcPairVec PpcFmsubPairInline(PpcPairVec multiplicand, PpcPairVec multiplier, PpcPairVec subtractor)
 {
 #if defined(__x86_64__) && defined(__FMA__)
-    return _mm_fmsub_ps(multiplicand, multiplier, subtractor);
+    const PpcPairVec result = _mm_fmsub_ps(multiplicand, multiplier, subtractor);
 #elif defined(__x86_64__)
-    return PpcFmaLanesNoFmaInline(multiplicand, multiplier, subtractor, -1.0f);
+    const PpcPairVec result = PpcFmaLanesNoFmaInline(multiplicand, multiplier, subtractor, -1.0f);
 #elif defined(__aarch64__)
     const PpcPairVec result = vfma_f32(vneg_f32(subtractor), multiplicand, multiplier);
-    if (PpcPairNanLaneBitsInline(result) != 0) [[unlikely]]
-        return PpcResolveNanLanes3Inline(result, multiplicand, multiplier, subtractor);
-    return result;
 #endif
+    if (PpcPairNanLaneBitsInline(result) != 0) [[unlikely]]
+        return PpcResolveNanLanesInline(result, multiplicand, subtractor, multiplier);
+    return result;
 }
 
 inline double PPC_PsMsubInline(double multiplicand, double multiplier, double subtractor)
@@ -787,37 +796,37 @@ inline double PPC_PsMerge11Inline(double aValue, double bValue)
 inline PpcPairVec PpcAddPairInline(PpcPairVec lhs, PpcPairVec rhs)
 {
 #if defined(__x86_64__)
-    return _mm_add_ps(lhs, rhs);
+    const PpcPairVec result = _mm_add_ps(lhs, rhs);
 #elif defined(__aarch64__)
     const PpcPairVec result = vadd_f32(lhs, rhs);
+#endif
     if (PpcPairNanLaneBitsInline(result) != 0) [[unlikely]]
         return PpcResolveNanLanesInline(result, lhs, rhs);
     return result;
-#endif
 }
 
 inline PpcPairVec PpcSubPairInline(PpcPairVec lhs, PpcPairVec rhs)
 {
 #if defined(__x86_64__)
-    return _mm_sub_ps(lhs, rhs);
+    const PpcPairVec result = _mm_sub_ps(lhs, rhs);
 #elif defined(__aarch64__)
     const PpcPairVec result = vsub_f32(lhs, rhs);
+#endif
     if (PpcPairNanLaneBitsInline(result) != 0) [[unlikely]]
         return PpcResolveNanLanesInline(result, lhs, rhs);
     return result;
-#endif
 }
 
 inline PpcPairVec PpcDivPairInline(PpcPairVec lhs, PpcPairVec rhs)
 {
 #if defined(__x86_64__)
-    return _mm_div_ps(lhs, rhs);
+    const PpcPairVec result = _mm_div_ps(lhs, rhs);
 #elif defined(__aarch64__)
     const PpcPairVec result = vdiv_f32(lhs, rhs);
+#endif
     if (PpcPairNanLaneBitsInline(result) != 0) [[unlikely]]
         return PpcResolveNanLanesInline(result, lhs, rhs);
     return result;
-#endif
 }
 
 inline double PPC_PsAddInline(double aValue, double bValue)
@@ -982,7 +991,6 @@ extern "C" double PPC_PsMerge00(double a, double b);
 extern "C" double PPC_PsMerge01(double a, double b);
 extern "C" double PPC_PsMerge10(double a, double b);
 extern "C" double PPC_PsMerge11(double a, double b);
-extern "C" double PPC_Fsqrt(double value);
 
 // Hot scalar float helpers, defined inline so the compiler can see through them instead of
 // taking a cross-TU caller-saved register barrier at ~2,500 call sites in the hottest float

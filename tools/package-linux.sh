@@ -1,23 +1,33 @@
 #!/usr/bin/env bash
-# Packs the Linux download: dist/BrawlRecompiled-linux.tar.gz. Run on Linux or in WSL after tools/build-linux.sh and a
-# Windows build (Play\ holds the shared files; tools\build-launcher.ps1 makes launcher\linux\publish).
+# Packs the Linux download: dist/BrawlRecompiled-linux.tar.gz. Run on Linux or in WSL after build.cmake has built the
+# game into build/ (tools\build-launcher.ps1 makes launcher\linux\publish, and tools\build-brawl.ps1 on Windows
+# prepares wiicompiled/Dependencies, whose license files go in).
 # Same contents as package-brawl.ps1's engine\, with the Linux programs; the disc is never copied in.
 set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-build=$HOME/brawl-linux
+build=$root/build
+native=$build/native
 version=v$(grep -oP '(?<=<Version>)[^<]+' "$root/launcher/BrawlRecompiled.Launcher.csproj")
 stage=$build/stage/BrawlRecompiled
 engine=$stage/engine
 rm -rf "$build/stage"
 mkdir -p "$engine/UserData/mods" "$engine/UserData/SD" "$engine/licenses"
 
-[[ -x $build/usa/build/WiiCompiled ]] || { echo "missing the build: run tools/build-linux.sh" >&2; exit 1; }
-cp "$build/usa/build/WiiCompiled" "$engine/brawl-engine"
+[[ -x $native/WiiCompiled ]] || { echo "missing the build: run cmake -P build.cmake (see README.md)" >&2; exit 1; }
+[[ -d $root/wiicompiled/Dependencies ]] || { echo "missing wiicompiled/Dependencies (license files)" >&2; exit 1; }
+# The launcher's controller list (launcher/Gamepads.cs): SDL as a shared library, from the SDL sources the game uses.
+sdl=$build/sdl-shared
+if [[ ! -f $sdl/libSDL3.so.0 ]]; then
+    cmake -S "$native/_deps/sdl-src" -B "$sdl" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang \
+        -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
+    cmake --build "$sdl"
+fi
+cp "$native/WiiCompiled" "$engine/brawl-engine"
 cp "$root/launcher/linux/publish/Brawl Recompiled" "$stage/"
-cp "$build/usa/build/_deps/png-build/libpng16.so.16" "$engine/"   # the one library the game does not build in
-cp -L "$build/sdl-shared/libSDL3.so.0" "$engine/"                 # the launcher's controller list
-cp "$build/usa/build/dsp_coef.bin" "$build/usa/build/cacert.pem" "$root/Play/portable.txt" "$engine/"
-cp -r "$root/Play/wii_bootstrap" "$engine/"
+cp "$native/_deps/png-build/libpng16.so.16" "$engine/"   # the one library the game does not build in
+cp -L "$sdl/libSDL3.so.0" "$engine/"                     # the launcher's controller list
+cp "$native/dsp_coef.bin" "$native/cacert.pem" "$root/Play/portable.txt" "$engine/"
+cp -r "$native/wii_bootstrap" "$engine/"
 cp "$root/tools/cheats-RSBE01.ini" "$engine/default-cheats.ini"   # the starter cheat list (gecko.cpp copies it into UserData)
 mkdir -p "$engine/startup" && cp "$root/launcher/art/smash_ball.png" "$engine/startup/"   # the title card's Smash Ball
 cp "$root/tools/CREDITS.txt" "$stage/CREDITS.txt"

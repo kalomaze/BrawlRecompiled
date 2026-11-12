@@ -165,7 +165,7 @@ public sealed partial class CxxLinearCodeGenerator
                     var start = RemapAddress(
                         new IrAddress(resolve.Base.RegisterName!, resolve.MinOffset),
                         types, localConstants, linkedAddressRemap);
-                    sb.AppendLine($"{pad}{resolve.Destination} = MemoryInline::ResolveRangeHost({start}, 0, {resolve.Length}u, {(resolve.NeedsReadAccess ? "true" : "false")}, {(resolve.NeedsWriteAccess ? "true" : "false")});");
+                    sb.AppendLine($"{pad}{resolve.Destination} = MemoryInline::ResolveRangeHost({start}, 0, {resolve.Length}u, {(resolve.NeedsWriteAccess ? "true" : "false")});");
                 }
                 break;
             case IrResolvedLoad load:
@@ -311,7 +311,7 @@ public sealed partial class CxxLinearCodeGenerator
             case IrCall call:
                 if (TryParseAddress(call.Target, out var addr))
                 {
-                    if (TryEmitInlineGuestThunk(addr, sb, pad, types, inlineGuestThunkStackBase))
+                    if (TryEmitInlineGuestThunk(addr, sb, pad, inlineGuestThunkStackBase))
                     {
                         break;
                     }
@@ -381,7 +381,7 @@ public sealed partial class CxxLinearCodeGenerator
                             // unit has to be added back.
                             var stateFreeResult = $"state_free_result_{addr:X8}_{bufferBaseLength + sb.Length:X}";
                             sb.AppendLine($"{pad}    const auto {stateFreeResult} = {stateFreeSymbol}({StateFreeCallArguments(stateFreeContract!, localFallthroughLr)});");
-                            AppendStateFreeResultStores(sb, pad + "    ", addr, stateFreeContract!, stateFreeResult);
+                            AppendStateFreeResultStores(sb, pad + "    ", stateFreeContract!, stateFreeResult);
                         }
                         else
                         {
@@ -732,7 +732,7 @@ public sealed partial class CxxLinearCodeGenerator
     }
 
     private static bool IsGpuFifoAddress(uint address) =>
-        address >= 0xCC008000u && address < 0xCC008100u;
+        address >= 0xCC008000u && address < 0xCC009000u;
 
     private static void EmitNormalizeGuestCallFloatArguments(
         string target,

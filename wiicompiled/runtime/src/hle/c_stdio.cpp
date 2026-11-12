@@ -13,7 +13,7 @@
 // The original routine forwards completed FILE-buffer writes to UART/EXI or TRK.
 // Keep __FileWrite (0x802E149C), __fwrite, and fwide translated so their buffering,
 // orientation, short-write, and return-value semantics remain guest-owned.
-extern "C" uint32_t ConsoleWrite_HLE_80015500(
+extern "C" uint32_t ConsoleWrite_HLE(
     uint32_t handle, uint32_t bufferAddr, uint32_t lengthPtr, uint32_t refCon)
 {
     (void)handle;
@@ -45,7 +45,7 @@ extern "C" uint32_t ConsoleWrite_HLE_80015500(
     }
 }
 
-PPC_NATIVE_OVERRIDE(803FC8AC, ConsoleWrite_HLE_80015500, uint32_t,
+PPC_NATIVE_OVERRIDE(803FC8AC, ConsoleWrite_HLE, uint32_t,
          (uint32_t handle, uint32_t bufferAddr, uint32_t lengthPtr, uint32_t refCon),
          (handle, bufferAddr, lengthPtr, refCon));
 

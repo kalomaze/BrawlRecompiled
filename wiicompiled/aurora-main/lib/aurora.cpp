@@ -22,7 +22,7 @@
 #include <magic_enum.hpp>
 
 #include "system_info.hpp"
-#include "tracy/Tracy.hpp"
+#include "aurora/profiling.hpp"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN

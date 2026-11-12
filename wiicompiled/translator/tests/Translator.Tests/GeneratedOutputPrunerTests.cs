@@ -1,5 +1,4 @@
 using Translator.Core.Build;
-using Translator.Core.Mods;
 
 namespace Translator.Tests;
 

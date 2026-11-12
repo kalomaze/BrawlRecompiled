@@ -3,11 +3,15 @@
 // Flat 4 GiB guest address space: a guest access is just `*(T*)(kFlatGuestBase + addr)` plus a
 // byte swap, no page-table load/branch. Two views alias the same physical memory: the GUEST
 // view at kFlatGuestBase has page protections as the interception mechanism (unmapped/MMIO/
-// executable/deferred-read pages are uncommitted or protected), while the HOST view is a plain
+// executable pages are uncommitted or protected), while the HOST view is a plain
 // alias native runtime code (image loading, DVD reads, HLE, GX) writes through unchecked.
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+
+#ifndef MKW_FLAT_MEMORY
+#define MKW_FLAT_MEMORY 0
+#endif
 
 namespace GuestFlat {
 
@@ -15,6 +19,7 @@ namespace GuestFlat {
 // of a global.
 inline constexpr uint64_t kGuestSpaceSize = 0x1'0000'0000ull;
 inline constexpr size_t kGuestPageSize = 0x1000;
+#if MKW_FLAT_MEMORY
 #if defined(__x86_64__)
 // 16 TiB: clear of the Windows ASan shadow (32 TiB) and of the usual image/heap
 // placement.
@@ -41,6 +46,7 @@ inline constexpr uintptr_t kFixedFlatGuestBase = 0x0000'0010'0000'0000ull;
 #endif
 
 #define MKW_FLAT_GUEST_BASE (reinterpret_cast<uint8_t*>(GuestFlat::kFixedFlatGuestBase))
+#endif // MKW_FLAT_MEMORY
 
 enum class Backing {
     Owned,
@@ -56,18 +62,17 @@ struct RegionRequest {
 
 struct FaultCounters {
     uint32_t mmio = 0;      // MMIO access that reached the handler
-    uint32_t efb = 0;       // deferred (EFB) read materialized from a trap
     uint32_t xguard = 0;    // executable-page write trap
-    uint32_t unmapped = 0;  // guest touches that landed outside every mapped region
-    uint32_t unmappedRegions = 0;  // distinct 64 KiB blocks committed on demand
+    uint32_t unhandled = 0; // guest faults without a supported recovery
 };
 
+#if MKW_FLAT_MEMORY
 // True once the reservation exists and translated code may use the flat path.
 bool IsActive();
 
 // True when a host VM page covers more than one 4 KiB Wii page. In that
 // configuration, guest-view page protection cannot safely represent per-Wii-
-// page MMIO, deferred-read, or executable-write state, so general translated
+// page MMIO or executable-write state, so general translated
 // accesses must use the checked Memory::* path.
 // Windows user mode and x86-64 always use a 4 KiB base page, so those builds
 // fold this to a compile-time false: it appears in every flat access and must
@@ -95,11 +100,6 @@ void Initialize(const std::vector<RegionRequest>& regions);
 // Memory::GetPointer hand out.
 uint8_t* HostPointer(uint32_t guestAddress);
 
-// Deferred (EFB) reads: the covered guest pages are made PAGE_NOACCESS in the
-// guest view so a flat read traps and materializes the copy.
-void ProtectDeferredRange(uint32_t address, size_t length);
-void UnprotectDeferredRange(uint32_t address, size_t length);
-
 // Executable-write guard: pages fully covered by a registered executable range
 // become PAGE_READONLY in the guest view. Registration order does not matter -
 // ranges registered before the mapping exists are re-applied by Initialize.
@@ -121,9 +121,23 @@ void LogFaultSummary() noexcept;
 // resolved; the caller must then resume execution. `faultAddress` is the raw
 // host pointer the access violation trapped on (Windows: ExceptionInformation[1];
 // POSIX: siginfo_t::si_addr) and `isWrite` is whether it was a write access
-// (Windows: ExceptionInformation[0] != 0; POSIX: derived from the ucontext).
+// (Windows: ExceptionInformation[0] == 1; POSIX: derived from the ucontext).
 // The platform-specific handler that calls this is expected to have already
-// done that extraction - this function only ever works with the parsed pair.
-bool HandleAccessViolation(void* faultAddress, bool isWrite) noexcept;
+// done that extraction. instructionAddress is the faulting host PC, not a guest
+// PPC address. Missing PCs and native execution inside guest RAM are rejected:
+// data-page recovery cannot resolve an instruction-fetch fault.
+bool HandleAccessViolation(void* faultAddress, bool isWrite, const void* instructionAddress) noexcept;
+
+#else
+// The baseline uses Memory's allocated backing and explicit access checks.
+// Protection hooks have no work here: the checked paths enforce their policy.
+inline constexpr bool IsActive() { return false; }
+inline constexpr bool RequiresCheckedAccess() noexcept { return true; }
+inline void RegisterExecutableRange(uint32_t, uint32_t) {}
+inline void ReprotectExecutablePage(uint32_t) {}
+inline FaultCounters Counters() { return {}; }
+inline void LogFaultSummary() noexcept {}
+inline bool HandleAccessViolation(void*, bool, const void*) noexcept { return false; }
+#endif
 
 } // namespace GuestFlat

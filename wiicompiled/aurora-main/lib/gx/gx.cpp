@@ -1,4 +1,3 @@
-extern "C" unsigned g_spmAudit[8];
 #include <filesystem>
 #include <cstdlib>
 #include "gx.hpp"
@@ -17,7 +16,7 @@ extern "C" unsigned g_spmAudit[8];
 
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
-#include <tracy/Tracy.hpp>
+#include <aurora/profiling.hpp>
 
 #include <algorithm>
 #include <cfloat>
@@ -1452,13 +1451,9 @@ void resolve_sampled_textures(const ShaderInfo& info) noexcept {
     // NSMBW debugging: NSMBW_TEX_PROBE logs each texture (address, size, format) the first time it
     // resolves from a given source: an EFB copy or guest RAM (and which GPU texture).
     static const bool texProbe = std::getenv("NSMBW_TEX_PROBE") != nullptr || std::filesystem::exists("texprobe.txt");
-    if (!handle && obj.data != nullptr && (++g_spmAudit[2], texProbe)) {
+    if (!handle && obj.data != nullptr && texProbe) {
       static u32 misses = 0;
       if (misses++ < 200) std::fprintf(stderr, "[texprobe] NO HANDLE map %u tex %p %ux%u fmt %u\n", static_cast<unsigned>(i), obj.data, obj.width(), obj.height(), obj.format());
-    }
-    if (!handle) {  // audit: a used texture slot that resolved to nothing (null data, or palette format without a valid TLUT)
-      ++g_spmAudit[6];
-      if (is_palette_format(obj.format())) ++g_spmAudit[7];
     }
     if (texProbe && handle) {
       static absl::flat_hash_set<std::pair<const void*, const void*>> seen;

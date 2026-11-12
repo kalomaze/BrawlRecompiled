@@ -1,4 +1,5 @@
 #include "guest_flat_memory.h"
+#include "fault_report.h"
 
 #include <algorithm>
 #include <atomic>
@@ -6,7 +7,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <sstream>
@@ -14,6 +14,7 @@
 #include <unordered_map>
 
 #include "memory.h"
+#include "guest_code_patch.h"
 #include "ppc_runtime.h"
 #include "recomp_mod_loader.h"
 #include "runtime_log.h"
@@ -62,7 +63,7 @@ size_t HostPageSize()
 #endif
 
 // Named, platform-neutral protection modes so every fault-interception call site below (the
-// MMIO window, the executable-write guard, deferred-EFB-read protection, the on-demand
+// MMIO window, the executable-write guard, the on-demand
 // unmapped-block commit) can stay identical text on both platforms; only ProtectRange() and
 // CommitPlaceholder() below branch on VirtualProtect vs. mprotect.
 #if defined(_WIN32)
@@ -150,41 +151,15 @@ std::vector<GuardedRange>& ExecutableRanges() {
     return ranges;
 }
 
-// 4 KiB guest pages currently PAGE_READONLY for the executable-write guard.
-std::vector<uint8_t>& ExecutableProtectedPages() {
-    static std::vector<uint8_t> pages(1u << 20, 0);  // 2^32 / 4 KiB
-    return pages;
-}
-
-std::vector<GuardedRange>& DeferredRanges() {
-    static std::vector<GuardedRange> ranges;
-    return ranges;
-}
-
-#if !defined(_WIN32)
-// Windows disambiguates a racing "unmapped touch" fault via VirtualQuery (did some other thread
-// already commit this 64 KiB block, and is it actually accessible enough to satisfy this access).
-// mprotect has no query counterpart, so this tracks the same fact ourselves: one bit per 64 KiB
-// block, set the first time this module ever commits it, checked-and-set under StateMutex() so
-// two threads racing on the same never-yet-committed block still report/commit exactly once.
-std::vector<uint8_t>& UnmappedCommittedBlocks() {
-    static std::vector<uint8_t> blocks(1u << 16, 0);  // 2^32 / 64 KiB
-    return blocks;
-}
-#endif
-
+// Fault handlers must read these without a mutex or first-use allocation.
+static_assert(std::atomic<uint8_t>::is_always_lock_free);
+// Registration is published before OS protection and never cleared. Otherwise
+// a fault racing registration could mistake executable memory for sparse data.
+constexpr uint8_t kExecutableRegistered = 1;
+std::atomic<uint8_t> g_executablePages[1u << 20]{};
 std::atomic<uint32_t> g_countMmio{0};
-std::atomic<uint32_t> g_countEfb{0};
 std::atomic<uint32_t> g_countXGuard{0};
-std::atomic<uint32_t> g_countUnmapped{0};
-std::atomic<uint32_t> g_countUnmappedRegions{0};
-
-// Full register dumps for the first few committed regions. The one-line record
-// below is emitted for every region regardless; the dump is what the historical
-// checked path produced for an unmapped access, and it stays useful only while
-// the log is still readable - a pointer that walks a large stride would
-// otherwise bury the run in 65536 dumps.
-constexpr uint32_t kUnmappedCpuDumpLimit = 16;
+std::atomic<uint32_t> g_countUnhandled{0};
 
 uint64_t RoundUp(uint64_t value, uint64_t alignment) {
     return (value + alignment - 1u) & ~(alignment - 1u);
@@ -361,23 +336,20 @@ bool CommitPlaceholder(uint8_t* address, uint64_t size, ProtectionFlags protecti
 bool IsMmio(uint32_t address) { return MemoryInline::IsMmioAddress(address); }
 bool IsGpuFifo(uint32_t address) { return MemoryInline::IsGpuFifoAddress(address); }
 
-void ApplyExecutableProtectionLocked() {
+void ProtectExecutableRange(uint32_t start, uint32_t end) {
     if (g_base == nullptr || RequiresCheckedAccess()) return;
-    auto& protectedPages = ExecutableProtectedPages();
-    for (const auto& range : ExecutableRanges()) {
-        // Edge pages too (code and data): GuestCodePatch keeps one open after a data store until the next frame, so
-        // its data costs a fault a frame at most, and a mod's hook written there by a plain store is still seen.
-        const uint64_t first = static_cast<uint64_t>(range.start) & ~(kHostPageSize - 1u);
-        const uint64_t last = RoundUp(range.end, kHostPageSize);
-        if (last <= first) continue;
-        for (uint64_t page = first; page < last; page += kHostPageSize) {
-            const uint32_t pageIndex = static_cast<uint32_t>(page >> 12);
-            if (protectedPages[pageIndex] != 0) continue;
-            if (ProtectRange(g_base + page, kHostPageSize, kProtRead)) {
-                protectedPages[pageIndex] = 1;
-            }
-        }
+    // Edge pages contain code and data; GuestCodePatch decides when they rearm.
+    const uint64_t first = static_cast<uint64_t>(start) & ~(kHostPageSize - 1u);
+    const uint64_t last = RoundUp(end, kHostPageSize);
+    for (uint64_t page = first; page < last; page += kHostPageSize) {
+        g_executablePages[page >> 12].store(kExecutableRegistered, std::memory_order_release);
+        if (!ProtectRange(g_base + page, kHostPageSize, kProtRead))
+            throw std::runtime_error(LastErrorText("protecting executable guest page"));
     }
+}
+
+void ApplyExecutableProtectionLocked() {
+    for (const auto& range : ExecutableRanges()) ProtectExecutableRange(range.start, range.end);
 }
 
 bool SameLayout(const std::vector<RegionRequest>& lhs, const std::vector<RegionRequest>& rhs) {
@@ -420,118 +392,15 @@ void ZeroMappedStorage() {
 }
 
 #if defined(_WIN32)
-// BRAWL_WATCH_WRITE=<hex guest address>[:<hex value>]: a debugging aid for mods. Each write to that word (that leaves
-// it holding <value>, when one is given) is logged with the guest state: its page stays read-only, and each write to
-// the page is single-stepped, checked, and the page protected again.
-uint32_t g_watchAddress = 0;  // start of the watched pages
-uint32_t g_watchWord = 0;     // the word itself
-bool g_watchHasValue = false;
-uint32_t g_watchValue = 0;
-bool g_watchAccess = false;  // BRAWL_WATCH_ACCESS=<start>-<end>: every access to those pages, the first ones logged
-uint32_t g_watchEnd = 0;
-thread_local uint8_t* t_watchPage = nullptr;
-thread_local bool t_watchRearm = false;
-thread_local bool t_watchHit = false;
-thread_local uint32_t t_watchBefore = 0;
-
-uint32_t WatchedWord() {
-    uint32_t value = 0;
-    std::memcpy(&value, g_base + g_watchWord, 4);
-    return __builtin_bswap32(value);
-}
-
-void ArmWriteWatch() {
-    const char* text = std::getenv("BRAWL_WATCH_WRITE");
-    if (text == nullptr) {
-        text = std::getenv("BRAWL_WATCH_ACCESS");
-        g_watchAccess = text != nullptr;
-    }
-    if (text == nullptr) return;
-    char* end = nullptr;
-    g_watchAddress = static_cast<uint32_t>(std::strtoul(text, &end, 16)) & ~3u;
-    if (g_watchAddress == 0) return;
-    g_watchWord = g_watchAddress;
-    if (*end == ':') {
-        g_watchHasValue = true;
-        g_watchValue = static_cast<uint32_t>(std::strtoul(end + 1, nullptr, 16));
-    }
-    if (g_watchAccess && *end == '-') {
-        g_watchEnd = static_cast<uint32_t>(std::strtoul(end + 1, nullptr, 16));
-    }
-    if (g_watchEnd <= g_watchAddress) g_watchEnd = g_watchAddress + 4;
-    g_watchAddress &= ~(kHostPageSize - 1);
-    g_watchEnd = (g_watchEnd + kHostPageSize - 1) & ~(kHostPageSize - 1);
-    ProtectRange(g_base + g_watchAddress, g_watchEnd - g_watchAddress, g_watchAccess ? kProtNone : kProtRead);
-    RT_LOGF(RT_TAG_MEMORY, "watching %s 0x%08X\n", g_watchAccess ? "every access to the page of" : "writes to",
-            g_watchAddress);
-}
-
-bool HandleWriteWatch(EXCEPTION_POINTERS* info) {
-    const auto* record = info->ExceptionRecord;
-    uint8_t* page = g_base + (g_watchAddress & ~(kHostPageSize - 1));
-    if (record->ExceptionCode == EXCEPTION_SINGLE_STEP && t_watchRearm) {
-        if (g_watchAccess) page = t_watchPage;
-        t_watchRearm = false;
-        static int logged = 0;
-        if (t_watchHit && (!g_watchHasValue || WatchedWord() == g_watchValue) && logged++ < 40) {
-            RT_LOGF(RT_TAG_MEMORY, "[watch] 0x%08X: 0x%08X -> 0x%08X, guest state:\n", g_watchWord, t_watchBefore,
-                    WatchedWord());
-            SystemBridge::DumpCpuState(TryGetCpuContext());
-        }
-        t_watchHit = false;
-        ProtectRange(page, kHostPageSize, g_watchAccess ? kProtNone : kProtRead);
-        return true;
-    }
-    if (record->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || record->NumberParameters < 2 ||
-        (record->ExceptionInformation[0] == 0 && !g_watchAccess)) {
-        return false;
-    }
-    const uintptr_t fault = static_cast<uintptr_t>(record->ExceptionInformation[1]);
-    if (g_watchAccess) {
-        if (fault < reinterpret_cast<uintptr_t>(g_base + g_watchAddress) || fault >= reinterpret_cast<uintptr_t>(g_base + g_watchEnd)) {
-            return false;
-        }
-        page = reinterpret_cast<uint8_t*>(fault & ~static_cast<uintptr_t>(kHostPageSize - 1));
-        t_watchPage = page;
-    } else if (fault < reinterpret_cast<uintptr_t>(page) || fault >= reinterpret_cast<uintptr_t>(page) + kHostPageSize) {
-        return false;
-    }
-    const uint32_t guestAddress = static_cast<uint32_t>(fault - reinterpret_cast<uintptr_t>(g_base));
-    t_watchHit = guestAddress + 8 > g_watchWord && guestAddress < g_watchWord + 4;
-    if (g_watchAccess) {
-        static int logged = 0;
-        if (logged == 30) {  // seen enough: let the game run at full speed again
-            ProtectRange(g_base + g_watchAddress, g_watchEnd - g_watchAddress, kProtReadWrite);
-            g_watchAccess = false;
-            g_watchAddress = 0;
-            return true;
-        }
-        if (logged++ < 30) {
-            RT_LOGF(RT_TAG_MEMORY, "[watch] %s 0x%08X, guest state:\n",
-                    record->ExceptionInformation[0] ? "write" : "read", guestAddress);
-            SystemBridge::DumpCpuState(TryGetCpuContext());
-        }
-        t_watchHit = false;
-    }
-    if (t_watchHit) t_watchBefore = WatchedWord();
-    ProtectRange(page, kHostPageSize, kProtReadWrite);
-    t_watchRearm = true;
-    info->ContextRecord->EFlags |= 0x100;  // trap after this one instruction
-    return true;
-}
-
 LONG CALLBACK FlatGuestVectoredHandler(EXCEPTION_POINTERS* info) {
-    const auto* record = info->ExceptionRecord;
-    if (g_watchAddress != 0 && record != nullptr && HandleWriteWatch(info)) {
-        return EXCEPTION_CONTINUE_EXECUTION;
-    }
+    const auto* record = info ? info->ExceptionRecord : nullptr;
     if (record == nullptr || record->ExceptionCode != EXCEPTION_ACCESS_VIOLATION ||
-        record->NumberParameters < 2) {
+        record->NumberParameters < 2 || record->ExceptionInformation[0] > 1) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
     void* faultAddress = reinterpret_cast<void*>(record->ExceptionInformation[1]);
-    const bool isWrite = record->ExceptionInformation[0] != 0;
-    if (HandleAccessViolation(faultAddress, isWrite)) {
+    const bool isWrite = record->ExceptionInformation[0] == 1;
+    if (HandleAccessViolation(faultAddress, isWrite, record->ExceptionAddress)) {
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     return EXCEPTION_CONTINUE_SEARCH;
@@ -546,62 +415,25 @@ void InstallVectoredHandler() {
 }
 #endif
 
-void ReportFatalGuestFault(const char* category, uint32_t guestAddress, bool isWrite,
-                           const char* detail) {
-    RT_LOG(RT_TAG_MEMORY) << "FATAL " << category << std::endl;
-    std::cerr << "  guest address: 0x" << std::hex << std::uppercase << std::setw(8)
-              << std::setfill('0') << guestAddress << std::dec << std::setfill(' ') << std::endl;
-    std::cerr << "  access:        " << (isWrite ? "write" : "read") << std::endl;
-    // The fault record carries the faulting address but not the width of the
-    // access, so the size is genuinely unavailable on this path. The checked
-    // path (runtime/src/memory.cpp) reports the exact length instead.
-    std::cerr << "  access size:   unknown (not recoverable from the fault record)" << std::endl;
-    std::cerr << "  active func:   0x" << std::hex << std::uppercase
-              << RecompMod::CurrentTranslatedExecutionAddress() << std::dec << std::nouppercase
-              << std::endl;
-    std::cerr << "  detail:        " << detail << std::endl;
-    if (auto* cpu = TryGetCpuContext()) {
-        std::cerr << "  guest pc:      0x" << std::hex << cpu->pc << " lr=0x" << cpu->lr << std::dec
-                  << std::endl;
-        SystemBridge::DumpCpuState(cpu);
-    }
-    std::cerr.flush();
-    std::ostringstream message;
-    message << "The game stopped because translated code performed a forbidden guest memory "
-               "access at 0x"
-            << std::hex << std::uppercase << guestAddress << ".\n\n"
-            << detail;
-    ShowRuntimeFatalPopup(category, message.str());
-    std::abort();
+[[noreturn]] void ReportFatalGuestFault(const char* category, uint32_t guestAddress, bool isWrite,
+                                      const char* detail) {
+    FaultReport::Message message;
+    message.Text("[memory] FATAL ").Text(category)
+        .Text("\n  guest address: ").Hex(guestAddress)
+        .Text(isWrite ? "\n  access: write" : "\n  access: read")
+        .Text("; size unknown (fault record has no access width)")
+        .Text("\n  active function: ").Hex(RecompMod::CurrentTranslatedExecutionAddress())
+        .Text("\n  host CPU context: ").Hex(reinterpret_cast<uintptr_t>(TryGetCpuContext()), sizeof(uintptr_t) * 2)
+        .Text("\n  detail: ").Text(detail);
+    // Do not dereference the context or walk guest memory after a fault: either
+    // may be corrupt. Record addresses without walking possibly corrupt state.
+    message.Fatal();
 }
 
-// Logged once per newly committed 64 KiB block since a silent commit would hide a wild guest pointer bug.
-// Called with StateMutex() released so the register dump (which reads guest memory) can't deadlock against it.
-void ReportUnmappedCommit(uint32_t guestAddress, uint64_t blockBase, bool isWrite,
-                          uint32_t regionOrdinal) {
-    RT_LOG(RT_TAG_MEMORY) << "WARNING unmapped guest touch: no mapped region for 0x" << std::hex
-              << std::uppercase << std::setw(8) << std::setfill('0') << guestAddress
-              << std::setfill(' ') << " (" << (isWrite ? "write" : "read")
-              << "); committed zero-filled block 0x" << blockBase << "-0x"
-              << (blockBase + kAllocationGranularity) << " active=0x"
-              << RecompMod::CurrentTranslatedExecutionAddress();
-    if (auto* cpu = TryGetCpuContext()) {
-        std::cerr << " pc=0x" << cpu->pc << " lr=0x" << cpu->lr << " r1=0x" << cpu->gpr[1];
-    }
-    std::cerr << std::dec << std::nouppercase << " region#" << regionOrdinal << std::endl;
-
-    if (regionOrdinal <= kUnmappedCpuDumpLimit) {
-        if (auto* cpu = TryGetCpuContext()) {
-            RT_LOG(RT_TAG_MEMORY) << "===== DUMPING CPU STATE (unmapped touch) =====" << std::endl;
-            SystemBridge::DumpCpuState(cpu);
-        }
-        if (regionOrdinal == kUnmappedCpuDumpLimit) {
-            RT_LOG(RT_TAG_MEMORY) << "further unmapped commits log the one-line record only; the "
-                         "shutdown summary reports the totals."
-                      << std::endl;
-        }
-    }
-    std::cerr.flush();
+void ReportGuestFault(const char* reason, uint32_t address, bool isWrite) {
+    FaultReport::Message message;
+    message.Text("[memory] WARNING ").Text(reason)
+        .Text(isWrite ? " write at " : " read at ").Hex(address).Write();
 }
 
 } // namespace
@@ -611,6 +443,11 @@ bool IsActive() {
 }
 
 void Initialize(const std::vector<RegionRequest>& regions) {
+#if defined(_WIN32)
+    if (std::getenv("BRAWL_WATCH_WRITE") || std::getenv("BRAWL_WATCH_ACCESS"))
+        throw std::runtime_error("BRAWL_WATCH_WRITE/BRAWL_WATCH_ACCESS were removed: use debugger watchpoints.");
+#endif
+
     std::lock_guard<std::mutex> lock(StateMutex());
 
 #if !defined(MKW_GUEST_FLAT_FIXED_PAGE_SIZE)
@@ -623,14 +460,6 @@ void Initialize(const std::vector<RegionRequest>& regions) {
                 "The flat guest address space is mapped once per process; a second Memory::Init "
                 "requested a different region layout. Restart the process instead of remapping.");
         }
-        // Re-init keeps the mapping and restores the pristine interception
-        // state: deferred ranges are gone, executable pages stay protected.
-        for (const auto& range : DeferredRanges()) {
-            const uint64_t first = static_cast<uint64_t>(range.start) & ~(kHostPageSize - 1u);
-            const uint64_t last = RoundUp(range.end, kHostPageSize);
-            ProtectRange(g_base + first, last - first, kProtReadWrite);
-        }
-        DeferredRanges().clear();
         ZeroMappedStorage();
         ApplyExecutableProtectionLocked();
         return;
@@ -674,9 +503,23 @@ void Initialize(const std::vector<RegionRequest>& regions) {
         // twice below (once here as the always-accessible host view, once per-region as the
         // guest view whose protection the fault handler controls), the same "one backing store,
         // two VA aliases" trick CreateFileMapping/MapViewOfFile(3) gives Windows.
+#if defined(__linux__)
         section.fd = memfd_create("wiicompiled-guest-ram", MFD_CLOEXEC);
+#else
+        // POSIX hosts without memfd_create use an unlinked backing file.
+        char path[] = "/tmp/wiicompiled-guest-XXXXXX";
+        section.fd = mkstemp(path);
+        if (section.fd >= 0) {
+            if (unlink(path) != 0 || fcntl(section.fd, F_SETFD, FD_CLOEXEC) != 0) {
+                const int error = errno;
+                close(section.fd);
+                errno = error;
+                throw std::runtime_error(LastErrorText("preparing guest RAM backing file"));
+            }
+        }
+#endif
         if (section.fd < 0) {
-            throw std::runtime_error(LastErrorText("memfd_create for guest RAM"));
+            throw std::runtime_error(LastErrorText("creating guest RAM backing store"));
         }
         if (ftruncate(section.fd, static_cast<off_t>(rounded)) != 0) {
             throw std::runtime_error(LastErrorText("ftruncate for guest RAM"));
@@ -711,7 +554,7 @@ void Initialize(const std::vector<RegionRequest>& regions) {
     ApplyExecutableProtectionLocked();
 #if defined(_WIN32)
     InstallVectoredHandler();
-    ArmWriteWatch();
+
 #endif
 
     // Freshly created section objects are demand-zero, so no explicit clear is
@@ -735,36 +578,6 @@ uint8_t* HostPointer(uint32_t guestAddress) {
     return nullptr;
 }
 
-void ProtectDeferredRange(uint32_t address, size_t length) {
-    if (RequiresCheckedAccess() || !g_initialized || length == 0) return;
-    const uint64_t end = static_cast<uint64_t>(address) + length;
-    if (end > kGuestSpaceSize) return;
-    std::lock_guard<std::mutex> lock(StateMutex());
-    const uint64_t first = static_cast<uint64_t>(address) & ~(kHostPageSize - 1u);
-    const uint64_t last = RoundUp(end, kHostPageSize);
-    if (!ProtectRange(g_base + first, last - first, kProtNone)) {
-        // An unmapped destination cannot be trapped; the checked path still
-        // clears the readable bias, so nothing silently reads stale bytes.
-        return;
-    }
-    DeferredRanges().push_back(GuardedRange{address, static_cast<uint32_t>(end)});
-}
-
-void UnprotectDeferredRange(uint32_t address, size_t length) {
-    if (RequiresCheckedAccess() || !g_initialized || length == 0) return;
-    std::lock_guard<std::mutex> lock(StateMutex());
-    auto& ranges = DeferredRanges();
-    const uint64_t end = static_cast<uint64_t>(address) + length;
-    const auto it = std::find_if(ranges.begin(), ranges.end(), [&](const GuardedRange& range) {
-        return range.start == address && range.end == static_cast<uint32_t>(end);
-    });
-    if (it == ranges.end()) return;
-    ranges.erase(it);
-    const uint64_t first = static_cast<uint64_t>(address) & ~(kHostPageSize - 1u);
-    const uint64_t last = RoundUp(end, kHostPageSize);
-    ProtectRange(g_base + first, last - first, kProtReadWrite);
-}
-
 void RegisterExecutableRange(uint32_t start, uint32_t end) {
     if (RequiresCheckedAccess() || end <= start) return;
     std::lock_guard<std::mutex> lock(StateMutex());
@@ -775,29 +588,25 @@ void RegisterExecutableRange(uint32_t start, uint32_t end) {
         return;
     }
     ranges.push_back(GuardedRange{start, end});
-    ApplyExecutableProtectionLocked();
+    ProtectExecutableRange(start, end);
 }
 
 void ReprotectExecutablePage(uint32_t address) {
     if (RequiresCheckedAccess() || g_base == nullptr) return;
-    std::lock_guard<std::mutex> lock(StateMutex());
     const uint64_t page = static_cast<uint64_t>(address) & ~(kHostPageSize - 1u);
-    const bool inside = std::any_of(ExecutableRanges().begin(), ExecutableRanges().end(), [&](const GuardedRange& range) {
-        return page < range.end && page + kHostPageSize > range.start;
-    });
-    const uint32_t pageIndex = static_cast<uint32_t>(page >> 12);
-    if (inside && ExecutableProtectedPages()[pageIndex] == 0 && ProtectRange(g_base + page, kHostPageSize, kProtRead)) {
-        ExecutableProtectedPages()[pageIndex] = 1;
+    if (g_executablePages[page >> 12].load(std::memory_order_acquire) & kExecutableRegistered) {
+        // Do not cache the current OS protection: a fault may reopen this page
+        // concurrently. The last OS protection operation determines access.
+        if (!ProtectRange(g_base + page, kHostPageSize, kProtRead))
+            throw std::runtime_error(LastErrorText("rearming executable guest page"));
     }
 }
 
 FaultCounters Counters() {
     FaultCounters counters;
     counters.mmio = g_countMmio.load(std::memory_order_relaxed);
-    counters.efb = g_countEfb.load(std::memory_order_relaxed);
     counters.xguard = g_countXGuard.load(std::memory_order_relaxed);
-    counters.unmapped = g_countUnmapped.load(std::memory_order_relaxed);
-    counters.unmappedRegions = g_countUnmappedRegions.load(std::memory_order_relaxed);
+    counters.unhandled = g_countUnhandled.load(std::memory_order_relaxed);
     return counters;
 }
 
@@ -805,116 +614,70 @@ void LogFaultSummary() noexcept {
     static std::atomic<bool> reported{false};
     if (reported.exchange(true, std::memory_order_relaxed)) return;
     const FaultCounters counters = Counters();
-    if (counters.unmapped == 0) {
-        RT_LOG(RT_TAG_MEMORY) << "shutdown summary: no unmapped guest touches (efb="
-                  << counters.efb << " xguard=" << counters.xguard << " mmio=" << counters.mmio
-                  << ")" << std::endl;
-        std::cerr.flush();
-        return;
-    }
-    RT_LOG(RT_TAG_MEMORY) << "WARNING shutdown summary: " << counters.unmapped
-              << " unmapped guest touches across " << counters.unmappedRegions
-              << " distinct 64 KiB regions were absorbed by on-demand commits. Each one is a "
-                 "guest pointer that addressed nothing; search the log for "
-                 "'[" RT_TAG_MEMORY "] WARNING unmapped guest touch' for the faulting addresses."
-              << std::endl;
-    RT_LOG(RT_TAG_MEMORY) << "shutdown summary: efb=" << counters.efb
-              << " xguard=" << counters.xguard << " mmio=" << counters.mmio << std::endl;
+    RT_LOG(RT_TAG_MEMORY) << "shutdown summary: unhandled=" << counters.unhandled
+                         << " xguard=" << counters.xguard << " mmio=" << counters.mmio << std::endl;
     std::cerr.flush();
 }
 
-bool HandleAccessViolation(void* faultAddress, bool isWrite) noexcept {
-    if (!g_initialized || faultAddress == nullptr) return false;
+bool HandleAccessViolation(void* faultAddress, bool isWrite, const void* instructionAddress) noexcept {
+    if (!g_initialized || faultAddress == nullptr || instructionAddress == nullptr) return false;
 
     const uintptr_t fault = reinterpret_cast<uintptr_t>(faultAddress);
     const uintptr_t base = reinterpret_cast<uintptr_t>(g_base);
     if (fault < base || fault - base >= kGuestSpaceSize) return false;
+    // PPC instructions are translated/interpreted, never executed in this mapping.
+    // Opening data permissions cannot repair a native instruction-fetch fault.
+    const uintptr_t pc = reinterpret_cast<uintptr_t>(instructionAddress);
+    if (pc >= base && pc - base < kGuestSpaceSize) return false;
 
     const uint32_t guestAddress = static_cast<uint32_t>(fault - base);
 
-    // 1) Deferred (EFB) read: materialize the pending copy and drop the trap for the whole 4 KiB page span,
-    //    not just the registered range, since protection is page-granular. Leaving a range registered but
-    //    unprotected would serve stale bytes without ever faulting again.
-    {
-        bool covered = false;
-        uint32_t rangeStart = 0;
-        uint32_t rangeEnd = 0;
-        uint64_t spanFirst = 0;
-        uint64_t spanLast = 0;
-        {
-            std::lock_guard<std::mutex> lock(StateMutex());
-            auto& ranges = DeferredRanges();
-            const auto it = std::find_if(ranges.begin(), ranges.end(), [&](const GuardedRange& r) {
-                const uint64_t first = static_cast<uint64_t>(r.start) & ~(kHostPageSize - 1u);
-                const uint64_t last = RoundUp(r.end, kHostPageSize);
-                return guestAddress >= first && guestAddress < last;
-            });
-            if (it != ranges.end()) {
-                covered = true;
-                rangeStart = it->start;
-                rangeEnd = it->end;
-                ranges.erase(it);
-                spanFirst = static_cast<uint64_t>(rangeStart) & ~(kHostPageSize - 1u);
-                spanLast = RoundUp(rangeEnd, kHostPageSize);
-                ProtectRange(g_base + spanFirst, spanLast - spanFirst, kProtReadWrite);
-            }
-        }
-        if (covered) {
-            g_countEfb.fetch_add(1, std::memory_order_relaxed);
-            try {
-                MemoryInline::ResolveDeferredReads(
-                    static_cast<uint32_t>(spanFirst), static_cast<size_t>(spanLast - spanFirst));
-            } catch (const std::exception& error) {
-                ReportFatalGuestFault("deferred read materialization failed", guestAddress, isWrite,
-                                      error.what());
-            }
-            return true;
-        }
-    }
-
-    // 2) Executable-write guard. Only writes trap (the pages are PAGE_READONLY),
-    //    so a fault here is exactly the event the guard exists to report.
+    // 1) Executable-write guard. Registration remains visible while a page is
+    // being protected or reopened, so delayed faults retain their code-write classification.
     {
         const uint32_t pageIndex = guestAddress >> 12;
-        bool guarded = false;
-        {
-            std::lock_guard<std::mutex> lock(StateMutex());
-            guarded = ExecutableProtectedPages()[pageIndex] != 0;
-        }
+        const bool guarded = (g_executablePages[pageIndex].load(std::memory_order_acquire) & kExecutableRegistered) != 0;
         if (guarded) {
+            // This guard only removes write permission. A read fault indicates
+            // another failure; reopening permissions cannot repair its backing.
+            if (!isWrite) return false;
             g_countXGuard.fetch_add(1, std::memory_order_relaxed);
             // Aborts inside CheckExecutableWrite for an unsupported patch; the
             // width and value are not recoverable from the fault record, so the
             // report carries the exact address instead.
             if (!RecompMod::HandleExecutableWrite(guestAddress, 1, 0)) {
-                // A permitted write (the REL loader relocating its own text).
-                // Those arrive in bulk, so the page is opened permanently
-                // rather than trapping every relocation.
-                std::lock_guard<std::mutex> lock(StateMutex());
-                if (ProtectRange(g_base + (static_cast<uint64_t>(pageIndex) << 12), kHostPageSize,
-                                 kProtReadWrite)) {
-                    ExecutableProtectedPages()[pageIndex] = 0;
+                // Open the permitted store's page. GuestCodePatch rearms tracked
+                // code patches at its synchronization boundary.
+                if (!ProtectRange(g_base + (static_cast<uint64_t>(pageIndex) << 12), kHostPageSize,
+                                  kProtReadWrite)) {
+                    return false;  // Retrying an unchanged protection fault would loop forever.
                 }
+                // Sync may have consumed the policy check's notification and
+                // rearmed the page before we opened it. Publish again afterward.
+                // If Sync instead consumes this notification before the store
+                // retries, its subsequent read-only protection traps that store.
+                GuestCodePatch::NoteWrite(guestAddress);
             }
             return true;
         }
     }
 
-    // 3) MMIO. PAGE_NOACCESS makes both directions faults: a write has no backing device (including a GPU
+    // 2) MMIO. PAGE_NOACCESS makes both directions faults: a write has no backing device (including a GPU
     //    FIFO store the translator failed to lower), and a read would have to invent a register value;
     //    answering zero would turn a missing device into a silent hang, so both are reported instead.
     if (IsMmio(guestAddress)) {
         g_countMmio.fetch_add(1, std::memory_order_relaxed);
-        // Outside the device register blocks (Flipper at 0xCC000000/0xCD000000, Hollywood at 0xCD800000) the bus has
-        // nothing; mods read through stale pointers there (Project+: an 0xCC-filled pointer plus an offset). Like
-        // the console and Dolphin, such reads give 0: the page becomes zeroed scratch memory.
+        // Compatibility reads outside the modeled device blocks currently
+        // return zero. This is not a complete hardware/MMIO model. Keep that
+        // zero backing read-only; helper-based stores already discard writes.
         const uint32_t block = guestAddress & 0xFFFF0000u;
         if (block != 0xCC000000u && block != 0xCD000000u && block != 0xCD800000u) {
-            std::lock_guard<std::mutex> lock(StateMutex());
-            if (ProtectRange(g_base + (guestAddress & ~(kHostPageSize - 1)), kHostPageSize, kProtReadWrite)) {
-                RT_LOG(RT_TAG_MEMORY) << "WARNING " << (isWrite ? "write" : "read") << " of 0x" << std::hex
-                                      << std::uppercase << guestAddress << std::dec << std::nouppercase
-                                      << ", where no hardware register is: reads there give 0" << std::endl;
+            if (isWrite) {
+                ReportFatalGuestFault("unchecked MMIO write", guestAddress, isWrite,
+                                      "MMIO stores must use memory helpers; writable scratch would create hidden guest state.");
+            }
+            if (ProtectRange(g_base + (guestAddress & ~(kHostPageSize - 1)), kHostPageSize, kProtRead)) {
+                ReportGuestFault("unhandled MMIO block; opened read-only zero page for", guestAddress, false);
                 return true;
             }
         }
@@ -943,52 +706,12 @@ bool HandleAccessViolation(void* faultAddress, bool isWrite) noexcept {
         return true;
     }
 
-    // 4) Unmapped address: commit the block on demand (reproducing the old zero-fill sparse-map behavior)
-    //    and report it, since a commit here means a wild guest pointer that would otherwise walk over silently.
-    const uint64_t blockBase = static_cast<uint64_t>(guestAddress) & ~(kAllocationGranularity - 1u);
-    g_countUnmapped.fetch_add(1, std::memory_order_relaxed);
-    bool committed = false;
-    {
-        std::lock_guard<std::mutex> lock(StateMutex());
-#if defined(_WIN32)
-        MEMORY_BASIC_INFORMATION mbi{};
-        if (VirtualQuery(g_base + blockBase, &mbi, sizeof(mbi)) == 0) return false;
-        if (mbi.State == MEM_COMMIT) {
-            // Another thread already committed this block: re-running the
-            // access succeeds. Any other committed-but-inaccessible state is
-            // not ours to fix - resuming would fault forever, so hand the
-            // exception to the crash reporter instead.
-            const bool writable = (mbi.Protect & (PAGE_READWRITE | PAGE_WRITECOPY |
-                                                  PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
-            const bool readable = writable || (mbi.Protect & (PAGE_READONLY | PAGE_EXECUTE_READ |
-                                                              PAGE_EXECUTE)) != 0;
-            return isWrite ? writable : readable;
-        }
-#else
-        // mprotect has no VirtualQuery counterpart to ask "is this block already committed and
-        // how", so this module tracks the same fact itself (UnmappedCommittedBlocks, checked and
-        // set under this same lock): once a block has been committed READ|WRITE by an earlier
-        // call here (this thread's or a racing one's), every subsequent fault on it is a no-op
-        // resume - there is no POSIX equivalent of "committed but insufficiently permissioned"
-        // for a block only this function ever touches.
-        const uint32_t blockIndex = static_cast<uint32_t>(blockBase / kAllocationGranularity);
-        if (UnmappedCommittedBlocks()[blockIndex] != 0) {
-            return true;
-        }
-#endif
-        if (!CommitPlaceholder(g_base + blockBase, kAllocationGranularity, kProtReadWrite)) {
-            return false;
-        }
-#if !defined(_WIN32)
-        UnmappedCommittedBlocks()[blockIndex] = 1;
-#endif
-        committed = true;
-    }
-    if (committed) {
-        const uint32_t ordinal = g_countUnmappedRegions.fetch_add(1, std::memory_order_relaxed) + 1u;
-        ReportUnmappedCommit(guestAddress, blockBase, isWrite, ordinal);
-    }
-    return true;
+    // Neither a registered code guard nor a modeled MMIO recovery. Granting
+    // access here would invent mutable memory absent from Memory::Contains and
+    // all snapshots. Preserve the fault, including failures on existing backing.
+    g_countUnhandled.fetch_add(1, std::memory_order_relaxed);
+    ReportGuestFault("unhandled guest memory fault", guestAddress, isWrite);
+    return false;
 }
 
 } // namespace GuestFlat

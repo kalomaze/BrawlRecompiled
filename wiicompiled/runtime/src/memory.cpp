@@ -30,11 +30,9 @@
 
 MemoryInline::PageEntry MemoryInline::g_pageTable[MemoryInline::kPageCount]{};
 uintptr_t MemoryInline::g_fullPageBias[MemoryInline::kPageCount]{};
-uintptr_t MemoryInline::g_fullReadablePageBias[MemoryInline::kPageCount]{};
 uintptr_t MemoryInline::g_fullWritablePageBias[MemoryInline::kPageCount]{};
 const MemoryInline::SparseWritablePageTable*
     MemoryInline::g_sparseWritablePageTables[MemoryInline::kPageCount]{};
-uint8_t MemoryInline::g_deferredReadCoveredPages[MemoryInline::kPageCount]{};
 template <typename T>
 T MemoryInline::ReadResolvedFallback(uint32_t addr) {
     if constexpr (sizeof(T) == 1) return Memory::Read8(addr);
@@ -62,50 +60,9 @@ template void MemoryInline::WriteResolvedFallback<uint64_t>(uint32_t, uint64_t);
 void MemoryInline::WriteResolvedFallbackFloat32(uint32_t addr, double val) { Memory::WriteFloat32(addr, val); }
 void MemoryInline::WriteResolvedFallbackFloat64(uint32_t addr, double val) { Memory::WriteFloat64(addr, val); }
 namespace {
-struct DeferredRead {
-    uint64_t token = 0;
-    uint32_t start = 0;
-    size_t length = 0;
-    Memory::DeferredReadCallback callback = nullptr;
-    void* user = nullptr;
-};
-
-std::mutex& DeferredReadMutex() {
-    static std::mutex mutex;
-    return mutex;
-}
-
-std::vector<DeferredRead>& DeferredReads() {
-    static std::vector<DeferredRead> reads;
-    return reads;
-}
-
-uint64_t& NextDeferredReadToken() {
-    static uint64_t token = 1;
-    return token;
-}
-
-bool RangesOverlap(uint32_t firstStart, size_t firstLength,
-                   uint32_t secondStart, size_t secondLength) {
-    const uint64_t firstEnd = static_cast<uint64_t>(firstStart) + firstLength;
-    const uint64_t secondEnd = static_cast<uint64_t>(secondStart) + secondLength;
-    return static_cast<uint64_t>(firstStart) < secondEnd &&
-           static_cast<uint64_t>(secondStart) < firstEnd;
-}
-
-void RefreshDeferredReadPage(uint32_t page) {
-    const uint32_t pageStart = page << MemoryInline::kPageShift;
-    const auto& reads = DeferredReads();
-    const bool covered = std::any_of(reads.begin(), reads.end(), [pageStart](const DeferredRead& read) {
-        return RangesOverlap(pageStart, MemoryInline::kPageSize, read.start, read.length);
-    });
-    MemoryInline::g_fullReadablePageBias[page] =
-        !covered ? MemoryInline::g_fullPageBias[page] : 0;
-    MemoryInline::g_deferredReadCoveredPages[page] = covered ? 1 : 0;
-}
-
 struct Region {
     Memory::RegionConfig config;
+    std::shared_ptr<std::vector<uint8_t>> storage;
     uint8_t* storagePtr = nullptr;
     size_t storageSize = 0;
 };
@@ -134,94 +91,13 @@ void ClearPageTable() {
         entry.base = nullptr;
         entry.limit = 0;
         MemoryInline::g_fullPageBias[i] = 0;
-        MemoryInline::g_fullReadablePageBias[i] = 0;
         MemoryInline::g_fullWritablePageBias[i] = 0;
-        MemoryInline::g_deferredReadCoveredPages[i] = 0;
         MemoryInline::g_sparseWritablePageTables[i] = nullptr;
         SparseWritablePageTableStorage()[i].reset();
     }
 }
 
 } // namespace
-
-uint64_t Memory::RegisterDeferredRead(uint32_t addr, size_t length,
-                                      DeferredReadCallback callback, void* user) {
-    if (length == 0 || callback == nullptr ||
-        static_cast<uint64_t>(addr) + length > (uint64_t{1} << 32)) {
-        return 0;
-    }
-
-    std::lock_guard lock{DeferredReadMutex()};
-    uint64_t token = NextDeferredReadToken()++;
-    if (token == 0) token = NextDeferredReadToken()++;
-    DeferredReads().push_back({token, addr, length, callback, user});
-    const uint32_t firstPage = addr >> MemoryInline::kPageShift;
-    const uint32_t lastPage = static_cast<uint32_t>(
-        (static_cast<uint64_t>(addr) + length - 1) >> MemoryInline::kPageShift);
-    for (uint32_t page = firstPage; page <= lastPage; ++page) {
-        MemoryInline::g_fullReadablePageBias[page] = 0;
-        MemoryInline::g_deferredReadCoveredPages[page] = 1;
-    }
-    // Clearing the readable bias only intercepts the checked path. A flat read
-    // needs the host pages themselves to trap, which is what PAGE_NOACCESS on
-    // the guest view does; the vectored handler materializes the copy, restores
-    // the protection and re-runs the access.
-    GuestFlat::ProtectDeferredRange(addr, length);
-    return token;
-}
-
-void Memory::ClearDeferredReads() {
-    std::lock_guard lock{DeferredReadMutex()};
-    auto& reads = DeferredReads();
-    std::vector<uint32_t> pages;
-    for (const auto& read : reads) {
-        const uint32_t firstPage = read.start >> MemoryInline::kPageShift;
-        const uint32_t lastPage = static_cast<uint32_t>(
-            (static_cast<uint64_t>(read.start) + read.length - 1) >> MemoryInline::kPageShift);
-        for (uint32_t page = firstPage; page <= lastPage; ++page) pages.push_back(page);
-        GuestFlat::UnprotectDeferredRange(read.start, read.length);
-    }
-    reads.clear();
-    std::sort(pages.begin(), pages.end());
-    pages.erase(std::unique(pages.begin(), pages.end()), pages.end());
-    for (uint32_t page : pages) RefreshDeferredReadPage(page);
-}
-
-bool MemoryInline::ResolveDeferredReads(uint32_t addr, size_t length) {
-    std::vector<DeferredRead> matches;
-    std::vector<uint32_t> affectedPages;
-    {
-        std::lock_guard lock{DeferredReadMutex()};
-        auto& reads = DeferredReads();
-        for (auto it = reads.begin(); it != reads.end();) {
-            if (!RangesOverlap(addr, length, it->start, it->length)) {
-                ++it;
-                continue;
-            }
-            const uint32_t firstPage = it->start >> kPageShift;
-            const uint32_t lastPage = static_cast<uint32_t>(
-                (static_cast<uint64_t>(it->start) + it->length - 1) >> kPageShift);
-            for (uint32_t page = firstPage; page <= lastPage; ++page) affectedPages.push_back(page);
-            matches.push_back(*it);
-            // Idempotent: the vectored handler already dropped the protection
-            // for the range whose trap brought us here.
-            GuestFlat::UnprotectDeferredRange(it->start, it->length);
-            it = reads.erase(it);
-        }
-        std::sort(affectedPages.begin(), affectedPages.end());
-        affectedPages.erase(std::unique(affectedPages.begin(), affectedPages.end()), affectedPages.end());
-        for (uint32_t page : affectedPages) RefreshDeferredReadPage(page);
-    }
-
-    // The range is removed before entering renderer code so any memory reads
-    // made while submitting the copy cannot recursively trigger it.
-    for (const auto& match : matches) {
-        if (!match.callback(match.user)) {
-            throw Memory::AccessViolation(addr, length, "deferred read materialization failed");
-        }
-    }
-    return true;
-}
 
 namespace {
 
@@ -270,8 +146,6 @@ void RefreshFastPathTables() {
     auto& sparseStorage = SparseWritablePageTableStorage();
     for (uint32_t page = 0; page < MemoryInline::kPageCount; ++page) {
         const uintptr_t bias = MemoryInline::g_fullPageBias[page];
-        MemoryInline::g_fullReadablePageBias[page] = bias;
-        MemoryInline::g_deferredReadCoveredPages[page] = 0;
         MemoryInline::g_sparseWritablePageTables[page] = nullptr;
         sparseStorage[page].reset();
 
@@ -305,16 +179,6 @@ void RefreshFastPathTables() {
             sparseStorage[page] = std::move(sparse);
         }
     }
-    std::lock_guard lock{DeferredReadMutex()};
-    for (const auto& read : DeferredReads()) {
-        const uint32_t firstPage = read.start >> MemoryInline::kPageShift;
-        const uint32_t lastPage = static_cast<uint32_t>(
-            (static_cast<uint64_t>(read.start) + read.length - 1) >> MemoryInline::kPageShift);
-        for (uint32_t page = firstPage; page <= lastPage; ++page) {
-            MemoryInline::g_fullReadablePageBias[page] = 0;
-            MemoryInline::g_deferredReadCoveredPages[page] = 1;
-        }
-    }
 }
 
 Region* TryResolveRegion(uint32_t address, size_t length) {
@@ -323,8 +187,7 @@ Region* TryResolveRegion(uint32_t address, size_t length) {
         const uint64_t base = region.config.baseAddress;
         const uint64_t limit = base + region.storageSize;
         const uint64_t addr = address;
-        const uint64_t end = addr + length;
-        if (addr >= base && end <= limit) {
+        if (addr >= base && addr <= limit && length <= limit - addr) {
             return &region;
         }
     }
@@ -431,9 +294,8 @@ GuestFlat::Backing ClassifyBacking(uint32_t baseAddress) {
         return GuestFlat::Backing::Mem1;
     }
 
-    // NDEV-sized MEM2: physical (0x10000000), cached (0x90000000),
-    // uncached (0xD0000000). Mario Kart Wii detects this configuration and
-    // creates its original EGGRootDebug expansion heap.
+    // Expanded MEM2 holds Brawl's prelinked modules above the retail 64 MiB.
+    // Physical, cached and uncached views alias the same backing.
     if ((baseAddress >= Memory::kMem2PhysicalBase &&
          baseAddress < Memory::kMem2PhysicalEnd) ||
         (baseAddress >= Memory::kMem2CachedBase &&
@@ -541,24 +403,11 @@ Memory::Config Memory::Config::WiiDefaults() {
         .sizeBytes = Memory::kMem2Size,
     });
 
-    // Kamek module overlay: 2 MiB above MEM1, which the game believes ends at 0x81800000, so this
-    // costs no arena space (unlike the old in-arena reservation that shrank the race scene heaps).
-    // Base must stay within +/-32 MiB of every DOL/StaticR hook site for Kamek Rel24 branches to encode.
-    config.regions.push_back(RegionConfig{
-        .name = "MEM1_KAMEK_OVERLAY",
-        .baseAddress = 0x81800000,
-        .sizeBytes = 0x200000,
-    });
-
-    // Locked cache (THP decoder fast RAM) is really 16KB at 0xE0000000, but a sub-page mapping can
-    // never enter the coarse 1MiB bias tables, forcing every THP load/store through the checked
-    // fallback (the dominant cost of THP-heavy screens). Back a full 1MiB page plus the successor
-    // page the bias builder needs, so locked-cache access stays on the two-instruction native path.
-    constexpr size_t lcSize = MemoryInline::kPageSize + 4096u;
+    // Preserve the guest extent independently of the host fast-access tables.
     config.regions.push_back(RegionConfig{
         .name = "LOCKED_CACHE",
-        .baseAddress = 0xE0000000,
-        .sizeBytes = lcSize,
+        .baseAddress = Memory::kLockedCacheBase,
+        .sizeBytes = Memory::kLockedCacheSize,
     });
 
     return config;
@@ -577,6 +426,7 @@ void Memory::Init(const Config& config) {
     ClearPageTable();
     regions.reserve(config.regions.size());
 
+#if MKW_FLAT_MEMORY
     // The flat reservation backs every guest view from one shared section object, so cached/uncached/
     // physical mirrors alias as before. GetPointer still hands out the unprotected host alias, so
     // native code (image loading, DVD reads, HLE) is unaffected by the guest view's protections.
@@ -591,15 +441,48 @@ void Memory::Init(const Config& config) {
         GuestFlat::Initialize(flatRegions);
     }
 
+#else
+    // Cached, uncached and physical guest aliases share one allocation per RAM
+    // bank. Other configured regions own their storage independently.
+    struct Store { size_t size = 0; std::shared_ptr<std::vector<uint8_t>> bytes; };
+    std::unordered_map<uint64_t, Store> stores;
+    const auto key = [](uint32_t base) {
+        const auto backing = ClassifyBacking(base);
+        return (static_cast<uint64_t>(backing) << 32) |
+            (backing == GuestFlat::Backing::Owned ? base : 0u);
+    };
+    const auto offset = [](uint32_t base) -> size_t {
+        switch (ClassifyBacking(base)) {
+        case GuestFlat::Backing::Mem1: return base & 0x01FFFFFFu;
+        case GuestFlat::Backing::Mem2: return base & 0x0FFFFFFFu;
+        default: return 0;
+        }
+    };
+    for (const auto& region : config.regions) {
+        if (region.sizeBytes > GuestFlat::kGuestSpaceSize - region.baseAddress)
+            throw std::invalid_argument("Guest memory region exceeds the 32-bit address space");
+        auto& store = stores[key(region.baseAddress)];
+        store.size = std::max(store.size, offset(region.baseAddress) + region.sizeBytes);
+    }
+    for (auto& [_, store] : stores)
+        store.bytes = std::make_shared<std::vector<uint8_t>>(store.size);
+#endif
+
     // Map virtual regions onto that backing store, with mirroring.
     for (const auto& regionConfig : config.regions) {
         Region instance;
         instance.config = regionConfig;
 
+#if MKW_FLAT_MEMORY
         instance.storagePtr = GuestFlat::HostPointer(regionConfig.baseAddress);
         if (instance.storagePtr == nullptr && regionConfig.sizeBytes != 0) {
             throw std::runtime_error("Flat guest mapping is missing region '" + regionConfig.name + "'");
         }
+#else
+        instance.storage = stores.at(key(regionConfig.baseAddress)).bytes;
+        instance.storagePtr = instance.storage->empty() ? nullptr :
+            instance.storage->data() + offset(regionConfig.baseAddress);
+#endif
         instance.storageSize = regionConfig.sizeBytes;
 
         regions.emplace_back(std::move(instance));
@@ -610,7 +493,6 @@ void Memory::Init(const Config& config) {
 }
 
 void Memory::Reset() {
-    ClearDeferredReads();
     std::lock_guard<std::mutex> lock(RegionMutex());
     Regions().clear();
     ClearPageTable();
@@ -637,7 +519,6 @@ uint8_t MemoryInline::Read8Slow(uint32_t addr) {
         if (!IsDeviceMmioAddress(addr)) return 0;  // nothing on the bus there: reads 0, writes dropped
         ThrowMmioReadBlocked(addr, sizeof(uint8_t));
     }
-    ResolveDeferredReads(addr, sizeof(uint8_t));
     return ReadScalar<uint8_t>(addr);
 }
 
@@ -646,7 +527,6 @@ uint16_t MemoryInline::Read16Slow(uint32_t addr) {
         if (!IsDeviceMmioAddress(addr)) return 0;  // nothing on the bus there: reads 0, writes dropped
         ThrowMmioReadBlocked(addr, sizeof(uint16_t));
     }
-    ResolveDeferredReads(addr, sizeof(uint16_t));
     return ReadScalar<uint16_t>(addr);
 }
 
@@ -655,7 +535,6 @@ uint32_t MemoryInline::Read32Slow(uint32_t addr) {
         if (!IsDeviceMmioAddress(addr)) return 0;  // nothing on the bus there: reads 0, writes dropped
         ThrowMmioReadBlocked(addr, sizeof(uint32_t));
     }
-    ResolveDeferredReads(addr, sizeof(uint32_t));
     const uint32_t value = ReadScalar<uint32_t>(addr);
     return value;
 }
@@ -665,7 +544,6 @@ uint64_t MemoryInline::Read64Slow(uint32_t addr) {
         if (!IsDeviceMmioAddress(addr)) return 0;  // nothing on the bus there: reads 0, writes dropped
         ThrowMmioReadBlocked(addr, sizeof(uint64_t));
     }
-    ResolveDeferredReads(addr, sizeof(uint64_t));
     return ReadScalar<uint64_t>(addr);
 }
 
@@ -674,7 +552,6 @@ float MemoryInline::ReadFloat32Slow(uint32_t addr) {
         if (!IsDeviceMmioAddress(addr)) return 0;  // nothing on the bus there: reads 0, writes dropped
         ThrowMmioReadBlocked(addr, sizeof(float));
     }
-    ResolveDeferredReads(addr, sizeof(uint32_t));
     const auto bits = ReadScalar<uint32_t>(addr);
     float value;
     std::memcpy(&value, &bits, sizeof(value));
@@ -686,7 +563,6 @@ double MemoryInline::ReadFloat64Slow(uint32_t addr) {
         if (!IsDeviceMmioAddress(addr)) return 0;  // nothing on the bus there: reads 0, writes dropped
         ThrowMmioReadBlocked(addr, sizeof(double));
     }
-    ResolveDeferredReads(addr, sizeof(uint64_t));
     const auto bits = ReadScalar<uint64_t>(addr);
     double value;
     std::memcpy(&value, &bits, sizeof(value));
@@ -731,12 +607,10 @@ void MemoryInline::Write32Slow(uint32_t addr, uint32_t val) {
 
 void MemoryInline::Write64Slow(uint32_t addr, uint64_t val) {
     if (IsGpuFifoAddress(addr)) {
-        // The gather pipe is a byte-stream FIFO; a 64-bit store is two big-endian
-        // 32-bit pushes, high word first. Without this arm the write fell through
-        // to WriteScalar, which found no mapped region behind 0xCC008000 and threw
-        // "no mapped region" instead of reaching GX.
+        // A 64-bit FIFO store emits the high word first. Dispatch the low word
+        // separately: it may cross out of the FIFO's address window.
         GX_HLE_FIFO_Write32(static_cast<uint32_t>(val >> 32));
-        GX_HLE_FIFO_Write32(static_cast<uint32_t>(val));
+        Write32Slow(addr + 4, static_cast<uint32_t>(val));
         return;
     }
     if (IsMmioAddress(addr)) {
@@ -763,21 +637,10 @@ void MemoryInline::WriteFloat32Slow(uint32_t addr, double val) {
 }
 
 void MemoryInline::WriteFloat64Slow(uint32_t addr, double val) {
-    // stfd stores the full 64-bit FPR bit pattern - load-bearing for the
-    // fctiwz->stfd->lwz idiom, where the integer result lives in the low word.
+    // stfd stores the full FPR bit pattern, including packed integer/float data.
     uint64_t bits;
     std::memcpy(&bits, &val, sizeof(bits));
-
-    if (IsGpuFifoAddress(addr)) {
-        GX_HLE_FIFO_WriteFloat(static_cast<float>(val));
-        return;
-    }
-    if (IsMmioAddress(addr)) {
-        if (!IsDeviceMmioAddress(addr)) return;  // nothing on the bus there: reads 0, writes dropped
-        throw Memory::AccessViolation(addr, sizeof(double), "MMIO write blocked (non-GPU)");
-    }
-
-    WriteScalar(addr, bits);
+    Write64Slow(addr, bits);
 }
 
 uint8_t* Memory::GetPointer(uint32_t addr) {

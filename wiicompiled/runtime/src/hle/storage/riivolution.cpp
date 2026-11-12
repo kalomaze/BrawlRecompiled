@@ -14,7 +14,6 @@
 #include "recomp_mod_loader.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
-#include "runtime_product.h"
 
 #include <algorithm>
 #include <functional>
@@ -135,21 +134,11 @@ std::vector<RuntimeRiivolution::Overlay> RiivoDiscoverRoots() {
                      "command line or Config.toml");
     }
 
-    // The one canonical Retro Rewind installation setup recorded. Only the
-    // Retro Rewind product applies it: overlaying the base product with the
-    // pack's menu archives made "base game" boot as a half-Retro-Rewind build.
-    if (const auto retroRewindRoot =
-            RuntimeProduct::IsRetroRewind() ? RuntimeConfigFile::RetroRewindRoot() : std::string{};
-        !retroRewindRoot.empty()) {
-        RiivoAddRoot(overlays, RuntimeNandPath::ResolveConfiguredPath(retroRewindRoot),
-                     "canonical Retro Rewind installation");
-    }
-
     for (const auto& root : RecompMod::DvdOverlayRoots()) {
         RiivoAddRoot(overlays, root, "recomp mod manifest");
     }
 
-    // New Super Paper Bros. mods: <UserData>/mods/<name>/files mirrors the disc's files/ tree. Folders load
+    // File replacement mods: <UserData>/mods/<name>/files mirrors the disc's files/ tree. Folders load
     // in name order and a later name overrides an earlier one (roots apply in reverse, so add them
     // descending); a file named "disabled" inside the mod folder turns it off (the launcher's Mods page).
     std::vector<fs::path> mods;
@@ -187,7 +176,7 @@ std::optional<RiivoXmlSet> RiivoFindXmls(const fs::path& overlayRoot) {
 
     // Distribution-pinned XML from recomp.yml: a path relative to the pack
     // folder. The pack folder sits inside the virtual SD root (e.g.
-    // <sd>/RetroRewind6), so externals resolve against the root's parent.
+    // <sd>/mod), so externals resolve against the root's parent.
     const std::string& configured = RecompMod::RiivolutionXml();
     if (!configured.empty()) {
         const fs::path configuredXml = overlayRoot / PathFromUtf8(configured);

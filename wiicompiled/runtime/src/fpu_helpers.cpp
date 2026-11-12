@@ -6,9 +6,55 @@
 
 namespace {
 
-// Broadway Manual 12.2: FEX (bit 1) and VX (bit 2) are status summaries derived
-// from the other bits; mtfsf/mtfsfi cannot set them explicitly.
-constexpr uint32_t kFpscrReadOnlySummaryMask = 0x60000000u;
+constexpr uint32_t kFpscrFx = 1u << 31;
+constexpr uint32_t kFpscrFex = 1u << 30;
+constexpr uint32_t kFpscrVx = 1u << 29;
+constexpr uint32_t kFpscrOx = 1u << 28;
+constexpr uint32_t kFpscrUx = 1u << 27;
+constexpr uint32_t kFpscrZx = 1u << 26;
+constexpr uint32_t kFpscrXx = 1u << 25;
+constexpr uint32_t kFpscrVxSnan = 1u << 24;
+constexpr uint32_t kFpscrVxIsi = 1u << 23;
+constexpr uint32_t kFpscrVxIdi = 1u << 22;
+constexpr uint32_t kFpscrVxZdz = 1u << 21;
+constexpr uint32_t kFpscrVxImz = 1u << 20;
+constexpr uint32_t kFpscrVxVc = 1u << 19;
+constexpr uint32_t kFpscrVxSoft = 1u << 10;
+constexpr uint32_t kFpscrVxSqrt = 1u << 9;
+constexpr uint32_t kFpscrVxCvi = 1u << 8;
+constexpr uint32_t kFpscrVe = 1u << 7;
+constexpr uint32_t kFpscrOe = 1u << 6;
+constexpr uint32_t kFpscrUe = 1u << 5;
+constexpr uint32_t kFpscrZe = 1u << 4;
+constexpr uint32_t kFpscrXe = 1u << 3;
+constexpr uint32_t kFpscrVxAny =
+    kFpscrVxSnan | kFpscrVxIsi | kFpscrVxIdi | kFpscrVxZdz | kFpscrVxImz |
+    kFpscrVxVc | kFpscrVxSoft | kFpscrVxSqrt | kFpscrVxCvi;
+constexpr uint32_t kFpscrAnyX = kFpscrOx | kFpscrUx | kFpscrZx | kFpscrXx | kFpscrVxAny;
+constexpr uint32_t kFpscrAnyE = kFpscrVe | kFpscrOe | kFpscrUe | kFpscrZe | kFpscrXe;
+
+// VX and FEX are derived from exception causes and enables, never independent writable bits.
+void FpscrUpdated(CpuContext* cpu)
+{
+    if ((cpu->fpscr & kFpscrVxAny) != 0)
+    {
+        cpu->fpscr |= kFpscrVx;
+    }
+    else
+    {
+        cpu->fpscr &= ~kFpscrVx;
+    }
+
+    if (((cpu->fpscr >> 22) & (cpu->fpscr & kFpscrAnyE)) != 0)
+    {
+        cpu->fpscr |= kFpscrFex;
+    }
+    else
+    {
+        cpu->fpscr &= ~kFpscrFex;
+    }
+    MkwApplyHostNiMode(cpu->fpscr);
+}
 
 double RoundNearestEven(double value) {
     const double floor_value = std::floor(value);
@@ -29,81 +75,50 @@ double RoundNearestEven(double value) {
 // never returns nullptr - none of the helpers below guard against one.
 extern "C" void PPC_Mtfsf(uint32_t fieldMask, double source) {
     CpuContext* cpu = CurrentCpuContext();
-
-    fieldMask &= 0xFFu;
-
-    // A mask of 0 means update nothing. Do not force it to 0xFF.
-    if (fieldMask == 0) {
-        return;
+    uint32_t mask = 0;
+    for (unsigned field = 0; field < 8; ++field) {
+        if (fieldMask & (1u << field))
+            mask |= 0xFu << (4 * field);
     }
-
-    // Broadway Manual 12.2: "The low-order 32 bits of frB are placed into the
-    // FPSCR..." - on a little-endian host that is the low word of the FPR.
-    const uint32_t incoming = PPC_FprLowWordInline(source);
-
-    if (fieldMask == 0xFFu) {
-        cpu->fpscr = (cpu->fpscr & kFpscrReadOnlySummaryMask) |
-                     (incoming & ~kFpscrReadOnlySummaryMask);
-        MkwApplyHostNiMode(cpu->fpscr);
-        return;
-    }
-
-    for (int field = 0; field < 8; ++field) {
-        // PowerPC bit numbering is reversed relative to typical host masks.
-        if ((fieldMask & (1u << (7 - field))) == 0) {
-            continue;
-        }
-
-        // Field 0 is bits 0-3 (MSB of FPSCR); field 7 is bits 28-31.
-        const int shift = (7 - field) * 4;
-        uint32_t mask = 0xFu << shift;
-
-        if (field == 0) {
-            mask &= ~kFpscrReadOnlySummaryMask;
-        }
-
-        cpu->fpscr = (cpu->fpscr & ~mask) | (incoming & mask);
-    }
-    MkwApplyHostNiMode(cpu->fpscr);
+    cpu->fpscr = (cpu->fpscr & ~mask) | (PPC_FprLowWordInline(source) & mask);
+    FpscrUpdated(cpu);
 }
 
 extern "C" void PPC_Mtfsb1(uint32_t bit) {
     CpuContext* cpu = CurrentCpuContext();
-
-    bit &= 31u;
-
-    // Broadway Manual p479: bits 1 and 2 (FEX and VX) cannot be explicitly set.
-    if (bit == 1 || bit == 2) {
-        return;
-    }
-
-    const uint32_t shift = 31u - bit;
-    cpu->fpscr |= (1u << shift);
-    MkwApplyHostNiMode(cpu->fpscr);
+    const uint32_t mask = 0x80000000u >> (bit & 31u);
+    // FX is sticky, but only a newly raised exception sets it.
+    if ((mask & kFpscrAnyX) != 0 && (cpu->fpscr & mask) == 0)
+        cpu->fpscr |= kFpscrFx;
+    cpu->fpscr |= mask;
+    FpscrUpdated(cpu);
 }
 
 extern "C" void PPC_Mtfsb0(uint32_t bit) {
     CpuContext* cpu = CurrentCpuContext();
-
-    bit &= 31u;
-
-    const uint32_t shift = 31u - bit;
-    cpu->fpscr &= ~(1u << shift);
-    MkwApplyHostNiMode(cpu->fpscr);
+    cpu->fpscr &= ~(0x80000000u >> (bit & 31u));
+    FpscrUpdated(cpu);
 }
 
 extern "C" void PPC_Mtfsfi(uint32_t field, uint32_t value) {
     CpuContext* cpu = CurrentCpuContext();
+    const uint32_t shift = (7u - (field & 7u)) * 4u;
+    const uint32_t mask = 0xFu << shift;
+    cpu->fpscr = (cpu->fpscr & ~mask) | ((value << shift) & mask);
+    FpscrUpdated(cpu);
+}
 
-    field &= 7u;
-    const uint32_t shift = (7u - field) * 4u;
-    uint32_t mask = 0xFu << shift;
-    if (field == 0) {
-        mask &= ~kFpscrReadOnlySummaryMask;
-    }
+extern "C" uint32_t PPC_Mcrfs(uint32_t dstField, uint32_t srcField)
+{
+    CpuContext* cpu = CurrentCpuContext();
 
-    cpu->fpscr = (cpu->fpscr & ~mask) | ((value & 0xFu) << shift);
-    MkwApplyHostNiMode(cpu->fpscr);
+    const uint32_t dst = dstField & 7u;
+    const uint32_t src = srcField & 7u;
+    const uint32_t value = (cpu->fpscr >> ((7u - src) * 4u)) & 0xFu;
+    cpu->cr = (cpu->cr & ~(0xFu << ((7u - dst) * 4u))) | (value << ((7u - dst) * 4u));
+    cpu->fpscr &= ~((0xFu << ((7u - src) * 4u)) & (kFpscrFx | kFpscrAnyX));
+    FpscrUpdated(cpu);
+    return cpu->cr;
 }
 
 extern "C" double PPC_Mffs() {

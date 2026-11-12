@@ -1,12 +1,12 @@
 #include "guest_code_patch.h"
+#include "fault_report.h"
 #include "recomp_mod_loader.h"
 
 #include <algorithm>
 #include <cstdlib>
-#include <iomanip>
 #include <iostream>
 #include <mutex>
-#include <optional>
+#include <deque>
 #include <sstream>
 #include <filesystem>
 
@@ -22,7 +22,13 @@ struct ExecutableRange {
     uint32_t start = 0;
     uint32_t end = 0;
     std::string name;
+    const ExecutableRange* previous = nullptr;
 };
+
+// Records are immutable after publication. deque preserves their addresses as
+// registration grows; fault-time readers never touch the container itself.
+static_assert(std::atomic<const ExecutableRange*>::is_always_lock_free);
+std::atomic<const ExecutableRange*> g_executableRanges{nullptr};
 
 std::vector<RecompMod::InitializerFn>& MemoryInitializers() {
     static std::vector<RecompMod::InitializerFn> initializers;
@@ -69,8 +75,8 @@ bool& PostRelInitializersRan() {
     return ran;
 }
 
-std::vector<ExecutableRange>& ExecutableRanges() {
-    static std::vector<ExecutableRange> ranges;
+std::deque<ExecutableRange>& ExecutableRanges() {
+    static std::deque<ExecutableRange> ranges;
     return ranges;
 }
 
@@ -112,7 +118,8 @@ void AddExecutableRangeLocked(uint32_t start, uint32_t end, std::string name) {
         return;
     }
 
-    ranges.push_back({start, end, std::move(name)});
+    ranges.push_back({start, end, std::move(name), g_executableRanges.load(std::memory_order_relaxed)});
+    g_executableRanges.store(&ranges.back(), std::memory_order_release);
     MarkExecutableGuardPages(start, end);
     // Flat guest accesses never consult the guard tables, so the host pages
     // fully covered by the range become read-only in the guest view. Native
@@ -177,32 +184,13 @@ bool Intersects(uint32_t address, size_t length, const ExecutableRange& range) {
     return writeStart < range.end && writeEnd > range.start;
 }
 
-std::optional<ExecutableRange> FindExecutableRange(uint32_t address, size_t length) {
-    std::lock_guard<std::mutex> lock(ModMutex());
-    for (const auto& range : ExecutableRanges()) {
-        if (Intersects(address, length, range)) {
-            return range;
-        }
+const ExecutableRange* FindExecutableRange(uint32_t address, size_t length) {
+    const ExecutableRange* hit = nullptr;
+    for (auto* range = g_executableRanges.load(std::memory_order_acquire); range; range = range->previous) {
+        // Preserve registration order: the oldest intersecting range wins.
+        if (Intersects(address, length, *range)) hit = range;
     }
-    return std::nullopt;
-}
-
-// MKW-only: executable ranges are registered solely by translated mods (Retro Rewind), so this
-// never runs for the NSMBW base game, whose own REL loading writes are therefore unguarded.
-bool IsKnownBaseRelLoaderWrite(const ExecutableRange& range) {
-    if (range.name.find("StaticR.rel") == std::string::npos) {
-        return false;
-    }
-
-    const auto* cpu = TryGetCpuContext();
-    if (!cpu) {
-        return false;
-    }
-
-    // The game copies and relocates REL sections before executing them. Those
-    // writes are normal loading/linking, not runtime code patches.
-    return (cpu->lr >= 0x8000A000u && cpu->lr < 0x8000A400u) ||
-           (cpu->lr >= 0x801A6000u && cpu->lr < 0x801A7000u);
+    return hit;
 }
 
 } // namespace
@@ -384,7 +372,7 @@ void RegisterExecutableRange(uint32_t start, uint32_t end, std::string name) {
 }
 
 [[noreturn]] void ReportForbiddenExecutableWrite(uint32_t address, size_t length, uint64_t value,
-                                                 const ExecutableRange& range);
+                                                 const ExecutableRange& range, bool storeKnown = true);
 
 bool HandleExecutableWrite(uint32_t address, size_t length, uint64_t value) {
     if (!ExecutableWriteGuardMayHit(address, length)) {
@@ -396,15 +384,11 @@ bool HandleExecutableWrite(uint32_t address, size_t length, uint64_t value) {
     }
 
     const auto hit = FindExecutableRange(address, length);
-    if (!hit.has_value()) {
+    if (!hit) {
         return false;
     }
 
-    if (IsKnownBaseRelLoaderWrite(*hit)) {
-        return false;
-    }
-
-    ReportForbiddenExecutableWrite(address, length, value, *hit);
+    ReportForbiddenExecutableWrite(address, length, value, *hit, false);
 }
 
 void CheckExecutableWrite(uint32_t address, size_t length, uint64_t value) {
@@ -416,7 +400,7 @@ void CheckExecutableWrite(uint32_t address, size_t length, uint64_t value) {
     }
 
     const auto hit = FindExecutableRange(address, length);
-    if (!hit.has_value()) {
+    if (!hit) {
         return;
     }
 
@@ -424,29 +408,19 @@ void CheckExecutableWrite(uint32_t address, size_t length, uint64_t value) {
 }
 
 [[noreturn]] void ReportForbiddenExecutableWrite(uint32_t address, size_t length, uint64_t value,
-                                                 const ExecutableRange& range) {
-    RT_LOG(RT_TAG_MOD) << "FATAL unsupported executable write" << std::endl;
-    std::cerr << "  address: 0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << address << std::endl;
-    std::cerr << "  value:   0x" << std::setw(16) << value << std::endl;
-    std::cerr << "  width:   " << std::dec << length << std::endl;
-    std::cerr << "  range:   0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << range.start
-              << "-0x" << std::setw(8) << range.end << " " << range.name << std::dec << std::endl;
-
-    if (auto* cpu = TryGetCpuContext()) {
-        std::cerr << "  caller pc: 0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << cpu->pc << std::endl;
-        std::cerr << "  caller lr: 0x" << std::setw(8) << cpu->lr << std::dec << std::endl;
-        SystemBridge::DumpCpuState(cpu);
+                                                 const ExecutableRange& range, bool storeKnown) {
+    FaultReport::Message message;
+    message.Text("[mods] FATAL unsupported executable write")
+        .Text("\n  address: ").Hex(address);
+    if (storeKnown) {
+        message.Text("\n  value: ").Hex(value, 16).Text("\n  width: ").Decimal(length);
     } else {
-        std::cerr << "  caller pc: unavailable" << std::endl;
+        message.Text("\n  width/value: unavailable in fault record");
     }
-
-    std::cerr << "  reason: executable runtime writes are forbidden" << std::endl;
-    std::ostringstream message;
-    message << "The game stopped because translated code attempted to write to executable memory at 0x"
-            << std::hex << std::uppercase << address
-            << ". Runtime executable patches are not supported in this build.";
-    ShowRuntimeFatalPopup("forbidden executable memory write", message.str());
-    std::abort();
+    message.Text("\n  active function: ").Hex(CurrentTranslatedExecutionAddress())
+        .Text("\n  host CPU context: ").Hex(reinterpret_cast<uintptr_t>(TryGetCpuContext()), sizeof(uintptr_t) * 2)
+        .Text("\n  range: ").Hex(range.start).Text("-").Hex(range.end).Text(" ").Text(range.name);
+    message.Fatal();
 }
 
 } // namespace RecompMod

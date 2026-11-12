@@ -28,16 +28,16 @@ void LogOnce(bool& logged, const char* message)
 } // namespace
 
 // OSGetFontEncode (NSMBW 0x801B00A0): the current system-font encoding, ANSI unless the game set one.
-extern "C" uint32_t OSGetFontEncode_HLE_801b00a0()
+extern "C" uint32_t OSGetFontEncode_HLE()
 {
     static bool logged = false;
     LogOnce(logged, "OSGetFontEncode: reporting the configured encoding (no VI DTV register read)");
     return g_fontEncode;
 }
-PPC_NATIVE_OVERRIDE(801DC2C4, OSGetFontEncode_HLE_801b00a0, uint32_t, (), ());
+PPC_NATIVE_OVERRIDE(801DC2C4, OSGetFontEncode_HLE, uint32_t, (), ());
 
 // OSSetFontEncode (NSMBW 0x801B00F0): store a valid encoding and return the previous one.
-extern "C" uint32_t OSSetFontEncode_HLE_801b00f0(uint32_t encode)
+extern "C" uint32_t OSSetFontEncode_HLE(uint32_t encode)
 {
     const uint32_t previous = g_fontEncode;
     if (encode == kOsFontEncodeAnsi || encode == kOsFontEncodeSjis) {
@@ -45,7 +45,7 @@ extern "C" uint32_t OSSetFontEncode_HLE_801b00f0(uint32_t encode)
     }
     return previous;
 }
-PPC_NATIVE_OVERRIDE(801DC318, OSSetFontEncode_HLE_801b00f0, uint32_t, (uint32_t encode), (encode));
+PPC_NATIVE_OVERRIDE(801DC318, OSSetFontEncode_HLE, uint32_t, (uint32_t encode), (encode));
 
 // OSInitFont (NSMBW 0x801B0D60) and OSLoadFont (0x801B0480) decode the console's system font, which
 // __OSReadROM fetches from the IPL ROM over EXI. That data belongs to the console, not the disc, so
@@ -59,13 +59,8 @@ extern "C" uint32_t OSInitFont_HLE_801b0d60(uint32_t fontData)
     (void)fontData;
     return 0;
 }
-#if 0  // SPM: OSInitFont: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE(801B0D60, OSInitFont_HLE_801b0d60, uint32_t, (uint32_t fontData), (fontData));
-#endif
-#endif
 
-extern "C" uint32_t OSLoadFont_HLE_801b0480(uint32_t fontData, uint32_t temp)
+extern "C" uint32_t OSLoadFont_HLE(uint32_t fontData, uint32_t temp)
 {
     static bool logged = false;
     LogOnce(logged, "OSLoadFont: no console ROM font available; reporting failure");
@@ -73,7 +68,7 @@ extern "C" uint32_t OSLoadFont_HLE_801b0480(uint32_t fontData, uint32_t temp)
     (void)temp;
     return 0;
 }
-PPC_NATIVE_OVERRIDE(801DC698, OSLoadFont_HLE_801b0480, uint32_t, (uint32_t fontData, uint32_t temp), (fontData, temp));
+PPC_NATIVE_OVERRIDE(801DC698, OSLoadFont_HLE, uint32_t, (uint32_t fontData, uint32_t temp), (fontData, temp));
 
 // OSGetFontTexel (SPM 0x80271428): draws one character of the ROM font into a texture and returns the
 // next character. SPM's older SDK inlines the encoding check here as a VI DTV register read. OSLoadFont

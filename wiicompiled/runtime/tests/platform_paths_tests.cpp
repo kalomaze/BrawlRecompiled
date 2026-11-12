@@ -3,6 +3,14 @@
 #include <iostream>
 
 int main() {
+#if !defined(__ANDROID__)
+    const auto executable = RuntimePlatform::ExecutablePath();
+    if (!executable || !executable->is_absolute() || !std::filesystem::is_regular_file(*executable) ||
+        RuntimePlatform::ExecutableDirectory() != executable->parent_path()) {
+        std::cerr << "executable path is missing or inconsistent with its directory\n";
+        return 1;
+    }
+#endif
     if (!RuntimePlatform::ExecutableDirectory()) {
         std::cerr << "unable to resolve the current executable directory\n";
         return 1;

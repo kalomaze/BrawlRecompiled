@@ -8,7 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "tracy/Tracy.hpp"
+#include "aurora/profiling.hpp"
 
 namespace aurora::gx::fifo {
 static Module Log("aurora::gx::fifo");

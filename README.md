@@ -104,25 +104,53 @@ connection adds input delay (2 to 8 frames, picked from the ping when the room s
 
 ## Building from source
 
-You need Windows, Python 3, 16 GB of RAM and your own disc image (USA, RSBE01). The toolchain is shared with the
-Super Paper Mario port's `toolchain\` folder.
+You need your own disc image (USA, RSBE01), and CMake 3.25+, Python 3.12+, Git, Clang and Ninja on `PATH`.
+
+On Windows, install [Python 3.12](https://www.python.org/downloads/windows/) (with "Add python.exe to PATH") and
+[Git](https://git-scm.com/download/win). Then, in PowerShell in the clone, fetch the pinned llvm-mingw, CMake and Ninja
+and put them on `PATH`:
 
 ```powershell
-# Extract your disc image to Disc\DATA, then:
-copy Disc\DATA\sys\main.dol game\main.dol
-# Every module pre-linked at its home, plus main_translate.dol (main.dol with the resident modules and the
-# Gecko code handler) for the translation:
-python wiicompiled\projects\brawl\tools\build_modules.py Disc\DATA\files\module extras\brawl-decomp\config\RSBE01_02 game\brawl_modules.rel wiicompiled game\main.dol
-powershell -ExecutionPolicy Bypass -File tools\build-brawl.ps1 -SkipTools
+powershell -ExecutionPolicy Bypass -File wiicompiled\Launcher\Prepare-PortableTools.ps1 -Destination "$PWD\toolchain"
+$env:PATH = "$PWD\toolchain\llvm-mingw\bin;$PWD\toolchain\CMake\bin;$PWD\toolchain\Ninja;$env:PATH"
 ```
 
-`build-brawl.ps1` translates the game and compiles it into `Play\SuperSmashBrosBrawl.exe` and
-`Play\engine_usa.dll` (`-SkipTranslate` recompiles only the runtime). The function map comes from the
-[Brawl decompilation](https://github.com/doldecomp/brawl), cloned into `extras\brawl-decomp`.
+On Ubuntu:
 
-The release (`Brawl Recompiled.exe` plus a hidden `engine\` folder) is made by `tools\build-launcher.ps1` (the
-launcher, Windows and Linux, with a portable .NET SDK) and `tools\package-brawl.ps1 -Zip`; `tools\build-linux.sh`
-and `tools\package-linux.sh` make the Linux download in WSL from the same translation.
+```sh
+sudo apt install cmake python3 git clang lld ninja-build build-essential pkg-config libicu-dev \
+  libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev libxtst-dev libxfixes-dev libxrender-dev \
+  libxinerama-dev libwayland-dev wayland-protocols libdecor-0-dev libxkbcommon-dev libgl-dev libegl-dev libgbm-dev \
+  libdrm-dev libasound2-dev libpulse-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev libusb-1.0-0-dev libibus-1.0-dev
+```
+
+Then, on Linux or Windows:
+
+```sh
+cmake -DDISC=/absolute/path/to/brawl.iso -P extract.cmake   # once: extracts the disc to Disc/DATA
+cmake -P build.cmake
+```
+
+ISO, CISO and split WBFS images work; keep `.wbf1`, `.wbf2`, etc. beside the `.wbfs`. The build downloads what it
+needs (so the first one needs internet access), keeps everything it makes in `build/`, and produces
+`build/native/WiiCompiled` (`WiiCompiled.exe` on Windows), set up to use the extracted disc, with its settings and
+saves in `build/native/UserData`. Rerun it to resume. Options for `build.cmake`:
+
+- `-DJOBS=2` uses less memory (the default is 4 jobs)
+- `-DBUILD_DIR=<folder>` builds somewhere other than `build/`
+- `-DGAME=<folder>` uses an extracted disc other than `Disc/DATA` (give it to `extract.cmake` too)
+- `-DCMAKE_BUILD_TYPE=Debug` or `RelWithDebInfo` builds with debug symbols (the default is `Release`)
+- `-DMKW_HOST_ISA=v1` (SSE2) or `v2` (SSE4.2) builds for x86-64 processors older than the default `v3` (AVX2)
+- `-DMKW_FLAT_MEMORY=OFF` uses ordinary memory instead of reserving a fixed 4 GiB address range
+
+The translator's tests are described in [`wiicompiled/translator/tests/README.md`](wiicompiled/translator/tests/README.md).
+
+### Release packaging
+
+After `extract.cmake`, `tools\build-brawl.ps1` builds the Windows release into `Play\` (`-OldCpu` adds the build for
+processors without AVX2). The release (`Brawl Recompiled.exe` plus a hidden `engine\` folder) is made by
+`tools\build-launcher.ps1` (the launcher, Windows and Linux) and `tools\package-brawl.ps1 -Zip`;
+`tools/package-linux.sh` makes the Linux download from a `build.cmake` build on Linux.
 
 | Folder | What it is |
 |---|---|

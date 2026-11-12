@@ -1,4 +1,3 @@
-extern "C" unsigned g_spmAudit[8];
 #include <memory>
 #include <tuple>
 #include <map>
@@ -246,7 +245,7 @@ static uint32_t ComputeMaxMipLevel(uint16_t width, uint16_t height) noexcept {
     return levels;
 }
 
-extern "C" void GX__InitTexObj_801707f8(uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m) {
+extern "C" void GX__InitTexObj_HLE(uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m) {
     if (w == 0 || h == 0) {
         auto* cpu = TryGetCpuContext();
         RT_LOGF(RT_TAG_GX,
@@ -260,76 +259,27 @@ extern "C" void GX__InitTexObj_801707f8(uint32_t oa, uint32_t da, uint32_t w, ui
     // Also write to guest memory so reads work
     WriteGuestTexObj(oa, canonicalDataAddr, (u16)w, (u16)h, f, ws, wt, m != 0, false, 0);
 }
-PPC_NATIVE_OVERRIDE_VOID(801f28f0, GX__InitTexObj_801707f8, (uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m), (oa, da, w, h, f, ws, wt, m));
+PPC_NATIVE_OVERRIDE_VOID(801f28f0, GX__InitTexObj_HLE, (uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m), (oa, da, w, h, f, ws, wt, m));
 
-extern "C" void GX__InitTexObj_switch_80170938(uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m) { GX__InitTexObj_801707f8(oa, da, w, h, f, ws, wt, m); }
-#if 0  // NSMBW: MKW switch-case label; its function is native in NSMBW (was MKW-only)
-#if 0  // SPM: 0x80170938: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(80170938, GX__InitTexObj_switch_80170938, (uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m), (oa, da, w, h, f, ws, wt, m));
-#endif
-#endif
-#endif
+extern "C" void GX__InitTexObj_switch_80170938(uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m) { GX__InitTexObj_HLE(oa, da, w, h, f, ws, wt, m); }
 
-extern "C" void GX__InitTexObj_caseD_0_8017093c(uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m) { GX__InitTexObj_801707f8(oa, da, w, h, f, ws, wt, m); }
-#if 0  // NSMBW: MKW switch-case label; its function is native in NSMBW (was MKW-only)
-#if 0  // SPM: 0x8017093c: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(8017093c, GX__InitTexObj_caseD_0_8017093c, (uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m), (oa, da, w, h, f, ws, wt, m));
-#endif
-#endif
-#endif
+extern "C" void GX__InitTexObj_caseD_0_8017093c(uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m) { GX__InitTexObj_HLE(oa, da, w, h, f, ws, wt, m); }
 
-extern "C" void GX__InitTexObj_caseD_1_80170950(uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m) { GX__InitTexObj_801707f8(oa, da, w, h, f, ws, wt, m); }
-#if 0  // NSMBW: MKW switch-case label; its function is native in NSMBW (was MKW-only)
-#if 0  // SPM: 0x80170950: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(80170950, GX__InitTexObj_caseD_1_80170950, (uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m), (oa, da, w, h, f, ws, wt, m));
-#endif
-#endif
-#endif
+extern "C" void GX__InitTexObj_caseD_1_80170950(uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m) { GX__InitTexObj_HLE(oa, da, w, h, f, ws, wt, m); }
 
-extern "C" void GX__InitTexObj_caseD_3_80170964(uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m) { GX__InitTexObj_801707f8(oa, da, w, h, f, ws, wt, m); }
-#if 0  // NSMBW: MKW switch-case label; its function is native in NSMBW (was MKW-only)
-#if 0  // SPM: 0x80170964: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(80170964, GX__InitTexObj_caseD_3_80170964, (uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m), (oa, da, w, h, f, ws, wt, m));
-#endif
-#endif
-#endif
+extern "C" void GX__InitTexObj_caseD_3_80170964(uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m) { GX__InitTexObj_HLE(oa, da, w, h, f, ws, wt, m); }
 
-extern "C" void GX__InitTexObj_caseD_6_80170978(uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m) { GX__InitTexObj_801707f8(oa, da, w, h, f, ws, wt, m); }
-#if 0  // NSMBW: MKW switch-case label; its function is native in NSMBW (was MKW-only)
-#if 0  // SPM: 0x80170978: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(80170978, GX__InitTexObj_caseD_6_80170978, (uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m), (oa, da, w, h, f, ws, wt, m));
-#endif
-#endif
-#endif
+extern "C" void GX__InitTexObj_caseD_6_80170978(uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m) { GX__InitTexObj_HLE(oa, da, w, h, f, ws, wt, m); }
 
-extern "C" void GX__InitTexObj_caseD_e_8017098c(uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m) { GX__InitTexObj_801707f8(oa, da, w, h, f, ws, wt, m); }
-#if 0  // NSMBW: MKW switch-case label; its function is native in NSMBW (was MKW-only)
-#if 0  // SPM: 0x8017098c: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(8017098c, GX__InitTexObj_caseD_e_8017098c, (uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m), (oa, da, w, h, f, ws, wt, m));
-#endif
-#endif
-#endif
+extern "C" void GX__InitTexObj_caseD_e_8017098c(uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m) { GX__InitTexObj_HLE(oa, da, w, h, f, ws, wt, m); }
 
-extern "C" void GX__InitTexObj_caseD_7_801709a0(uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m) { GX__InitTexObj_801707f8(oa, da, w, h, f, ws, wt, m); }
-#if 0  // NSMBW: MKW switch-case label; its function is native in NSMBW (was MKW-only)
-#if 0  // SPM: 0x801709a0: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801709a0, GX__InitTexObj_caseD_7_801709a0, (uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m), (oa, da, w, h, f, ws, wt, m));
-#endif
-#endif
-#endif
+extern "C" void GX__InitTexObj_caseD_7_801709a0(uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m) { GX__InitTexObj_HLE(oa, da, w, h, f, ws, wt, m); }
 
 // ============================================================================
 // Texture Object Configuration
 // ============================================================================
 
-extern "C" void GX__InitTexObjCI_80170a04(uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m, uint32_t tl) {
+extern "C" void GX__InitTexObjCI_HLE(uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m, uint32_t tl) {
     if (w == 0 || h == 0) {
         auto* cpu = TryGetCpuContext();
         RT_LOGF(RT_TAG_GX,
@@ -349,9 +299,9 @@ extern "C" void GX__InitTexObjCI_80170a04(uint32_t oa, uint32_t da, uint32_t w, 
     } catch (...) {
     }
 }
-PPC_NATIVE_OVERRIDE_VOID(801f2afc, GX__InitTexObjCI_80170a04, (uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m, uint32_t tl), (oa, da, w, h, f, ws, wt, m, tl));
+PPC_NATIVE_OVERRIDE_VOID(801f2afc, GX__InitTexObjCI_HLE, (uint32_t oa, uint32_t da, uint32_t w, uint32_t h, uint32_t f, uint32_t ws, uint32_t wt, uint32_t m, uint32_t tl), (oa, da, w, h, f, ws, wt, m, tl));
 
-extern "C" void GX__InitTexObjLOD_80170a4c(uint32_t oa, uint32_t mif, uint32_t maf, float mil, float mal, float lb, uint32_t bc, uint32_t el, uint32_t ma) {
+extern "C" void GX__InitTexObjLOD_HLE(uint32_t oa, uint32_t mif, uint32_t maf, float mil, float mal, float lb, uint32_t bc, uint32_t el, uint32_t ma) {
     std::lock_guard<std::mutex> guard(g_texObjMutex); GXTexObj* obj = GetHostTexObj(oa); TexObjMeta& meta = GetTexObjMeta(oa);
     float fmal = std::isfinite(mal) && mal >= 0.f ? mal : 0.f, fmil = std::isfinite(mil) && mil >= 0.f ? std::min(mil, fmal) : 0.f;
     meta.minFilter=mif; meta.magFilter=maf; meta.minLod=fmil; meta.maxLod=fmal; meta.lodBias=lb; meta.biasClamp=(bc!=0); meta.edgeLod=(el!=0); meta.maxAniso=ma;
@@ -359,9 +309,9 @@ extern "C" void GX__InitTexObjLOD_80170a4c(uint32_t oa, uint32_t mif, uint32_t m
     // Also write LOD info to guest memory
     WriteGuestTexObjLOD(oa, mif, maf, fmil, fmal, lb, bc != 0, el != 0, ma);
 }
-PPC_NATIVE_OVERRIDE_VOID(801f2b44, GX__InitTexObjLOD_80170a4c, (uint32_t oa, uint32_t mif, uint32_t maf, float mil, float mal, float lb, uint32_t bc, uint32_t el, uint32_t ma), (oa, mif, maf, mil, mal, lb, bc, el, ma));
+PPC_NATIVE_OVERRIDE_VOID(801f2b44, GX__InitTexObjLOD_HLE, (uint32_t oa, uint32_t mif, uint32_t maf, float mil, float mal, float lb, uint32_t bc, uint32_t el, uint32_t ma), (oa, mif, maf, mil, mal, lb, bc, el, ma));
 
-extern "C" void GX__InitTexObjWrapMode_80170b50(uint32_t oa, uint32_t ws, uint32_t wt) {
+extern "C" void GX__InitTexObjWrapMode_HLE(uint32_t oa, uint32_t ws, uint32_t wt) {
     std::lock_guard<std::mutex> guard(g_texObjMutex);
     GXTexObj* obj = GetHostTexObj(oa);
     TexObjMeta& meta = GetTexObjMeta(oa);
@@ -375,9 +325,9 @@ extern "C" void GX__InitTexObjWrapMode_80170b50(uint32_t oa, uint32_t ws, uint32
     }
     GXInitTexObjWrapMode(obj, (GXTexWrapMode)ws, (GXTexWrapMode)wt);
 }
-PPC_NATIVE_OVERRIDE_VOID(801f2c58, GX__InitTexObjWrapMode_80170b50, (uint32_t oa, uint32_t ws, uint32_t wt), (oa, ws, wt));
+PPC_NATIVE_OVERRIDE_VOID(801f2c58, GX__InitTexObjWrapMode_HLE, (uint32_t oa, uint32_t ws, uint32_t wt), (oa, ws, wt));
 
-extern "C" void GX__InitTexObjTlut_80170b64(uint32_t oa, uint32_t tl) {
+extern "C" void GX__InitTexObjTlut_HLE(uint32_t oa, uint32_t tl) {
     std::lock_guard<std::mutex> guard(g_texObjMutex);
     GXTexObj* obj = GetHostTexObj(oa);
     TexObjMeta& meta = GetTexObjMeta(oa);
@@ -389,10 +339,10 @@ extern "C" void GX__InitTexObjTlut_80170b64(uint32_t oa, uint32_t tl) {
     } catch (...) {
     }
 }
-PPC_NATIVE_OVERRIDE_VOID(801f2c6c, GX__InitTexObjTlut_80170b64, (uint32_t oa, uint32_t tl), (oa, tl));
+PPC_NATIVE_OVERRIDE_VOID(801f2c6c, GX__InitTexObjTlut_HLE, (uint32_t oa, uint32_t tl), (oa, tl));
 
 // GXInitTexObjFilter - sets mag/min filter modes
-extern "C" void GX__InitTexObjFilter_80170b6c(uint32_t oa, uint32_t minFilter, uint32_t magFilter) {
+extern "C" void GX__InitTexObjFilter_HLE(uint32_t oa, uint32_t minFilter, uint32_t magFilter) {
     std::lock_guard<std::mutex> guard(g_texObjMutex);
     TexObjMeta& meta = GetTexObjMeta(oa);
     meta.minFilter = minFilter;
@@ -417,7 +367,7 @@ extern "C" void GX__InitTexObjFilter_80170b6c(uint32_t oa, uint32_t minFilter, u
                            (GXAnisotropy)meta.maxAniso);
     }
 }
-PPC_NATIVE_OVERRIDE_VOID(801f2c74, GX__InitTexObjFilter_80170b6c, (uint32_t oa, uint32_t minFilter, uint32_t magFilter), (oa, minFilter, magFilter));
+PPC_NATIVE_OVERRIDE_VOID(801f2c74, GX__InitTexObjFilter_HLE, (uint32_t oa, uint32_t minFilter, uint32_t magFilter), (oa, minFilter, magFilter));
 
 // GXInitTexObjLODBias - sets LOD bias value
 extern "C" void GX__InitTexObjLODBias_80170b94(uint32_t oa, float bias) {
@@ -447,13 +397,6 @@ extern "C" void GX__InitTexObjLODBias_80170b94(uint32_t oa, float bias) {
                            clampedBias, (GXAnisotropy)meta.maxAniso);
     }
 }
-#if 0  // NSMBW: GXInitTexObjLODBias is not linked into NSMBW (was MKW-only)
-#if 0  // SPM: 0x80170b94: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(80170b94, GX__InitTexObjLODBias_80170b94, (uint32_t oa, float bias), (oa, bias));
-#endif
-#endif
-#endif
 
 extern "C" void GX__InitTexObjUserData_80170be8(uint32_t oa, uint32_t userData) {
     std::lock_guard<std::mutex> guard(g_texObjMutex);
@@ -469,12 +412,6 @@ extern "C" void GX__InitTexObjUserData_80170be8(uint32_t oa, uint32_t userData) 
         GXInitTexObjUserData(obj, GuestToHostPtr(userData));
     }
 }
-#if 0  // SPM: GXInitTexObjUserData: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801c7160, GX__InitTexObjUserData_80170be8,
-              (uint32_t oa, uint32_t userData), (oa, userData));
-#endif
-#endif
 
 // ============================================================================
 // Texture Loading
@@ -521,7 +458,7 @@ static GXTexObj* PersistentDlTexObj(const TexObjMeta& meta, GXTexWrapMode wrapS,
     return slot.get();
 }
 
-extern "C" void GX__LoadTexObj_80170f2c(uint32_t oa, uint32_t tid) {
+extern "C" void GX__LoadTexObj_HLE(uint32_t oa, uint32_t tid) {
     static uint32_t s_invalidMetaLogCount = 0;
     static uint32_t s_invalidTidLogCount = 0;
     static uint32_t s_invalidDimLogCount = 0;
@@ -533,7 +470,6 @@ extern "C" void GX__LoadTexObj_80170f2c(uint32_t oa, uint32_t tid) {
 
     if (tid >= g_boundTexMaps.size()) {
         if (s_invalidTidLogCount < 128) {
-            ++g_spmAudit[3];
             RT_LOGF(RT_TAG_GX, "GXLoadTexObj: invalid tex map id %u (oa=0x%08X)\n", tid, oa);
             ++s_invalidTidLogCount;
         }
@@ -731,12 +667,12 @@ extern "C" void GX__LoadTexObj_80170f2c(uint32_t oa, uint32_t tid) {
     }
     try { uint32_t gd = Memory::Read32(kGXDataPtrAddr); if (gd) { Memory::Write32(gd + 0x5FCu, Memory::Read32(gd + 0x5FCu) | 1u); Memory::Write16(gd + 2, 0); } } catch (...) {}
 }
-PPC_NATIVE_OVERRIDE_VOID(801f2fb0, GX__LoadTexObj_80170f2c, (uint32_t oa, uint32_t tid), (oa, tid));
+PPC_NATIVE_OVERRIDE_VOID(801f2fb0, GX__LoadTexObj_HLE, (uint32_t oa, uint32_t tid), (oa, tid));
 
 // GXLoadTexObjPreLoaded(obj, region, id): the map id is the THIRD argument; the region (r4) only
 // describes TMEM placement, which Aurora does not model.
-extern "C" void GX__LoadTexObjPreLoaded_80170dc8(uint32_t oa, uint32_t /*region*/, uint32_t tid) { GX__LoadTexObj_80170f2c(oa, tid); }
-PPC_NATIVE_OVERRIDE_VOID(801f2e4c, GX__LoadTexObjPreLoaded_80170dc8, (uint32_t oa, uint32_t region, uint32_t tid), (oa, region, tid));
+extern "C" void GX__LoadTexObjPreLoaded_HLE(uint32_t oa, uint32_t /*region*/, uint32_t tid) { GX__LoadTexObj_HLE(oa, tid); }
+PPC_NATIVE_OVERRIDE_VOID(801f2e4c, GX__LoadTexObjPreLoaded_HLE, (uint32_t oa, uint32_t region, uint32_t tid), (oa, region, tid));
 
 // ============================================================================
 // Texture Object Getters
@@ -754,11 +690,6 @@ extern "C" void GX__GetTexObjAll_80170bf8(uint32_t oa, uint32_t dp, uint32_t wp,
     }
     if (dp) Memory::Write32(dp, meta.dataAddr); if (wp) Memory::Write16(wp, meta.width); if (hp) Memory::Write16(hp, meta.height); if (fp) Memory::Write32(fp, meta.format); if (wsp) Memory::Write32(wsp, meta.wrapS); if (wtp) Memory::Write32(wtp, meta.wrapT); if (mp) Memory::Write8(mp, meta.mipmap ? 1 : 0);
 }
-#if 0  // SPM: GXGetTexObjAll: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801c7180, GX__GetTexObjAll_80170bf8, (uint32_t oa, uint32_t dp, uint32_t wp, uint32_t hp, uint32_t fp, uint32_t wsp, uint32_t wtp, uint32_t mp), (oa, dp, wp, hp, fp, wsp, wtp, mp));
-#endif
-#endif
 
 extern "C" void GX__GetTexObjLODAll_80170cbc(uint32_t oa, uint32_t mifp, uint32_t mafp, uint32_t milp, uint32_t malp, uint32_t lbp, uint32_t bcp, uint32_t elp, uint32_t map) {
     std::lock_guard<std::mutex> guard(g_texObjMutex);
@@ -773,17 +704,12 @@ extern "C" void GX__GetTexObjLODAll_80170cbc(uint32_t oa, uint32_t mifp, uint32_
     }
     if (mifp) Memory::Write32(mifp, meta.minFilter); if (mafp) Memory::Write32(mafp, meta.magFilter); if (milp) Memory::WriteFloat32(milp, meta.minLod); if (malp) Memory::WriteFloat32(malp, meta.maxLod); if (lbp) Memory::WriteFloat32(lbp, meta.lodBias); if (bcp) Memory::Write8(bcp, meta.biasClamp ? 1 : 0); if (elp) Memory::Write8(elp, meta.edgeLod ? 1 : 0); if (map) Memory::Write32(map, meta.maxAniso);
 }
-#if 0  // SPM: GXGetTexObjLODAll: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801c7260, GX__GetTexObjLODAll_80170cbc, (uint32_t oa, uint32_t mifp, uint32_t mafp, uint32_t milp, uint32_t malp, uint32_t lbp, uint32_t bcp, uint32_t elp, uint32_t map), (oa, mifp, mafp, milp, malp, lbp, bcp, elp, map));
-#endif
-#endif
 
 // ============================================================================
 // TLUT (Texture Lookup Table)
 // ============================================================================
 
-extern "C" void GX__InitTlutObj_80170f80(uint32_t oa, uint32_t da, uint32_t f, uint32_t e) {
+extern "C" void GX__InitTlutObj_HLE(uint32_t oa, uint32_t da, uint32_t f, uint32_t e) {
     std::lock_guard<std::mutex> guard(g_tlutObjMutex); GXTlutObj* obj = CreateHostTlutObj(oa); TlutObjMeta& meta = GetTlutObjMeta(oa);
     if (meta.dataAddr != CanonicalizeGxMainRamAddress(da) || meta.format != f || meta.entries != (u16)e) NoteTlutObjRangeChangedLocked();
     meta.dataAddr=CanonicalizeGxMainRamAddress(da); meta.format=f; meta.entries=(u16)e; meta.dirty=false;
@@ -797,9 +723,9 @@ extern "C" void GX__InitTlutObj_80170f80(uint32_t oa, uint32_t da, uint32_t f, u
     if (!ValidateTlutData(oa, meta)) return;
     GXInitTlutObj(obj, GuestToHostPtr(da), (GXTlutFmt)f, (u16)e); MarkHostTlutObjConstructed(oa);
 }
-PPC_NATIVE_OVERRIDE_VOID(801f3004, GX__InitTlutObj_80170f80, (uint32_t oa, uint32_t da, uint32_t f, uint32_t e), (oa, da, f, e));
+PPC_NATIVE_OVERRIDE_VOID(801f3004, GX__InitTlutObj_HLE, (uint32_t oa, uint32_t da, uint32_t f, uint32_t e), (oa, da, f, e));
 
-extern "C" void GX__LoadTlut_80170fa8(uint32_t oa, uint32_t tl) {
+extern "C" void GX__LoadTlut_HLE(uint32_t oa, uint32_t tl) {
     // A TLUT object the game built without GXInitTlutObj (Brawl's NW4R G3D fills it inline): read the hardware
     // layout {u32 tlut (format in bits 10-11), u32 loadTlut0 (address >> 5), u16 numEntries}.
     // The hardware layout carries the LOADTLUT0 register id (0x64) in loadTlut0's top byte (GXInitTlutObj above
@@ -816,7 +742,7 @@ extern "C" void GX__LoadTlut_80170fa8(uint32_t oa, uint32_t tl) {
                       it->second.format == format && it->second.entries == entries;
         }
         if (!current && data != 0 && entries != 0) {
-            GX__InitTlutObj_80170f80(oa, data, format, entries);
+            GX__InitTlutObj_HLE(oa, data, format, entries);
         }
     }
     if (SpmDumpFrame()) {
@@ -825,33 +751,23 @@ extern "C" void GX__LoadTlut_80170fa8(uint32_t oa, uint32_t tl) {
                 it != g_TlutObjMeta.end() ? it->second.dataAddr : 0u, it != g_TlutObjMeta.end() ? it->second.entries : 0u,
                 it != g_TlutObjMeta.end() ? it->second.format : 0u);
     } std::lock_guard<std::mutex> guard(g_tlutObjMutex); if (tl >= kMaxTluts) { RT_LOGF(RT_TAG_GX, "GXLoadTlut: invalid TLUT index %u (oa=0x%08X)\n", tl, oa); return; } auto metaIt = g_TlutObjMeta.find(oa); if (metaIt != g_TlutObjMeta.end() && metaIt->second.dirty) { if (ValidateTlutData(oa, metaIt->second)) { GXTlutObj* rebuild = CreateHostTlutObj(oa); GXInitTlutObj(rebuild, GuestToHostPtr(metaIt->second.dataAddr), (GXTlutFmt)metaIt->second.format, metaIt->second.entries); MarkHostTlutObjConstructed(oa); } metaIt->second.dirty = false; } GXTlutObj* obj = GetHostTlutObj(oa); GXLoadTlut(obj, (GXTlut)tl); try { uint32_t gd = Memory::Read32(kGXDataPtrAddr); if (gd) Memory::Write16(gd + 2, 0); } catch (...) {} }
-PPC_NATIVE_OVERRIDE_VOID(801f302c, GX__LoadTlut_80170fa8, (uint32_t oa, uint32_t tl), (oa, tl));
+PPC_NATIVE_OVERRIDE_VOID(801f302c, GX__LoadTlut_HLE, (uint32_t oa, uint32_t tl), (oa, tl));
 
 // ============================================================================
 // Texture Invalidation and Coordinate Control
 // ============================================================================
 
-extern "C" void GX__InvalidateTexAll_80171110() {
+extern "C" void GX__InvalidateTexAll_HLE() {
     // Real GX invalidates its internal texture cache here. Aurora forwards the
     // invalidate to the renderer, which keeps unchanged source uploads hot but
     // revalidates reused guest buffers before serving cached texture handles.
     GXInvalidateTexAll();
 }
-PPC_NATIVE_OVERRIDE_VOID(801F3194, GX__InvalidateTexAll_80171110, (), ());
+PPC_NATIVE_OVERRIDE_VOID(801F3194, GX__InvalidateTexAll_HLE, (), ());
 
 extern "C" void GX__SetTexCoordScaleManually_80171180(uint32_t c, uint32_t en, uint32_t ss, uint32_t ts) { GXSetTexCoordScaleManually((GXTexCoordID)c, (GXBool)en, (u16)ss, (u16)ts); try{ uint32_t gd=Memory::Read32(kGXDataPtrAddr); if(gd){ Memory::Write32(gd+0x5E4u, (Memory::Read32(gd+0x5E4u)&~(1u<<c))|((en&1u)<<c)); if(en){ uint32_t sa=gd+0x108u+c*4u, ta=gd+0x128u+c*4u; Memory::Write32(sa, (Memory::Read32(sa)&0xFFFF0000u)|((ss-1)&0xFFFFu)); Memory::Write32(ta, (Memory::Read32(ta)&0xFFFF0000u)|((ts-1)&0xFFFFu)); Memory::Write16(gd+2, 0); } } }catch(...){} }
-#if 0  // SPM: GXSetTexCoordScaleManually: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801C7750, GX__SetTexCoordScaleManually_80171180, (uint32_t c, uint32_t en, uint32_t ss, uint32_t ts), (c, en, ss, ts));
-#endif
-#endif
 
 extern "C" void GX__SetTexCoordBias_801711fc(uint32_t c, uint32_t se, uint32_t te) { GXSetTexCoordBias((GXTexCoordID)c, (GXBool)se, (GXBool)te); try{ uint32_t gd=Memory::Read32(kGXDataPtrAddr); if(gd){ uint32_t sa=gd+0x108u+c*4u, ta=gd+0x128u+c*4u; Memory::Write32(sa, (Memory::Read32(sa)&0xFFFEFFFFu)|((se&1u)<<16)); Memory::Write32(ta, (Memory::Read32(ta)&0xFFFEFFFFu)|((te&1u)<<16)); if(Memory::Read32(gd+0x5E4u)&(1u<<c)) Memory::Write16(gd+2, 0); } }catch(...){} }
-#if 0  // SPM: GXSetTexCoordBias: name not in SPM
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801c77d0, GX__SetTexCoordBias_801711fc, (uint32_t c, uint32_t se, uint32_t te), (c, se, te));
-#endif
-#endif
 
 // GXInitTexObjData (SPM 0x8028ED7C): repoints a texture object at new image data. SPM's smartTexObj
 // uses it for every animated paper-character frame; NSMBW never called it, so it ran translated and

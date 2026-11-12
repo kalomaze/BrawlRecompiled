@@ -19,7 +19,7 @@
 #include "backends/imgui_impl_sdl3.h"
 #include "backends/imgui_impl_sdlrenderer3.h"
 #include "backends/imgui_impl_wgpu.h"
-#include "tracy/Tracy.hpp"
+#include "aurora/profiling.hpp"
 
 namespace aurora::imgui {
 static float g_scale;

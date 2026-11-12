@@ -20,6 +20,20 @@ public sealed partial class CxxLinearCodeGenerator
             };
         }
 
+        if (IsFloatRegister(bin.Destination))
+        {
+            var helper = bin.Op switch
+            {
+                "add" => "PpcFaddInline",
+                "sub" => "PpcFsubInline",
+                "mul" => "PpcFmulInline",
+                "fdiv" => "PpcFdivInline",
+                _ => null
+            };
+            if (helper is not null)
+                return $"{helper}({left}, {right})";
+        }
+
         return bin.Op switch
         {
             "add" => $"({left} + {right})",
@@ -43,8 +57,6 @@ public sealed partial class CxxLinearCodeGenerator
             "fneg" => $"(-({left}))",
             "frsp" => $"static_cast<double>(PpcForceSingleValueInline({left}))",
             "frsp_noni" => $"static_cast<double>(static_cast<float>({left}))",
-            "fsqrt" => $"std::sqrt({left})",
-            "fcmp" => $"({left} - {right})",
             "fctiw" => $"PPC_Fctiw({left})",
             "fctiwz" => $"PPC_Fctiwz({left})",
             "fpr_low_word" => $"PPC_FprLowWordInline({left})",
@@ -128,29 +140,31 @@ public sealed partial class CxxLinearCodeGenerator
         var name = val.RegisterName;
         if (IsCpuRegister(name))
         {
-            return RegisterToReadExpression(name, types);
+            return RegisterToCtxExpression(name, written: false);
         }
 
         return name;
     }
 
-    private static string RegisterToCtxRead(string name, RepresentationEnvironment types)
+    private static string RegisterToCtxExpression(string name, bool written)
     {
         var baseName = BaseRegisterSpan(name);
         var residency = _activeResidency;
 
         if (baseName.Length > 1 && baseName[0] == 'r' && int.TryParse(baseName[1..], out var gpr) && gpr is >= 0 and < 32)
         {
-            return residency is null ? CtxGprName(gpr) : residency.Gpr(gpr, written: false);
+            return residency is null ? CtxGprName(gpr) : residency.Gpr(gpr, written: written);
         }
 
         if (baseName.Length > 1 && baseName[0] == 'f' && int.TryParse(baseName[1..], out var fpr) && fpr is >= 0 and < 32)
         {
-            return residency is null ? CtxFprScalarName(fpr) : residency.FprScalar(fpr, written: false);
+            return residency is null ? CtxFprScalarName(fpr) : residency.FprScalar(fpr, written: written);
         }
 
         if (baseName.Length == 3 && baseName.StartsWith("cr".AsSpan(), StringComparison.OrdinalIgnoreCase) && char.IsDigit(baseName[2]))
         {
+            // Field writes are handled separately; a nibble extraction is not an lvalue.
+            if (written) return name;
             var crField = baseName[2] - '0';
             if (crField is >= 0 and <= 7)
             {
@@ -161,9 +175,9 @@ public sealed partial class CxxLinearCodeGenerator
         }
 
         if (SpanEqualsIgnoreCase(baseName, "lr")) return "ctx->lr";
-        if (SpanEqualsIgnoreCase(baseName, "ctr")) return residency is null ? "ctx->ctr" : residency.Ctr(written: false);
-        if (SpanEqualsIgnoreCase(baseName, "cr")) return residency is null ? "ctx->cr" : residency.Cr(written: false);
-        if (SpanEqualsIgnoreCase(baseName, "xer")) return residency is null ? "ctx->xer" : residency.Xer(written: false);
+        if (SpanEqualsIgnoreCase(baseName, "ctr")) return residency is null ? "ctx->ctr" : residency.Ctr(written: written);
+        if (SpanEqualsIgnoreCase(baseName, "cr")) return residency is null ? "ctx->cr" : residency.Cr(written: written);
+        if (SpanEqualsIgnoreCase(baseName, "xer")) return residency is null ? "ctx->xer" : residency.Xer(written: written);
         if (SpanEqualsIgnoreCase(baseName, "srr0")) return "ctx->srr0";
         if (SpanEqualsIgnoreCase(baseName, "srr1")) return "ctx->srr1";
         if (SpanEqualsIgnoreCase(baseName, "msr")) return "ctx->msr";
@@ -174,57 +188,17 @@ public sealed partial class CxxLinearCodeGenerator
         {
             return int.TryParse(baseName[3..], out var gqrIdx) && gqrIdx is >= 0 and < 8
                 ? $"ctx->gqr[{gqrIdx}]"
-                : "0";
+                : written ? name : "0";
         }
 
-        return "0";
+        return written ? name : "0";
     }
 
     private static string ToDestination(string name, RepresentationEnvironment types)
     {
         if (IsCpuRegister(name))
         {
-            return RegisterToWriteExpression(name, types);
-        }
-
-        return name;
-    }
-
-    private static string RegisterToCtxWrite(string name, RepresentationEnvironment types)
-    {
-        var baseName = BaseRegisterSpan(name);
-        var residency = _activeResidency;
-
-        if (baseName.Length > 1 && baseName[0] == 'r' && int.TryParse(baseName[1..], out var gpr) && gpr is >= 0 and < 32)
-        {
-            return residency is null ? CtxGprName(gpr) : residency.Gpr(gpr, written: true);
-        }
-
-        if (baseName.Length > 1 && baseName[0] == 'f' && int.TryParse(baseName[1..], out var fpr) && fpr is >= 0 and < 32)
-        {
-            return residency is null ? CtxFprScalarName(fpr) : residency.FprScalar(fpr, written: true);
-        }
-
-        if (baseName.Length == 3 && baseName.StartsWith("cr".AsSpan(), StringComparison.OrdinalIgnoreCase) && char.IsDigit(baseName[2]))
-        {
-            return name;
-        }
-
-        if (SpanEqualsIgnoreCase(baseName, "lr")) return "ctx->lr";
-        if (SpanEqualsIgnoreCase(baseName, "ctr")) return residency is null ? "ctx->ctr" : residency.Ctr(written: true);
-        if (SpanEqualsIgnoreCase(baseName, "cr")) return residency is null ? "ctx->cr" : residency.Cr(written: true);
-        if (SpanEqualsIgnoreCase(baseName, "xer")) return residency is null ? "ctx->xer" : residency.Xer(written: true);
-        if (SpanEqualsIgnoreCase(baseName, "srr0")) return "ctx->srr0";
-        if (SpanEqualsIgnoreCase(baseName, "srr1")) return "ctx->srr1";
-        if (SpanEqualsIgnoreCase(baseName, "msr")) return "ctx->msr";
-        if (SpanEqualsIgnoreCase(baseName, "hid0")) return "ctx->hid0";
-        if (SpanEqualsIgnoreCase(baseName, "hid1")) return "ctx->hid1";
-        if (SpanEqualsIgnoreCase(baseName, "hid2")) return "ctx->hid2";
-        if (baseName.StartsWith("gqr".AsSpan(), StringComparison.OrdinalIgnoreCase))
-        {
-            return int.TryParse(baseName[3..], out var gqrIdx) && gqrIdx is >= 0 and < 8
-                ? $"ctx->gqr[{gqrIdx}]"
-                : name;
+            return RegisterToCtxExpression(name, written: true);
         }
 
         return name;
@@ -267,7 +241,7 @@ public sealed partial class CxxLinearCodeGenerator
         }
 
         var reg = IsCpuRegister(conditionRegister)
-            ? RegisterToReadExpression(conditionRegister, types)
+            ? RegisterToCtxExpression(conditionRegister, written: false)
             : ResidentRawCondition(conditionRegister);
 
         if (EqualsIgnoreCase(condition, "bdnz")) return $"({reg} != 0)";
@@ -316,7 +290,7 @@ public sealed partial class CxxLinearCodeGenerator
     private static string Address(IrAddress addr, RepresentationEnvironment types)
     {
         var baseExpr = IsCpuRegister(addr.Base)
-            ? RegisterToReadExpression(addr.Base, types)
+            ? RegisterToCtxExpression(addr.Base, written: false)
             : addr.Base;
 
         return addr.Offset == 0
@@ -370,14 +344,4 @@ public sealed partial class CxxLinearCodeGenerator
         8 => 64,
         _ => 32
     };
-
-    private static string RegisterToReadExpression(string name, RepresentationEnvironment types)
-    {
-        return RegisterToCtxRead(name, types);
-    }
-
-    private static string RegisterToWriteExpression(string name, RepresentationEnvironment types)
-    {
-        return RegisterToCtxWrite(name, types);
-    }
 }

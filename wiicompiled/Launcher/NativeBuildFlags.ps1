@@ -40,96 +40,6 @@ function Get-MkwToolchainPath([string]$ToolchainRoot) {
     ) -join ';')
 }
 
-function Get-MkwBuildSafePath([string]$Path, [string]$Kind, [string]$MarkerFile) {
-    <#
-    The Windows native build passes workspace paths through CMake, Ninja response files and
-    clang, which do not all interpret quotes the same way. Keep those paths plain even when the
-    user's install directory contains an apostrophe, ampersand or other punctuation.
-    #>
-    if ([string]::IsNullOrWhiteSpace($Path)) { throw "A $Kind path is required." }
-    $full = [IO.Path]::GetFullPath($Path)
-    # A drive root keeps its separator: "C:" is relative to the current directory on that drive.
-    if ($full -ne [IO.Path]::GetPathRoot($full)) { $full = $full.TrimEnd('\') }
-    if ($full -cmatch '^[A-Za-z0-9 ._\\:-]+$') { return $full }
-
-    Assert-File (Join-Path $full $MarkerFile) "$Kind marker"
-
-    $sha = [Security.Cryptography.SHA256]::Create()
-    try {
-        $bytes = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($full.ToLowerInvariant()))
-    } finally { $sha.Dispose() }
-    $linkName = "$Kind-" + ((($bytes[0..7]) | ForEach-Object { $_.ToString('x2') }) -join '')
-
-    $failures = @()
-    foreach ($base in @($env:ProgramData, $env:PUBLIC)) {
-        if ([string]::IsNullOrWhiteSpace($base) -or $base -cnotmatch '^[A-Za-z0-9._\\:-]+$') { continue }
-        $link = Join-Path (Join-Path $base 'WiiCompiled') $linkName
-        try {
-            [IO.Directory]::CreateDirectory((Split-Path -Parent $link)) | Out-Null
-            $existing = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
-            if ($null -ne $existing) {
-                # Never trust a directory just because it has the marker: it could point at a
-                # different installation. Nor may we remove a directory we did not create.
-                if ($existing.LinkType -ne 'Junction' -or
-                    @($existing.Target).Count -ne 1 -or
-                    -not [string]::Equals([IO.Path]::GetFullPath(@($existing.Target)[0]),
-                        $full, [StringComparison]::OrdinalIgnoreCase)) {
-                    throw "An existing path is not the expected junction: $link"
-                }
-            } else {
-                New-Item -ItemType Junction -Path $link -Target $full -ErrorAction Stop | Out-Null
-            }
-            Assert-File (Join-Path $link $MarkerFile) "$Kind junction marker"
-            Write-Host "MKWCBUILD: Building the $Kind through $link, because $full contains characters the native build cannot quote reliably"
-            return $link
-        } catch {
-            $failures += "$link ($($_.Exception.Message))"
-        }
-    }
-    throw ("The $Kind path $full cannot be passed safely to the native build, and no junction " +
-        'to it could be created: ' + ($failures -join '; ') + '. Install to a path of plain ' +
-        'letters, digits and spaces, or make a safe junction location available.')
-}
-
-function Get-MkwProjectPins([string]$ProjectFile) {
-    <#
-    The Mario Kart Wii facts pinned by projects/mkwii/recomp.yml (game identity, clean input
-    digests, translation entry point, Retro-WFC endpoint), read from one place instead of being
-    restated; Test-PinnedFacts.ps1 checks the copies that can't read YAML (C++ header, C#
-    constants) against these values. Parsing is literal, not a YAML dependency, since the file is
-    machine-written with a fixed shape.
-    #>
-    Assert-File $ProjectFile 'Translation project file'
-    $pins = [ordered]@{
-        GameId = ''; DolSha256 = ''; RelSha256 = ''; EntryPoint = ''; RetroWfcPayloadUri = ''
-    }
-    $section = ''
-    $inputKey = ''
-    foreach ($raw in [IO.File]::ReadAllLines($ProjectFile)) {
-        $line = ($raw -replace '#.*$', '')
-        if ([string]::IsNullOrWhiteSpace($line)) { continue }
-        if ($line -match '^([A-Za-z0-9_]+):') { $section = $Matches[1]; $inputKey = ''; continue }
-        if ($section -eq 'inputs' -and $line -match '^\s{2}([A-Za-z0-9_]+):\s*$') { $inputKey = $Matches[1]; continue }
-        if ($section -eq 'project' -and $line -match '^\s*game_id:\s*(\S+)\s*$') {
-            $pins.GameId = $Matches[1]
-        } elseif ($section -eq 'inputs' -and $line -match '^\s*sha256:\s*([0-9a-fA-F]{64})\s*$') {
-            if ($inputKey -eq 'dol') { $pins.DolSha256 = $Matches[1].ToLowerInvariant() }
-            elseif ($inputKey -eq 'rel') { $pins.RelSha256 = $Matches[1].ToLowerInvariant() }
-        } elseif ($section -eq 'translation' -and $pins.EntryPoint -eq '' -and
-                  $line -match '^\s*-\s*(0[xX][0-9a-fA-F]+)\s*$') {
-            $pins.EntryPoint = $Matches[1].ToLowerInvariant()
-        } elseif ($line -match '^\s*retro_wfc_payload:\s*(\S+)\s*$') {
-            $pins.RetroWfcPayloadUri = $Matches[1]
-        }
-    }
-    foreach ($name in @($pins.Keys)) {
-        if ([string]::IsNullOrWhiteSpace($pins[$name])) {
-            throw "$ProjectFile does not pin $name; the project file is not the shape this build expects."
-        }
-    }
-    return $pins
-}
-
 function Invoke-Checked([string]$FilePath, [string[]]$Arguments, [string]$Description,
     [string]$LogPrefix = 'MKWCBUILD', [string]$StepId = '', [bool]$WaitForProcessTree = $true) {
     <#
@@ -138,8 +48,6 @@ function Invoke-Checked([string]$FilePath, [string[]]$Arguments, [string]$Descri
     hand off to an extracted child that PowerShell's call operator would not wait for. Callers that
     need to avoid waiting on unrelated descendants can opt into the call-operator path.
     Start-Process doesn't publish $LASTEXITCODE, so this sets it manually for callers that check it.
-    -StepId emits the machine-readable form the installer's progress bar consumes (BuildStepIds in
-    WiiCompiled.Setup/InstallProgress.cs); the human sentence stays on the same log line.
     #>
     if ($StepId) { Write-Host "${LogPrefix}:STEP:${StepId} $Description" }
     else { Write-Host "${LogPrefix}: $Description" }

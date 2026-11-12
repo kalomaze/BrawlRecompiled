@@ -18,8 +18,6 @@
 #include "platform/host_platform.h"
 #include "runtime_log.h"
 #include "ppc_interpreter.h"
-#include "sampling_profiler.h"
-#include "guest_profiler.h"
 
 #include <dolphin/gx/GXAurora.h>
 #include <dolphin/vi.h>
@@ -51,13 +49,13 @@
 #include <aurora/aurora.h>
 
 // Forward declaration for OSWakeupThread - used to wake threads on VI retrace queue
-extern "C" void OSWakeupThread_HLE_801aaaa4(CpuContext* ctx);
+extern "C" void OSWakeupThread_HLE(CpuContext* ctx);
 
 // Forward declaration for OSSleepThread - used by VIWaitForRetrace HLE
-extern "C" void OSSleepThread_HLE_801aa9b8(CpuContext* cpu);
+extern "C" void OSSleepThread_HLE(CpuContext* cpu);
 extern "C" int g_gxFrameCount;
-extern "C" int32_t OS__DisableInterrupts_801a65ac();
-extern "C" int32_t OS__RestoreInterrupts_801a65d4(int32_t level);
+extern "C" int32_t OS__DisableInterrupts_HLE();
+extern "C" int32_t OS__RestoreInterrupts_HLE(int32_t level);
 
 // Aurora frame cycle tracking - needs external linkage for the GX HLE
 // (declared in gx_internal.h, consumed by gx_frame.cpp). We need to call
@@ -401,73 +399,11 @@ static std::atomic<bool> s_inAdvanceRetrace{false};
 // end the freshly pre-warmed empty frame and show it as a black frame group.
 static std::atomic<bool> s_presentSequenceActive{false};
 
-// Frames the guest actually handed to the presenter (an XFB was ready), and a watchdog that dumps every guest
-// thread's state if none arrived after 12 s and again after 30 s, and whenever presenting stops for 10 s, so a
-// game that stalls in a wait loop shows where each thread is parked.
+// Frames the guest actually handed to the presenter (an XFB was ready).
 static std::atomic<uint32_t> s_presentedXfbFrames{0};
-extern "C" { extern int g_spmDrawDump; extern int g_spmCullOff; extern int g_spmSweepDump; extern unsigned g_spmDrawIdx; extern unsigned g_spmDrawLimit; }  // aurora command_processor (SPM bring-up diagnostics)
+extern "C" { extern int g_spmDrawDump; }  // aurora command_processor (SPM bring-up diagnostics)
 static uint32_t SpmPresentedFramesLocal() { return s_presentedXfbFrames.load(std::memory_order_relaxed); }
 static uint32_t (*const g_spmFramesFn)() = &SpmPresentedFramesLocal;
-
-void StartStallWatchdogOnce() {
-    static std::once_flag once;
-    std::call_once(once, [] {
-        // Unattended bring-up: autoexit.txt beside the executable holds a run length in seconds.
-        if (const auto dir = RuntimeConfigFile::ExecutableDirectory()) {
-            std::ifstream in(*dir / "autoexit.txt");
-            int seconds = 0;
-            if (in >> seconds && seconds > 0) {
-                std::thread([seconds] {
-                    std::this_thread::sleep_for(std::chrono::seconds(seconds));
-                    std::cerr << "[runtime] autoexit after " << seconds << " s" << std::endl;
-                    std::_Exit(0);
-                }).detach();
-            }
-        }
-        std::thread([] {
-            const auto start = std::chrono::steady_clock::now();
-            for (const int seconds : {12, 30}) {
-                std::this_thread::sleep_until(start + std::chrono::seconds(seconds));
-                const uint32_t frames = s_presentedXfbFrames.load(std::memory_order_relaxed);
-                const bool black = g_vi.black;  // racy read; diagnostics only
-                RT_LOGF(RT_TAG_VI, "[watchdog] %d s: %u guest frame(s) presented, VI black=%d\n", seconds, frames,
-                        black ? 1 : 0);
-                if (frames != 0 && !black) {
-                    continue;
-                }
-                RT_LOGF(RT_TAG_VI, "[watchdog] nothing visible yet; guest threads:\n");
-                Fiber::GuestFiberManager::DumpGuestThreads(std::cerr);
-            }
-            // Later, a game that stops presenting (a wait loop, or a loop in interpreted mod code): once per stall.
-            uint32_t last = s_presentedXfbFrames.load(std::memory_order_relaxed);
-            for (int still = 0;; ) {
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-                const uint32_t now = s_presentedXfbFrames.load(std::memory_order_relaxed);
-                if (now != last) {
-                    last = now;
-                    still = 0;
-                } else if (++still == 10) {
-                    RT_LOGF(RT_TAG_VI, "[watchdog] no frame for 10 s (after %u); guest threads:\n", now);
-                    Fiber::GuestFiberManager::DumpGuestThreads(std::cerr);
-                    // The loaded .rel modules (__OSModuleInfoList), as id@header, to the first repeat.
-                    std::string list;
-                    std::vector<uint32_t> seen;
-                    for (uint32_t m = Memory::Read32(0x800030C8u); m != 0 && seen.size() < 200;
-                         m = Memory::Read32(m + 4u)) {
-                        const bool repeat = std::find(seen.begin(), seen.end(), m) != seen.end();
-                        char item[64];
-                        std::snprintf(item, sizeof(item), " %u@%08X(imp %08X+%X)%s", Memory::Read32(m), m,
-                                      Memory::Read32(m + 0x28u), Memory::Read32(m + 0x2Cu), repeat ? " (cycle)" : "");
-                        list += item;
-                        if (repeat) break;
-                        seen.push_back(m);
-                    }
-                    RT_LOGF(RT_TAG_VI, "[watchdog] modules:%s\n", list.c_str());
-                }
-            }
-        }).detach();
-    });
-}
 
 // Brawl: report every .rel module the game links (gfModuleManager -> OSLink) with its image and bss address. The
 // translated modules are pre-linked for these addresses (projects/brawl/tools), so this log is where they come from;
@@ -509,8 +445,6 @@ void AdvanceRetrace(CpuContext* ctx, Clock::time_point retraceStamp, bool servic
     if (s_inAdvanceRetrace.exchange(true)) {
         return;
     }
-    StartStallWatchdogOnce();
-    GuestProfiler::OnFramePresented();  // Brawl bring-up: profile from the first retrace, frames or not
     LogGuestModulesOnce();
 
     uint32_t preCb = 0;
@@ -580,7 +514,7 @@ void AdvanceRetrace(CpuContext* ctx, Clock::time_point retraceStamp, bool servic
             Memory::TryRead32(kViRetraceQueueAddr, queueHead);
         }
         ctx->gpr[3] = kViRetraceQueueAddr;
-        OSWakeupThread_HLE_801aaaa4(ctx);
+        OSWakeupThread_HLE(ctx);
         if (logWake) {
             ++s_wakeLogs;
             uint32_t runQueueBits = 0;
@@ -900,14 +834,12 @@ static void LogWatchedWords() {
 }
 
 void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
-    SamplingProfilerAttachCurrentThread();
     LogWatchedWords();
     GuestCodePatch::SyncFrame();  // code patches made outside the code handler (mod plugins)
     if (s_presentSequenceActive.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
     RequestScheduledCaptures();
-    GuestProfiler::OnFramePresented();
     static FrameTimes times;
     const Clock::time_point presentStart = Clock::now();
     const auto ms = [](Clock::duration d) { return std::chrono::duration<double, std::milli>(d).count(); };
@@ -918,13 +850,7 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
         {
             const uint32_t pf = s_presentedXfbFrames.fetch_add(1, std::memory_order_relaxed) + 1;
             const int32_t dumpTarget = SpmDumpTarget();
-            static const bool cullTest = std::ifstream("depth_test.txt").good();
-            g_spmDrawDump = ((dumpTarget >= 0 && pf == static_cast<uint32_t>(dumpTarget)) || g_spmSweepDump) ? 1 : 0;
-            static const int envTest = [] { const char* e = std::getenv("SPM_CULL_TEST"); return e ? std::atoi(e) : 0; }();  // 1 = no culling, 2 = no depth test (diagnostic)
-            static const unsigned drawLimit = [] { const char* e = std::getenv("SPM_DRAW_LIMIT"); return e ? static_cast<unsigned>(std::atoi(e)) : ~0u; }();
-            g_spmDrawLimit = drawLimit;
-            g_spmDrawIdx = 0;
-            g_spmCullOff = envTest ? envTest : ((cullTest && pf >= 6900u) ? 2 : 0);
+            g_spmDrawDump = (dumpTarget >= 0 && pf == static_cast<uint32_t>(dumpTarget)) ? 1 : 0;
         }
         // SPM bring-up: with drawdump.txt present, report any guest write into the DOL's
         // read-only sections (.rodata/.sdata2) once the game has been running a while.
@@ -1091,7 +1017,6 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
             const uint64_t instructions = PpcInterpreter::InstructionCount();
             RT_LOGF(RT_TAG_VI, "interpreter: %.2fM instructions per frame\n", (instructions - lastInstructions) / 1e6 / n);
             lastInstructions = instructions;
-            SamplingProfilerReport();
             if (aurora_get_frame_interpolation_fps() != 0) {  // what the screen shows vs the 60 Hz game
                 AuroraPresentTiming present{};
                 aurora_get_present_timing(&present);
@@ -1167,17 +1092,17 @@ static void SeedViStateForInit(CpuContext* ctx, const char* who)
     ViSetR3(ctx, 0);
 }
 
-extern "C" void VIInit_HLE_801b94a4(CpuContext* ctx)
+extern "C" void VIInit_HLE(CpuContext* ctx)
 {
     SeedViStateForInit(ctx, "VIInit_801b94a4");
 }
-PPC_NATIVE_OVERRIDE_VOID(801E83E4, VIInit_HLE_801b94a4, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E83E4, VIInit_HLE, (CpuContext* ctx), (ctx));
 
-extern "C" void __VIInit_HLE_801b9294(CpuContext* ctx)
+extern "C" void __VIInit_HLE(CpuContext* ctx)
 {
     SeedViStateForInit(ctx, "__VIInit_801b9294");
 }
-PPC_NATIVE_OVERRIDE_VOID(801E81D4, __VIInit_HLE_801b9294, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E81D4, __VIInit_HLE, (CpuContext* ctx), (ctx));
 
 // -----------------------------------------------------------------------------
 // Helper stubs referenced by VIInit switch cases (case D variants).
@@ -1188,44 +1113,23 @@ extern "C" void VIInit_caseD_0_HLE_801b9934(CpuContext* ctx)
     (void)ctx;
     RT_LOG(RT_TAG_VI) << "VIInit_caseD_0_801b9934 stubbed" << std::endl;
 }
-#if 0  // NSMBW: MKW switch-case label; its function is native in NSMBW (was MKW-only)
-#if 0  // SPM: 0x801b9934: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801B9934, VIInit_caseD_0_HLE_801b9934, (CpuContext* ctx), (ctx));
-#endif
-#endif
-#endif
 
 extern "C" void VIInit_caseD_1_HLE_801b993c(CpuContext* ctx)
 {
     (void)ctx;
     RT_LOG(RT_TAG_VI) << "VIInit_caseD_1_801b993c stubbed" << std::endl;
 }
-#if 0  // NSMBW: MKW switch-case label; its function is native in NSMBW (was MKW-only)
-#if 0  // SPM: 0x801b993c: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801B993C, VIInit_caseD_1_HLE_801b993c, (CpuContext* ctx), (ctx));
-#endif
-#endif
-#endif
 
 extern "C" void VIInit_caseD_2_HLE_801b9944(CpuContext* ctx)
 {
     (void)ctx;
     RT_LOG(RT_TAG_VI) << "VIInit_caseD_2_801b9944 stubbed" << std::endl;
 }
-#if 0  // NSMBW: MKW switch-case label; its function is native in NSMBW (was MKW-only)
-#if 0  // SPM: 0x801b9944: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801B9944, VIInit_caseD_2_HLE_801b9944, (CpuContext* ctx), (ctx));
-#endif
-#endif
-#endif
 
 // -----------------------------------------------------------------------------
 // VISetPreRetraceCallback (0x801BC3E0)
 // -----------------------------------------------------------------------------
-extern "C" void VISetPreRetraceCallback_HLE_801b90f4(CpuContext* ctx)
+extern "C" void VISetPreRetraceCallback_HLE(CpuContext* ctx)
 {
     const uint32_t newCb = ctx ? ctx->gpr[3] : 0;
     uint32_t prev = 0;
@@ -1238,12 +1142,12 @@ extern "C" void VISetPreRetraceCallback_HLE_801b90f4(CpuContext* ctx)
     }
     ViSetR3(ctx, prev);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E8034, VISetPreRetraceCallback_HLE_801b90f4, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E8034, VISetPreRetraceCallback_HLE, (CpuContext* ctx), (ctx));
 
 // -----------------------------------------------------------------------------
 // VISetPostRetraceCallback (0x801BC430)
 // -----------------------------------------------------------------------------
-extern "C" void VISetPostRetraceCallback_HLE_801b9138(CpuContext* ctx)
+extern "C" void VISetPostRetraceCallback_HLE(CpuContext* ctx)
 {
     const uint32_t newCb = ctx ? ctx->gpr[3] : 0;
     uint32_t prev = 0;
@@ -1256,22 +1160,22 @@ extern "C" void VISetPostRetraceCallback_HLE_801b9138(CpuContext* ctx)
     }
     ViSetR3(ctx, prev);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E8078, VISetPostRetraceCallback_HLE_801b9138, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E8078, VISetPostRetraceCallback_HLE, (CpuContext* ctx), (ctx));
 
 // -----------------------------------------------------------------------------
 // VIGetDTVStatus (0x801BE070)
 // Reads DTV status from VI hardware (MMIO 0xCC00206E). Stub to "not ready".
 // -----------------------------------------------------------------------------
-extern "C" void VIGetDTVStatus_HLE_801bad38(CpuContext* ctx)
+extern "C" void VIGetDTVStatus_HLE(CpuContext* ctx)
 {
     ViSetR3(ctx, 0); // return 0 -> not ready / disabled
 }
-PPC_NATIVE_OVERRIDE_VOID(801E9C9C, VIGetDTVStatus_HLE_801bad38, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E9C9C, VIGetDTVStatus_HLE, (CpuContext* ctx), (ctx));
 
 // -----------------------------------------------------------------------------
 // VIConfigure & related helpers: translate GXRenderModeObj into guest globals.
 // -----------------------------------------------------------------------------
-extern "C" void VIConfigure_HLE_801b9f6c(CpuContext* ctx)
+extern "C" void VIConfigure_HLE(CpuContext* ctx)
 {
     // One read of the guest GXRenderModeObj serves both the VI pending state and
     // aurora, rather than unpacking the same 0x39 bytes twice.
@@ -1308,9 +1212,9 @@ extern "C" void VIConfigure_HLE_801b9f6c(CpuContext* ctx)
 
     ViSetR3(ctx, 0);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E8DC8, VIConfigure_HLE_801b9f6c, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E8DC8, VIConfigure_HLE, (CpuContext* ctx), (ctx));
 
-extern "C" void VIFlush_HLE_801ba9a4(CpuContext* ctx)
+extern "C" void VIFlush_HLE(CpuContext* ctx)
 {
     uint32_t guestNextFb = 0;
     {
@@ -1345,9 +1249,9 @@ extern "C" void VIFlush_HLE_801ba9a4(CpuContext* ctx)
 
     ViSetR3(ctx, 0);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E98B0, VIFlush_HLE_801ba9a4, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E98B0, VIFlush_HLE, (CpuContext* ctx), (ctx));
 
-extern "C" void VISetNextFrameBuffer_HLE_801baab8(CpuContext* ctx)
+extern "C" void VISetNextFrameBuffer_HLE(CpuContext* ctx)
 {
     const uint32_t fbPtr = ctx ? ctx->gpr[3] : 0;
     {
@@ -1362,7 +1266,7 @@ extern "C" void VISetNextFrameBuffer_HLE_801baab8(CpuContext* ctx)
     SaveStates::FrameBoundary();  // a save or load the player asked for: here, between two frames
     Gecko::RunVbiHook(ctx);  // a Gecko code handler hooked at this function's blr
 }
-PPC_NATIVE_OVERRIDE_VOID(801E99C4, VISetNextFrameBuffer_HLE_801baab8, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E99C4, VISetNextFrameBuffer_HLE, (CpuContext* ctx), (ctx));
 
 extern "C" void VIGetNextFrameBuffer_HLE_801bab24(CpuContext* ctx)
 {
@@ -1376,15 +1280,8 @@ extern "C" void VIGetNextFrameBuffer_HLE_801bab24(CpuContext* ctx)
     ViSetR3(ctx, fb);
     VI_HLE_PollRetrace(ctx);
 }
-#if 0  // NSMBW: VIGetNextFrameBuffer is not linked into NSMBW (was MKW-only)
-#if 0  // SPM: 0x801bab24: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-PPC_NATIVE_OVERRIDE_VOID(801BAB24, VIGetNextFrameBuffer_HLE_801bab24, (CpuContext* ctx), (ctx));
-#endif
-#endif
-#endif
 
-extern "C" void VISetBlack_HLE_801bab2c(CpuContext* ctx)
+extern "C" void VISetBlack_HLE(CpuContext* ctx)
 {
     const bool makeBlack = ctx ? (ctx->gpr[3] != 0) : false;
     {
@@ -1395,9 +1292,9 @@ extern "C" void VISetBlack_HLE_801bab2c(CpuContext* ctx)
     }
     ViSetR3(ctx, 0);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E9A30, VISetBlack_HLE_801bab2c, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E9A30, VISetBlack_HLE, (CpuContext* ctx), (ctx));
 
-extern "C" void VIGetRetraceCount_HLE_801baba4(CpuContext* ctx)
+extern "C" void VIGetRetraceCount_HLE(CpuContext* ctx)
 {
     uint32_t count = 0;
     {
@@ -1408,9 +1305,9 @@ extern "C" void VIGetRetraceCount_HLE_801baba4(CpuContext* ctx)
     ViSetR3(ctx, count);
     VI_HLE_PollRetrace(ctx);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E9AA8, VIGetRetraceCount_HLE_801baba4, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E9AA8, VIGetRetraceCount_HLE, (CpuContext* ctx), (ctx));
 
-extern "C" void VIGetNextField_HLE_801babac(CpuContext* ctx)
+extern "C" void VIGetNextField_HLE(CpuContext* ctx)
 {
     bool fieldOdd = false;
     {
@@ -1421,9 +1318,9 @@ extern "C" void VIGetNextField_HLE_801babac(CpuContext* ctx)
     ViSetR3(ctx, fieldOdd ? 1 : 0);
     VI_HLE_PollRetrace(ctx);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E9AB0, VIGetNextField_HLE_801babac, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E9AB0, VIGetNextField_HLE, (CpuContext* ctx), (ctx));
 
-extern "C" void VIGetCurrentLine_HLE_801bac48(CpuContext* ctx)
+extern "C" void VIGetCurrentLine_HLE(CpuContext* ctx)
 {
     uint32_t height = 480;
     std::chrono::nanoseconds interval{16666us};
@@ -1454,14 +1351,14 @@ extern "C" void VIGetCurrentLine_HLE_801bac48(CpuContext* ctx)
     }
     ViSetR3(ctx, line);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E9B4C, VIGetCurrentLine_HLE_801bac48, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E9B4C, VIGetCurrentLine_HLE, (CpuContext* ctx), (ctx));
 
-extern "C" void VIWaitForRetrace_HLE_801b99ec(CpuContext* ctx)
+extern "C" void VIWaitForRetrace_HLE(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
     
     if (Fiber::GuestFiberManager::IsInitialized()) {
-        const int32_t irqState = OS__DisableInterrupts_801a65ac();
+        const int32_t irqState = OS__DisableInterrupts_HLE();
         uint32_t retraceCount = 0;
         {
             std::lock_guard<std::mutex> lock(g_viMutex);
@@ -1471,7 +1368,7 @@ extern "C" void VIWaitForRetrace_HLE_801b99ec(CpuContext* ctx)
 
         do {
             cpu->gpr[3] = kViRetraceQueueAddr;
-            OSSleepThread_HLE_801aa9b8(cpu);
+            OSSleepThread_HLE(cpu);
 
             {
                 std::lock_guard<std::mutex> lock(g_viMutex);
@@ -1482,7 +1379,7 @@ extern "C" void VIWaitForRetrace_HLE_801b99ec(CpuContext* ctx)
             }
         } while (true);
 
-        OS__RestoreInterrupts_801a65d4(irqState);
+        OS__RestoreInterrupts_HLE(irqState);
     } else {
         std::chrono::nanoseconds interval{16666us};
         Clock::time_point target;
@@ -1501,7 +1398,7 @@ extern "C" void VIWaitForRetrace_HLE_801b99ec(CpuContext* ctx)
     }
     ViSetR3(cpu, 0);
 }
-PPC_NATIVE_OVERRIDE_VOID(801E892C, VIWaitForRetrace_HLE_801b99ec, (CpuContext* ctx), (ctx));
+PPC_NATIVE_OVERRIDE_VOID(801E892C, VIWaitForRetrace_HLE, (CpuContext* ctx), (ctx));
 
 // VIGetScanMode (SPM 0x8028211C): reads the VI clock/DTV registers on hardware. The host has no
 // cable, so report interlaced (VI_INTERLACE = 0), the mode every NTSC console supports.

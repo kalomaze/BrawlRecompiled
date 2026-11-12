@@ -19,7 +19,7 @@
 
 namespace RuntimePlatform {
 
-std::optional<std::filesystem::path> ExecutableDirectory() noexcept {
+std::optional<std::filesystem::path> ExecutablePath() noexcept {
 #if defined(_WIN32)
     std::wstring buffer(MAX_PATH, L'\0');
     for (;;) {
@@ -29,7 +29,7 @@ std::optional<std::filesystem::path> ExecutableDirectory() noexcept {
         }
         if (length < buffer.size() - 1) {
             buffer.resize(length);
-            return std::filesystem::path(buffer).parent_path();
+            return std::filesystem::path(buffer);
         }
         buffer.resize(buffer.size() * 2);
     }
@@ -45,8 +45,30 @@ std::optional<std::filesystem::path> ExecutableDirectory() noexcept {
     path.resize(std::char_traits<char>::length(path.c_str()));
     std::error_code ec;
     const auto resolved = std::filesystem::weakly_canonical(path, ec);
-    return (ec ? std::filesystem::path(path) : resolved).parent_path();
+    return ec ? std::filesystem::path(path) : resolved;
 #elif defined(__ANDROID__)
+    return std::nullopt;  // The game is a library inside an APK.
+#elif defined(__linux__)
+    // readlink does not NUL-terminate and may truncate; grow until the path fits.
+    std::string buffer(256, '\0');
+    for (;;) {
+        const ssize_t length = readlink("/proc/self/exe", buffer.data(), buffer.size());
+        if (length < 0) {
+            return std::nullopt;
+        }
+        if (static_cast<size_t>(length) < buffer.size()) {
+            buffer.resize(static_cast<size_t>(length));
+            return std::filesystem::path(buffer);
+        }
+        buffer.resize(buffer.size() * 2);
+    }
+#else
+    return std::nullopt;
+#endif
+}
+
+std::optional<std::filesystem::path> ExecutableDirectory() noexcept {
+#if defined(__ANDROID__)
     // The game is a library inside an APK, so there is no executable directory. The app unpacks
     // the files a desktop build keeps beside its executable (DSP ROM, pipeline cache, Wii
     // bootstrap NAND, CA bundle) and names that directory before SDL starts the game.
@@ -55,6 +77,7 @@ std::optional<std::filesystem::path> ExecutableDirectory() noexcept {
     }
     return std::nullopt;
 #else
+    if (const auto executable = ExecutablePath()) return executable->parent_path();
     return std::nullopt;
 #endif
 }
@@ -80,6 +103,13 @@ std::filesystem::path ApplicationDataDirectory(std::string_view applicationName)
     (void)applicationName;
     if (const char* directory = std::getenv("WIICOMPILED_DATA_DIR"); directory && *directory) {
         return std::filesystem::path(directory);
+    }
+#else
+    if (const char* xdgDataHome = std::getenv("XDG_DATA_HOME"); xdgDataHome && *xdgDataHome) {
+        return std::filesystem::path(xdgDataHome) / applicationName;
+    }
+    if (const char* home = std::getenv("HOME"); home && *home) {
+        return std::filesystem::path(home) / ".local" / "share" / applicationName;
     }
 #endif
     return std::filesystem::current_path() / applicationName;

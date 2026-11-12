@@ -8,7 +8,7 @@
 #include "discord_presence.h"
 #include "runtime_log.h"
 
-extern "C" void OSSleepThread_HLE_801aa9b8(CpuContext* ctx);
+extern "C" void OSSleepThread_HLE(CpuContext* ctx);
 
 // ============================================================================
 // SHA device handles
@@ -437,13 +437,6 @@ extern "C" void NAND_IOS_OpenBody_HLE_801938FC(CpuContext* ctx) {
     ctx->gpr[3] = static_cast<uint32_t>(result);
     ctx->gpr[1] = ctx->gpr[1] + 32u;
 }
-#if 0  // NSMBW: NAND_IOS_OpenBody is not linked into NSMBW (was MKW-only)
-#if 0  // SPM: 0x801938fc: no NSMBW symbol at this address
-#if 0  // BRAWL: no matching function in the Brawl dol
-REGISTER_NATIVE_FUNCTION_AS(0x801938FC, NAND_IOS_OpenBody_HLE_801938FC, "NAND_IOS_OpenBody_HLE_801938FC");
-#endif
-#endif
-#endif
 
 extern "C" int32_t NAND_IOS_Close_HLE(uint32_t fd) {
     if (fd == ISFS_DEV_FD) {
@@ -799,7 +792,7 @@ static bool TryDeferredNetworkIosSync(CpuContext* ctx, StartSync&& startSync) {
     if (deferred.disposition == NetworkDeferredContract::StartDisposition::Started) {
         ctx->gpr[1] = frame.newStack;
         ctx->gpr[3] = frame.waitQueue;
-        OSSleepThread_HLE_801aa9b8(ctx);
+        OSSleepThread_HLE(ctx);
         FinishDeferredIosWait(ctx, frame.oldStack, deferred.token);
         return true;
     }
@@ -937,11 +930,11 @@ int32_t ISFS_OpenLib_Initialize(CpuContext* ctx) {
     return ISFS_OK;
 }
 
-extern "C" void ISFS_OpenLib_HLE_80169BCC(CpuContext* ctx) {
+extern "C" void ISFS_OpenLib_HLE(CpuContext* ctx) {
     ctx->gpr[3] = static_cast<uint32_t>(ISFS_OpenLib_Initialize(ctx));
 }
 
-REGISTER_NATIVE_FUNCTION_AS(0x80213b58, ISFS_OpenLib_HLE_80169BCC, "ISFS_OpenLib_HLE_80169BCC");
+REGISTER_NATIVE_FUNCTION_AS(0x80213b58, ISFS_OpenLib_HLE, "ISFS_OpenLib_HLE");
 
 // ============================================================================
 // IOS_Ioctlv HLE - Vector Ioctl for complex ISFS operations

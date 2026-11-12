@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -42,17 +43,7 @@
 #include <dbghelp.h>
 #else
 #include <signal.h>
-#if defined(__x86_64__)
-// Only the x86 POSIX fault path inspects ucontext_t to recover the page-fault
-// write bit. macOS exposes the signal-handler context through sys/ucontext.h;
-// avoid ucontext.h itself because its deprecated user-context APIs require
-// _XOPEN_SOURCE. The arm64 handler does not inspect a host context at all.
-#if defined(__APPLE__)
-#include <sys/ucontext.h>
-#else
-#include <ucontext.h>
-#endif
-#endif
+#include "host_fault_context.h"
 #include <unistd.h>
 #endif
 #if defined(__ANDROID__)
@@ -71,6 +62,7 @@
 #include "game_folder.h"
 #include "abi_bridge.h"
 #include "guest_flat_memory.h"
+#include "fault_report.h"
 #include "gx_guest_write.h"
 #include "memory.h"
 #include "system_bridge.h"
@@ -84,7 +76,6 @@
 #include "hle_stubs.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
-#include "runtime_product.h"
 #include "recomp_mod_loader.h"
 #include <aurora/aurora.h>
 #include <aurora/gfx.h>
@@ -267,7 +258,7 @@ const std::filesystem::path& GetRunLogDirectory() {
         const auto secs = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
 
         std::ostringstream name;
-        name << (RuntimeProduct::IsRetroRewind() ? "retro_rewind" : "base")
+        name << "brawl"
              << "_" << secs << "_pid" << pid;
         const std::filesystem::path directory = logRoot / name.str();
         std::filesystem::create_directories(directory, ec);
@@ -813,9 +804,9 @@ void ShowRuntimeFatalPopup(std::string_view category, std::string_view details) 
     if (g_fatalPopupShown.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
-    // Unattended runs (map sweeps, test scripts): the log has it; a dialog would only block the exit.
-    if (std::getenv("SPM_MAP_SWEEP_FILE") || std::getenv("WIICOMPILED_NO_POPUP")) {
-        RT_LOGF(RT_TAG_RUNTIME, "[spmsweep] fatal %.*s: %.*s\n", static_cast<int>(category.size()), category.data(),
+    // Unattended runs: the log has it; a dialog would only block the exit.
+    if (std::getenv("WIICOMPILED_NO_POPUP")) {
+        RT_LOGF(RT_TAG_RUNTIME, "fatal %.*s: %.*s\n", static_cast<int>(category.size()), category.data(),
                 static_cast<int>(details.size()), details.data());
         return;
     }
@@ -841,8 +832,7 @@ void ShowRuntimeFatalPopup(std::string_view category, std::string_view details) 
         ::MessageBoxA(nullptr, message.c_str(), "WiiCompiled - Fatal Error",
                       MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TASKMODAL);
 #else
-        // The shipped product is Windows-first. Keep non-Windows builds safe
-        // and retain the console diagnostic when no native dialog is available.
+        // Retain the console diagnostic when no native dialog is available.
         RT_LOGF(RT_TAG_RUNTIME, "fatal dialog: %s\n", message.c_str());
 #endif
     } catch (...) {
@@ -993,130 +983,12 @@ void DumpAccessViolationReport(const Memory::AccessViolation& ex,
 }
 
 #if defined(_WIN32)
-PVOID g_vectoredSehHandle = nullptr;
 constexpr DWORD kCppExceptionCodeGcc = 0x20474343; // "GCC" exception code
 constexpr DWORD kCppExceptionCodeMsvc = 0xE06D7363;
 // AddressSanitizer uses STATUS_FATAL_APP_EXIT when it detects an error and wants to report it.
 // We must let ASan's handler run so it can print file/line information.
 constexpr DWORD kAsanFatalAppExit = 0x40000015; // STATUS_FATAL_APP_EXIT
 LONG ReportFatalSehAndExit(EXCEPTION_POINTERS* info);
-
-void ReportStructuredException(EXCEPTION_POINTERS* info) {
-    if (!info || !info->ExceptionRecord) {
-        RT_LOG(RT_TAG_RUNTIME) << "Structured exception occurred, but no diagnostic info was captured." << std::endl;
-        return;
-    }
-
-    const auto* record = info->ExceptionRecord;
-    const auto code = record->ExceptionCode;
-    std::cerr << std::hex << std::uppercase;
-    RT_LOG(RT_TAG_RUNTIME) << "Structured exception 0x" << code;
-    if (!g_lastEntryLabel.empty()) {
-        std::cerr << " while executing " << g_lastEntryLabel;
-    }
-    std::cerr << std::dec << std::nouppercase << std::endl;
-
-    const auto faultAddress = reinterpret_cast<uintptr_t>(record->ExceptionAddress);
-    std::cerr << std::hex << std::uppercase;
-    RT_LOG(RT_TAG_RUNTIME) << "Fault address: 0x" << faultAddress << std::dec << std::nouppercase << std::endl;
-
-    if (code == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= 2) {
-        const auto accessType = record->ExceptionInformation[0];
-        const auto accessed = record->ExceptionInformation[1];
-        RT_LOG(RT_TAG_RUNTIME) << "Access type: " << (accessType ? "write" : "read")
-                  << " at 0x" << std::hex << std::uppercase << accessed << std::dec << std::nouppercase << std::endl;
-
-        // Guardrail: flag raw GX gather pipe touches (0xCC00_8xxx) which must be routed through HLE.
-        // Direct stores to this MMIO region (e.g., translated stfs/stb -0x8000(r4) with r4=0xCC010000)
-        // will fault on the host. Emit an explicit hint so we know to fix the translation/HLE path instead
-        // of chasing generic access violations.
-        constexpr uintptr_t kGxGatherLo = 0xCC008000;
-        constexpr uintptr_t kGxGatherHi = 0xCC009000; // one page past the 0x100-byte gather range for clarity
-        if (accessed >= kGxGatherLo && accessed < kGxGatherHi) {
-            RT_LOG(RT_TAG_RUNTIME) << "HINT: guest attempted a direct GX gather pipe write (0xCC00_8xxx)." << std::endl;
-            RT_LOG(RT_TAG_RUNTIME) << "      These must go through GX_HLE_FIFO_Write*; check the translated function for" << std::endl;
-            RT_LOG(RT_TAG_RUNTIME) << "      literal stores to -0x8000(r4) after lis r4,0xCC01 and route them via HLE." << std::endl;
-        }
-    }
-
-#if defined(_M_X64) || defined(__x86_64__)
-    const auto rip = info->ContextRecord ? info->ContextRecord->Rip : 0;
-    const auto rsp = info->ContextRecord ? info->ContextRecord->Rsp : 0;
-    std::cerr << std::hex << std::uppercase;
-    RT_LOG(RT_TAG_RUNTIME) << "RIP=0x" << rip << " RSP=0x" << rsp << std::dec << std::nouppercase << std::endl;
-#elif defined(_M_IX86)
-    const auto eip = info->ContextRecord ? info->ContextRecord->Eip : 0;
-    const auto esp = info->ContextRecord ? info->ContextRecord->Esp : 0;
-    std::cerr << std::hex << std::uppercase;
-    RT_LOG(RT_TAG_RUNTIME) << "EIP=0x" << eip << " ESP=0x" << esp << std::dec << std::nouppercase << std::endl;
-#endif
-
-    // Always dump CPU state on crash.
-    RT_LOG(RT_TAG_RUNTIME) << "===== DUMPING CPU STATE =====" << std::endl;
-    SystemBridge::DumpCpuState(TryGetCpuContext());
-    std::cerr.flush();
-
-    RT_LOG(RT_TAG_RUNTIME) << "Enable /DEBUG builds or capture a dump for full stack details." << std::endl;
-    std::cerr.flush();
-}
-
-
-
-LONG CALLBACK SehLogger(EXCEPTION_POINTERS* info) {
-    // Guest-space faults are the flat memory interception mechanism (MMIO,
-    // deferred EFB reads, the executable-write guard, unmapped pages). The
-    // flat module registers its own handler first, but registration order is
-    // not guaranteed once another VEH is installed later, so consult it here
-    // too - resolving a fault twice is a no-op.
-    if (info->ExceptionRecord != nullptr &&
-        info->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
-        info->ExceptionRecord->NumberParameters >= 2 &&
-        GuestFlat::HandleAccessViolation(
-            reinterpret_cast<void*>(info->ExceptionRecord->ExceptionInformation[1]),
-            info->ExceptionRecord->ExceptionInformation[0] != 0)) {
-        return EXCEPTION_CONTINUE_EXECUTION;
-    }
-    if (g_suppressSehReporting && g_sehJumpTarget) {
-        g_sehLastExceptionCode = info->ExceptionRecord->ExceptionCode;
-        g_sehLastExceptionAddress = reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress);
-        g_sehLastAccessType = 0;
-        g_sehLastAccessedAddress = 0;
-        if (g_sehLastExceptionCode == EXCEPTION_ACCESS_VIOLATION && info->ExceptionRecord->NumberParameters >= 2) {
-            g_sehLastAccessType = static_cast<uint32_t>(info->ExceptionRecord->ExceptionInformation[0]);
-            g_sehLastAccessedAddress = static_cast<uintptr_t>(info->ExceptionRecord->ExceptionInformation[1]);
-        }
-        longjmp(*g_sehJumpTarget, 1);
-    }
-    if (g_suppressSehReporting) {
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    // Let C++ exceptions propagate to std::terminate so we can log their what().
-    if (info->ExceptionRecord->ExceptionCode == kCppExceptionCodeGcc ||
-        info->ExceptionRecord->ExceptionCode == kCppExceptionCodeMsvc) {
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    if (info->ExceptionRecord->ExceptionCode == 0x40010006 || // DBG_PRINTEXCEPTION_C
-        info->ExceptionRecord->ExceptionCode == 0x4001000A || // DBG_PRINTEXCEPTION_WIDE_C (OutputDebugStringW)
-        info->ExceptionRecord->ExceptionCode == 0x406D1388 || // SetThreadName
-        info->ExceptionRecord->ExceptionCode == kAsanFatalAppExit) { // ASan reporting - let it print first
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    // Software-raised exceptions (customer bit set) are used for internal control flow by
-    // system DLLs (e.g. msxml6 while mscms parses a display colour profile) and are caught
-    // by their own frame handlers. Only hardware faults are fatal at first chance; anything
-    // else that truly goes unhandled reaches UnhandledSehFilter.
-    if ((info->ExceptionRecord->ExceptionCode & 0x20000000u) != 0) {
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    // Likewise anything that isn't a processor fault: RPC raises its Win32 errors as exceptions and
-    // handles them itself (the folder picker's shell raises RPC_S_SERVER_UNAVAILABLE, 0x6BA, on
-    // some PCs). Faults are NTSTATUS errors of facility 0 (0xC000xxxx) or a misalignment.
-    const DWORD code = info->ExceptionRecord->ExceptionCode;
-    if ((code & 0xFFFF0000u) != 0xC0000000u && code != EXCEPTION_DATATYPE_MISALIGNMENT) {
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    return ReportFatalSehAndExit(info);
-}
 
 LONG WINAPI UnhandledSehFilter(EXCEPTION_POINTERS* info) {
     if (info == nullptr || info->ExceptionRecord == nullptr) {
@@ -1130,136 +1002,69 @@ LONG WINAPI UnhandledSehFilter(EXCEPTION_POINTERS* info) {
 }
 
 LONG ReportFatalSehAndExit(EXCEPTION_POINTERS* info) {
-    // Guard against re-entrancy: if we crash while reporting, don't recurse
-    static std::atomic_flag s_inCrashHandler = ATOMIC_FLAG_INIT;
-    if (s_inCrashHandler.test_and_set()) {
-        std::_Exit(EXIT_FAILURE);
-    }
+    static std::atomic_flag reporting = ATOMIC_FLAG_INIT;
+    if (reporting.test_and_set()) std::_Exit(EXIT_FAILURE);
 
-    // Report the structured exception with detailed information
-    ReportStructuredException(info);
-    const auto* record = info->ExceptionRecord;
-    const DWORD code = record != nullptr ? record->ExceptionCode : 0;
-    std::ostringstream popupDetails;
-    popupDetails << "A native Windows exception (0x" << std::hex << std::uppercase << code << ") occurred";
-    if (!g_lastEntryLabel.empty()) {
-        popupDetails << " while executing " << g_lastEntryLabel;
+    // Native faults can interrupt the allocator, streams, or window system.
+    // Inspect only the OS exception record; leave stack/guest-state traversal
+    // to a debugger rather than risking another failure while reporting.
+    FaultReport::Message message;
+    message.Text("[runtime] FATAL native Windows exception");
+    const auto* record = info ? info->ExceptionRecord : nullptr;
+    if (record) {
+        message.Text("\n  code: ").Hex(record->ExceptionCode)
+            .Text("\n  instruction: ").Hex(reinterpret_cast<uintptr_t>(record->ExceptionAddress), sizeof(uintptr_t) * 2);
+        if ((record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION ||
+             record->ExceptionCode == EXCEPTION_IN_PAGE_ERROR) && record->NumberParameters >= 2) {
+            const auto access = record->ExceptionInformation[0];
+            message.Text("\n  access: ").Text(access == 0 ? "read" : access == 1 ? "write" : access == 8 ? "execute" : "unknown")
+                .Text(" at ").Hex(record->ExceptionInformation[1], sizeof(uintptr_t) * 2);
+            if (record->ExceptionCode == EXCEPTION_IN_PAGE_ERROR && record->NumberParameters >= 3)
+                message.Text("\n  paging error: ").Hex(record->ExceptionInformation[2]);
+        }
+    } else {
+        message.Text("\n  exception record unavailable");
     }
-    if (code == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= 2) {
-        popupDetails << ".\n\nThe game attempted a "
-                     << (record->ExceptionInformation[0] ? "write" : "read")
-                     << " at host address 0x" << record->ExceptionInformation[1];
-    }
-    popupDetails << ".\n\nThe process transcript and crash log contain the full CPU and stack diagnostics.";
-    ShowRuntimeFatalPopup("a native crash occurred", popupDetails.str());
-    DumpHostStackTrace();
-
-    WriteFatalLogImpl("seh");
-    
-    // CRITICAL: Explicitly flush all output to ensure visibility with PowerShell redirection
-    std::cerr << '\n';
-    RT_LOG(RT_TAG_RUNTIME) << "===== FLUSHING OUTPUT BEFORE EXIT =====" << std::endl;
-    std::cerr.flush();
-    std::cout.flush();
-    std::fflush(stdout);
-    std::fflush(stderr);
-    
-    std::_Exit(EXIT_FAILURE);
+    message.Text("\n  active guest function: ").Hex(RecompMod::CurrentTranslatedExecutionAddress());
+    message.Fatal();
 }
 
-void InstallSehLogger() {
-    if (!g_vectoredSehHandle) {
-        g_vectoredSehHandle = AddVectoredExceptionHandler(1, SehLogger);
-        SetUnhandledExceptionFilter(UnhandledSehFilter);
-    }
-}
 #else
-// POSIX counterpart to SehLogger above. Unlike Windows' AddVectoredExceptionHandler, which lets
-// GuestFlat and this module each install their own handler and defensively re-check each other,
-// sigaction only allows one handler per signal - the second registration replaces the first
-// instead of chaining. So this is the single SIGSEGV/SIGBUS handler for the whole process, and it
-// owns checking GuestFlat's fault-interception logic first, exactly mirroring the order SehLogger
-// already uses on Windows.
+// POSIX has one process-wide signal handler. It attempts guest mapping recovery
+// before reporting an unhandled fault; Windows installs that recovery in GuestFlat.
+// Only async-signal-safe operations belong here: the interrupted thread may hold
+// allocator, logger, or window-system locks. Leave detailed inspection to the
+// debugger/core dump instead of risking another fault or deadlock while reporting.
 void ReportUnhandledSignalFault(int sig, void* faultAddress) {
-    RT_LOG(RT_TAG_RUNTIME) << "Signal " << sig << " (fault address 0x" << std::hex
-              << reinterpret_cast<uintptr_t>(faultAddress) << std::dec << ")";
-    if (!g_lastEntryLabel.empty()) {
-        std::cerr << " while executing " << g_lastEntryLabel;
-    }
-    std::cerr << std::endl;
-    if (const CpuContext* cpu = TryGetCpuContext()) {
-        RT_LOG(RT_TAG_RUNTIME) << "===== DUMPING CPU STATE =====" << std::endl;
-        SystemBridge::DumpCpuState(cpu);
-    }
-    std::cerr.flush();
+    constexpr char prefix[] = "Fatal memory signal at host address 0x";
+    char message[sizeof(prefix) - 1 + sizeof(uintptr_t) * 2 + 1];
+    size_t position = 0;
+    for (size_t i = 0; i < sizeof(prefix) - 1; ++i) message[position++] = prefix[i];
+    const auto address = reinterpret_cast<uintptr_t>(faultAddress);
+    for (size_t digit = sizeof(uintptr_t) * 2; digit > 0; --digit)
+        message[position++] = "0123456789abcdef"[(address >> ((digit - 1) * 4)) & 0xf];
+    message[position++] = '\n';
+    const auto ignored = write(STDERR_FILENO, message, position);
+    (void)ignored;
+    // The signal remains blocked until this handler returns; its pending default
+    // delivery terminates with the original signal rather than a generic exit(1).
+    if (signal(sig, SIG_DFL) == SIG_ERR || raise(sig) != 0) _exit(128 + sig);
 }
 
 void PosixMemoryFaultHandler(int sig, siginfo_t* info, void* ucontextVoid) {
     void* faultAddress = info != nullptr ? info->si_addr : nullptr;
-    bool isWrite = false;
-#if defined(__x86_64__)
-    // Standard glibc technique for a POSIX fastmem-style handler: bit 1 (0x2) of the hardware
-    // error code x86 pushes on a page fault records whether it was a write.
-    if (ucontextVoid != nullptr) {
-        auto* uc = static_cast<ucontext_t*>(ucontextVoid);
-#if defined(__APPLE__)
-        isWrite = uc->uc_mcontext != nullptr && (uc->uc_mcontext->__es.__err & 0x2) != 0;
-#else
-        isWrite = (uc->uc_mcontext.gregs[REG_ERR] & 0x2) != 0;
-#endif
-    }
-#endif
+    const auto fault = HostFault::Decode(ucontextVoid);
 
-    // Guest-space faults are the flat memory interception mechanism (MMIO, deferred EFB reads,
+    // Guest-space faults are the flat memory interception mechanism (MMIO,
     // the executable-write guard, unmapped pages). Resolving one here means resuming the
     // faulting instruction, which just returning from the handler does.
-    if (faultAddress != nullptr && GuestFlat::HandleAccessViolation(faultAddress, isWrite)) {
+    // Unknown metadata and instruction fetches must never be treated as reads.
+    if (faultAddress != nullptr && HostFault::MayRecoverDataFault(sig, info->si_code, fault) &&
+        GuestFlat::HandleAccessViolation(faultAddress, fault.access == HostFault::Access::Write, fault.instruction)) {
         return;
-    }
-
-    if (g_suppressSehReporting && g_sehJumpTarget) {
-        g_sehLastExceptionCode = static_cast<uint32_t>(sig);
-        g_sehLastExceptionAddress = reinterpret_cast<uintptr_t>(faultAddress);
-        g_sehLastAccessType = isWrite ? 1u : 0u;
-        g_sehLastAccessedAddress = reinterpret_cast<uintptr_t>(faultAddress);
-        siglongjmp(*g_sehJumpTarget, 1);
-    }
-    if (g_suppressSehReporting) {
-        // Reporting suppressed but nobody armed a recovery jump: restore the default disposition
-        // and re-raise so the process still terminates, instead of returning into the same fault.
-        signal(sig, SIG_DFL);
-        raise(sig);
-        return;
-    }
-
-    // Guard against re-entrancy: if we crash while reporting, don't recurse.
-    static std::atomic_flag s_inCrashHandler = ATOMIC_FLAG_INIT;
-    if (s_inCrashHandler.test_and_set()) {
-        std::_Exit(EXIT_FAILURE);
     }
 
     ReportUnhandledSignalFault(sig, faultAddress);
-    std::ostringstream popupDetails;
-    popupDetails << "A native signal (" << sig << ") occurred";
-    if (!g_lastEntryLabel.empty()) {
-        popupDetails << " while executing " << g_lastEntryLabel;
-    }
-    if (faultAddress != nullptr) {
-        popupDetails << ".\n\nThe game attempted a " << (isWrite ? "write" : "read")
-                     << " at host address 0x" << std::hex
-                     << reinterpret_cast<uintptr_t>(faultAddress) << std::dec;
-    }
-    popupDetails << ".\n\nThe process transcript and crash log contain the full CPU and stack "
-                    "diagnostics.";
-    ShowRuntimeFatalPopup("a native crash occurred", popupDetails.str());
-    DumpHostStackTrace();
-    WriteFatalLogImpl(sig == SIGBUS ? "sigbus" : "sigsegv");
-
-    std::cerr.flush();
-    std::cout.flush();
-    std::fflush(stdout);
-    std::fflush(stderr);
-    std::_Exit(EXIT_FAILURE);
 }
 
 void InstallPosixMemoryFaultHandler() {
@@ -1267,41 +1072,24 @@ void InstallPosixMemoryFaultHandler() {
     action.sa_sigaction = PosixMemoryFaultHandler;
     action.sa_flags = SA_SIGINFO;
     sigemptyset(&action.sa_mask);
-    sigaction(SIGSEGV, &action, nullptr);
-    // A touch beyond a memfd-backed mapping's ftruncate()'d size raises SIGBUS rather than
-    // SIGSEGV on Linux; region sizing should make this unreachable, but routing it to the same
-    // handler costs nothing and avoids a silent gap if it ever isn't.
-    sigaction(SIGBUS, &action, nullptr);
+    if (sigaction(SIGSEGV, &action, nullptr) != 0) {
+        FaultReport::Message message;
+        message.Text("[runtime] FATAL installing SIGSEGV handler; errno=").Decimal(errno).Fatal();
+    }
+    // Linux pager failures use SIGBUS; Darwin protection faults can use it too.
+    // Only faults admitted by platform-specific classification enter memory recovery.
+    if (sigaction(SIGBUS, &action, nullptr) != 0) {
+        FaultReport::Message message;
+        message.Text("[runtime] FATAL installing SIGBUS handler; errno=").Decimal(errno).Fatal();
+    }
 }
 #endif
 
 void AbortSignalHandler(int signum) {
-    // Guard against re-entrancy if multiple aborts are raised in quick succession
-    if (g_abortSignalHandled.test_and_set()) {
-        std::_Exit(EXIT_FAILURE);
-    }
-
-    // abort() bypasses atexit, so the guest-memory fault summary has to be
-    // emitted here too. It is idempotent, so a later AtExitHandler is a no-op.
-    GuestFlat::LogFaultSummary();
-
-    ShowRuntimeFatalPopup("a fatal internal error occurred",
-                          "The process called abort while running the game or Aurora renderer.\n\n"
-                          "This usually means an unimplemented function, failed renderer assertion, "
-                          "or another unrecoverable runtime condition was reached.");
-
-    // Skip detailed dump if already reported by another handler
-    if (g_fatalErrorReported.load(std::memory_order_acquire)) {
-        std::fflush(stderr);
-        std::fflush(stdout);
-        std::_Exit(EXIT_FAILURE);
-    }
-
-    WriteFatalLogImpl("sigabrt");
-
-    std::fflush(stderr);
-    std::fflush(stdout);
-    std::_Exit(EXIT_FAILURE);
+    if (g_abortSignalHandled.test_and_set()) std::_Exit(EXIT_FAILURE);
+    FaultReport::Message message;
+    message.Text("[runtime] FATAL abort signal ").Decimal(signum);
+    message.Fatal();
 }
 
 } // namespace
@@ -1389,13 +1177,16 @@ int RuntimeMain(int argc, char** argv) {
     AttachParentConsoleForDiagnostics();
 #if defined(_WIN32)
     ConfigureWindowsFatalDialogBehavior();
-    InstallSehLogger();
+    SetUnhandledExceptionFilter(UnhandledSehFilter);
     WindowsTimerResolutionGuard timerResolutionGuard;
 #else
     InstallPosixMemoryFaultHandler();
 #endif
     InitializeProcessTranscript(argc, argv);
-    std::signal(SIGABRT, AbortSignalHandler);
+    if (std::signal(SIGABRT, AbortSignalHandler) == SIG_ERR) {
+        FaultReport::Message message;
+        message.Text("[runtime] FATAL installing SIGABRT handler; errno=").Decimal(errno).Fatal();
+    }
     // Install exit/terminate handlers to ensure we get crash info
     std::atexit(AtExitHandler);
     std::set_terminate(TerminateHandler);
@@ -1429,8 +1220,6 @@ int RuntimeMain(int argc, char** argv) {
                                             std::pair{"debug.nsmbw.detdump", "NSMBW_DET_DUMP"},
                                             std::pair{"debug.nsmbw.lobbytest", "NSMBW_LOBBY_TEST"},
                                             std::pair{"debug.nsmbw.tsonly", "NSMBW_NET_TAILSCALE_ONLY"},
-                                            std::pair{"debug.nsmbw.tapscript", "NSMBW_TAP_SCRIPT"},
-                                            std::pair{"debug.nsmbw.warp", "NSMBW_WARP"},
                                             std::pair{"debug.nsmbw.logfps", "NSMBW_LOG_FPS"},
                                             std::pair{"debug.nsmbw.patchreadback", "NSMBW_PATCH_READBACK"}}) {
                 if (const std::string value = property(prop); !value.empty()) {
@@ -1457,10 +1246,7 @@ int RuntimeMain(int argc, char** argv) {
         // switches to the session's copy of the host's save before anything reads it.
         {
             NetplaySession::Config netplay;
-            int saveFile = 0;
-            if (NetplayStart::TakePendingSession(netplay, saveFile)) {
-                netplay.autopilot = false;  // NSMBW's walk through its file select; Brawl's players use the menus
-                netplay.saveFile = saveFile;
+            if (NetplayStart::TakePendingSession(netplay)) {
                 NetplaySession::Start(netplay);
             } else if (NetplaySession::LoadConfigFromEnvironment(netplay)) {
                 NetplaySession::Start(netplay);
@@ -1491,7 +1277,7 @@ int RuntimeMain(int argc, char** argv) {
         // We use auto backend (or specific if needed) and set a default window size.
         // This is required for GX commands (like texture loading) to work.
         AuroraConfig auroraConfig = {};
-        auroraConfig.appName = RuntimeProduct::Active().displayName.data();
+        auroraConfig.appName = "Super Smash Bros. Brawl";
         const auto applicationDataDirectory = RuntimeConfigFile::ApplicationDataDirectory();
         const auto rendererCacheDirectory = applicationDataDirectory / "Cache";
         std::error_code rendererPathError;
@@ -1721,7 +1507,7 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
     return RuntimeMain(argc, argv);
 }
 #elif defined(MKW_ENGINE_MODULE)
-// Windows region module (engine_usa.dll / engine_pal.dll): src/product/engine_loader.cpp loads it and calls this.
+// Windows engine module: src/product/engine_loader.cpp loads it and calls this.
 extern "C" __declspec(dllexport) int SDL_main(int argc, char** argv) {
     return RuntimeMain(argc, argv);
 }
@@ -1730,4 +1516,3 @@ int main(int argc, char** argv) {
     return RuntimeMain(argc, argv);
 }
 #endif
-extern "C" bool g_dynamicAspectRatioEnabled = false;

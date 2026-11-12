@@ -26,6 +26,10 @@ if(APPLE AND CMAKE_OSX_ARCHITECTURES)
     set(CMAKE_SYSTEM_PROCESSOR "${_mkw_osx_arch}")
 endif()
 
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+    set(MKW_TARGET_ARM64 TRUE)
+endif()
+
 if(WIN32 AND MINGW AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64)$")
     set(MKW_PLATFORM_WINDOWS TRUE)
 elseif(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64|arm64|ARM64)$")
@@ -47,9 +51,28 @@ else()
         "Apple Clang on macOS x86_64/arm64, or the NDK for Android arm64-v8a")
 endif()
 
-if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
-    message(FATAL_ERROR "WiiCompiled only supports Release builds")
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
 endif()
+
+# Keep the explicit x86 ISA contract checked by mkw_cpu_baseline. On ARM,
+# the toolchain chooses the target CPU; do not assume it matches the build host.
+set(MKW_HOST_ISA "v3" CACHE STRING "x86_64 floor: v1 (SSE2), v2 (SSE4.2/POPCNT), or v3 (AVX2/FMA, default)")
+set_property(CACHE MKW_HOST_ISA PROPERTY STRINGS v1 v2 v3)
+if(NOT MKW_HOST_ISA MATCHES "^(v1|v2|v3)$")
+    message(FATAL_ERROR "MKW_HOST_ISA must be v1, v2, or v3")
+endif()
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64)$")
+    if(MKW_HOST_ISA STREQUAL "v1")
+        set(MKW_BASELINE_ARCH_FLAG -march=x86-64)
+    else()
+        set(MKW_BASELINE_ARCH_FLAG -march=x86-64-${MKW_HOST_ISA})
+    endif()
+else()
+    set(MKW_BASELINE_ARCH_FLAG "")
+endif()
+
+option(MKW_FLAT_MEMORY "Use fixed-address 4 GiB mapping and OS page protections for guest accesses" ON)
 
 option(MKW_BUILD_PRODUCTS "Build translated WiiCompiled product targets" ON)
 option(MKW_BUILD_PSQ_TESTS "Build focused PSQ ISA tests" OFF)
@@ -60,7 +83,7 @@ option(MKW_BUILD_PSQ_TESTS "Build focused PSQ ISA tests" OFF)
 # so every target created afterwards (mkw_runtime_common, the translated shard
 # libraries and the products in cmake/PublicProducts.cmake) inherits them while
 # aurora-main and its third-party tree stay unaffected.
-set(MKW_PROJECT_COMPILE_DEFINITIONS NOMINMAX)
+set(MKW_PROJECT_COMPILE_DEFINITIONS NOMINMAX MKW_FLAT_MEMORY=$<BOOL:${MKW_FLAT_MEMORY}>)
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -103,9 +126,8 @@ set_target_properties(mkw_fatfs PROPERTIES UNITY_BUILD OFF)
 # asymmetric resume/yield coroutine libraries, which would need every call site restructured).
 # Vendored from upstream (higan-emu/libco @ e18e09d, 2019-10-16, ISC license; valgrind.h is
 # separately BSD-style licensed, see third_party/libco/LICENSE). Windows keeps native Fibers;
-# Apple Silicon uses the project's x18-safe AArch64 assembly backend, while Intel macOS uses
-# libco's existing System V AMD64 backend.
-if(MKW_PLATFORM_LINUX OR MKW_PLATFORM_MACOS_X86_64)
+# AArch64 uses the shared assembly backend, avoiding executable data mappings.
+if((MKW_PLATFORM_LINUX AND NOT MKW_TARGET_ARM64) OR MKW_PLATFORM_MACOS_X86_64)
     add_library(mkw_libco STATIC third_party/libco/libco.c)
     add_library(mkw::libco ALIAS mkw_libco)
     target_include_directories(mkw_libco PUBLIC third_party/libco)
@@ -126,17 +148,17 @@ target_compile_features(mkw_toml11 INTERFACE cxx_std_17)
 # are disabled to keep the library portable and independent of the runtime's
 # x86-64-v3 policy; the static linker retains only the algorithms we reference.
 #
-# Crypto++ is by far the most expensive vendored library to compile (~150
-# translation units), and under the shipped fixed toolchain it is bit-for-bit
-# identical for every user, so the prebuilt package harvests its archive and
-# this block is skipped entirely in that mode (see cmake/NativePrebuilt.cmake).
+# Build the dependency closure of SHA-1, sect233r1 ECDSA and AutoSeededRandomPool.
+# Keep upstream sources intact, but do not compile unrelated ciphers and hashes.
+# This list also feeds native prebuilt exports; SIMD/assembly remain disabled.
 if(NOT MKW_NATIVE_PREBUILT_DIR)
-    file(GLOB MKW_CRYPTOPP_SOURCES CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_LIST_DIR}/third_party/cryptopp/*.cpp")
-    list(FILTER MKW_CRYPTOPP_SOURCES EXCLUDE REGEX
-        "/(adhoc|bench[123]|datatest|dlltest|fipsalgt|fipstest|pch|regtest[1234]|simple|test|validat[0-9]+)\\.cpp$")
-    list(FILTER MKW_CRYPTOPP_SOURCES EXCLUDE REGEX
-        "(_avx|_ppc|_simd|_sse)\\.cpp$")
+    set(MKW_CRYPTOPP_SOURCES
+        algparam.cpp allocate.cpp asn.cpp basecode.cpp cpu.cpp cryptlib.cpp dll.cpp
+        ec2n.cpp ecp.cpp filters.cpp fips140.cpp gf2n.cpp gfpcrypt.cpp hex.cpp
+        hmac.cpp hrtimer.cpp integer.cpp iterhash.cpp misc.cpp modes.cpp mqueue.cpp
+        nbtheory.cpp oaep.cpp osrng.cpp primetab.cpp pubkey.cpp queue.cpp randpool.cpp
+        rdtables.cpp rijndael.cpp rng.cpp sha.cpp)
+    list(TRANSFORM MKW_CRYPTOPP_SOURCES PREPEND "${CMAKE_CURRENT_LIST_DIR}/third_party/cryptopp/")
     add_library(mkw_cryptopp STATIC ${MKW_CRYPTOPP_SOURCES})
     add_library(mkw::cryptopp ALIAS mkw_cryptopp)
     target_include_directories(mkw_cryptopp SYSTEM PUBLIC third_party)
@@ -219,11 +241,9 @@ set_source_files_properties(${MKW_PPC_SEMANTIC_RUNTIME_SOURCES} PROPERTIES
     SKIP_UNITY_BUILD_INCLUSION ON
     SKIP_PRECOMPILE_HEADERS ON
     COMPILE_OPTIONS "${MKW_TRANSLATED_PPC_FP_OPTIONS}")
-# The NSMBW sampling profiler includes <windows.h>; keep it out of the unity batches.
-set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/src/guest_profiler.cpp" PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 # Match the optimization policy of the translated callers as well as their FP policy.
 set_property(SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/ppc_quantized.cpp" APPEND PROPERTY
-    COMPILE_OPTIONS -O2 -fno-slp-vectorize)
+    COMPILE_OPTIONS "$<$<CONFIG:Release>:-O2>" -fno-slp-vectorize)
 
 # ----------------------------------------------------------------------
 # Third-party: aurora-main (provides SDL3 + GPU backends)
@@ -294,7 +314,7 @@ else()
     foreach(t ${AURORA_TARGETS})
         if(TARGET ${t})
             set_target_properties(${t} PROPERTIES UNITY_BUILD OFF)
-            target_compile_options(${t} PRIVATE -O3 -ffast-math -w -pipe)
+            target_compile_options(${t} PRIVATE -pipe)
             if(MKW_PLATFORM_WINDOWS)
                 target_include_directories(${t} PRIVATE ${MKW_DX_STUB_DIR})
             endif()
@@ -304,20 +324,6 @@ else()
             target_compile_definitions(${t} PRIVATE NOMINMAX)
         endif()
     endforeach()
-
-    # Frame interpolation filters guest NaN/Inf matrices out of a std::sort
-    # comparator, which makes its std::isfinite guards load-bearing for memory
-    # safety, not just match quality. -ffinite-math-only (part of -ffast-math
-    # above) folds those guards to constants and poisons NaN float arguments
-    # via nofpclass, so this one file opts back out of the finite-math
-    # assumption; the file #errors if built without this. Source-scoped
-    # COMPILE_OPTIONS append after the target options, so this overrides the
-    # target's -ffast-math for exactly this TU.
-    if(TARGET aurora_gx)
-        set_source_files_properties("${MKW_AURORA_DIR}/lib/gx/frame_interpolation.cpp"
-            TARGET_DIRECTORY aurora_gx
-            PROPERTIES COMPILE_OPTIONS "-fno-finite-math-only")
-    endif()
 
     if(MKW_NATIVE_PREBUILT_EXPORT_DIR)
         include("${CMAKE_CURRENT_LIST_DIR}/cmake/NativePrebuiltExport.cmake")
@@ -342,35 +348,22 @@ endif()
 # a registration file is silently never compiled and never errors. The stale-glob
 # failure mode is worth far more than the milliseconds.
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
-if(MKW_PLATFORM_MACOS)
+if(NOT MKW_FLAT_MEMORY)
     list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_LIST_DIR}/src/guest_flat_memory.cpp")
-    if(MKW_PLATFORM_MACOS_ARM64)
-        # HostContext's Apple Silicon backend is implemented in a small assembly
-        # companion. It must be part of the product runtime as well as the
-        # standalone context test; otherwise the final executable is missing
-        # mkw_co_init/mkw_co_switch at link time.
-        enable_language(ASM)
-        list(APPEND SOURCES "${CMAKE_CURRENT_LIST_DIR}/src/platform/macos/co_switch.S")
-    endif()
-else()
-    list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_LIST_DIR}/src/guest_flat_memory_macos.cpp")
-    if(MKW_PLATFORM_ANDROID)
-        # Android shares HostContext's AArch64 assembly backend with Apple Silicon, in its ELF
-        # spelling (and without touching x18, the thread's shadow-call-stack register).
-        enable_language(ASM)
-        list(APPEND SOURCES "${CMAKE_CURRENT_LIST_DIR}/src/platform/android/co_switch.S")
-    endif()
+endif()
+if(MKW_TARGET_ARM64)
+    enable_language(ASM)
+    set(MKW_CONTEXT_ASM "${CMAKE_CURRENT_LIST_DIR}/src/platform/aarch64/co_switch.S")
+    list(APPEND SOURCES "${MKW_CONTEXT_ASM}")
 endif()
 set(MKW_PLATFORM_SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/platform/host_platform.cpp")
-set(MKW_BASE_PRODUCT_SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/product/base_product.cpp")
-set(MKW_RETRO_REWIND_PRODUCT_SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/product/retro_rewind_product.cpp")
 # The region-module loader is its own executable (cmake/PublicProducts.cmake, MKW_ENGINE_MODULE), not runtime code.
 list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_LIST_DIR}/src/product/engine_loader.cpp")
 # The host ISA guard is the one translation unit that must not receive the
 # x86-64-v3 flags, so it gets its own object library instead of riding along in
 # mkw_runtime_common. See cmake/PublicProducts.cmake and the file's own header.
 set(MKW_CPU_BASELINE_SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/host_cpu_baseline.cpp")
-list(REMOVE_ITEM SOURCES ${MKW_BASE_PRODUCT_SOURCE} ${MKW_RETRO_REWIND_PRODUCT_SOURCE}
+list(REMOVE_ITEM SOURCES
      ${MKW_CPU_BASELINE_SOURCE} ${MKW_PLATFORM_SOURCE})
 
 # This deliberately small library contains host services that are safe to
@@ -393,16 +386,22 @@ if(MKW_BUILD_PSQ_TESTS)
         "${CMAKE_CURRENT_LIST_DIR}/include")
     target_compile_features(mkw_psq_helpers_tests PRIVATE cxx_std_17)
     target_compile_options(mkw_psq_helpers_tests PRIVATE
-        -O2 ${MKW_TRANSLATED_PPC_FP_OPTIONS} -fno-slp-vectorize)
+        "$<$<CONFIG:Release>:-O2>" ${MKW_TRANSLATED_PPC_FP_OPTIONS} -fno-slp-vectorize)
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64)$")
-        target_compile_options(mkw_psq_helpers_tests PRIVATE -march=x86-64-v3)
+        target_compile_options(mkw_psq_helpers_tests PRIVATE ${MKW_BASELINE_ARCH_FLAG})
     endif()
     set_target_properties(mkw_psq_helpers_tests PROPERTIES UNITY_BUILD OFF)
     add_test(NAME mkw_psq_helpers_tests COMMAND mkw_psq_helpers_tests)
     add_test(NAME mkw_psq_reserved_tests COMMAND "${CMAKE_COMMAND}"
         "-DPSQ_TEST_EXECUTABLE=$<TARGET_FILE:mkw_psq_helpers_tests>"
+        "-DPSQ_TEST_EMULATOR=$<TARGET_PROPERTY:mkw_psq_helpers_tests,CROSSCOMPILING_EMULATOR>"
         -P "${CMAKE_CURRENT_LIST_DIR}/tests/psq_reserved_tests.cmake")
 endif()
+
+add_executable(mkw_cr_logical_tests EXCLUDE_FROM_ALL "${CMAKE_CURRENT_LIST_DIR}/tests/cr_logical_tests.cpp")
+target_include_directories(mkw_cr_logical_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+target_compile_features(mkw_cr_logical_tests PRIVATE cxx_std_17)
+add_test(NAME mkw_cr_logical_tests COMMAND mkw_cr_logical_tests)
 
 add_executable(mkw_platform_paths_tests "${CMAKE_CURRENT_LIST_DIR}/tests/platform_paths_tests.cpp")
 target_link_libraries(mkw_platform_paths_tests PRIVATE mkw_platform)
@@ -442,57 +441,88 @@ target_include_directories(mkw_input_expr_tests PRIVATE "${CMAKE_CURRENT_LIST_DI
 target_compile_features(mkw_input_expr_tests PRIVATE cxx_std_17)
 add_test(NAME mkw_input_expr_tests COMMAND mkw_input_expr_tests)
 
-# HostContext deliberately keeps the platform-specific context primitive out
-# of fiber_manager.cpp. Exercise the Linux libco handoff directly so future
-# refactors cannot silently remove its headers, implementation, or link edge.
-if(MKW_PLATFORM_LINUX)
-    add_executable(mkw_linux_host_context_tests
-        "${CMAKE_CURRENT_LIST_DIR}/tests/host_context_tests.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/src/host_context.cpp")
-    target_include_directories(mkw_linux_host_context_tests PRIVATE
-        "${CMAKE_CURRENT_LIST_DIR}/include"
-        "${CMAKE_CURRENT_LIST_DIR}/third_party/libco")
-    target_compile_features(mkw_linux_host_context_tests PRIVATE cxx_std_17)
-    target_link_libraries(mkw_linux_host_context_tests PRIVATE mkw::libco)
-    add_test(NAME mkw_linux_host_context_tests COMMAND mkw_linux_host_context_tests)
+# Test the same context backend linked into the runtime on each target.
+add_executable(mkw_host_context_tests
+    "${CMAKE_CURRENT_LIST_DIR}/tests/host_context_tests.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/src/host_context.cpp"
+    ${MKW_CONTEXT_ASM})
+target_include_directories(mkw_host_context_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+target_compile_features(mkw_host_context_tests PRIVATE cxx_std_17)
+if(TARGET mkw::libco)
+    target_link_libraries(mkw_host_context_tests PRIVATE mkw::libco)
+endif()
+add_test(NAME mkw_host_context_tests COMMAND mkw_host_context_tests)
+
+# Exercise RAM, CPU and host-stack restoration without a disc or renderer.
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/save-state-test-config/generated/RuntimeConfig.h"
+    CONTENT "#pragma once\n#include <cstdint>\nnamespace RuntimeConfig { inline constexpr uint32_t SDA1_BASE = 0; }\n")
+add_executable(mkw_save_states_tests
+    "${CMAKE_CURRENT_LIST_DIR}/tests/save_states_tests.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/src/save_states.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/src/host_context.cpp"
+    ${MKW_CONTEXT_ASM})
+target_include_directories(mkw_save_states_tests PRIVATE
+    "${CMAKE_CURRENT_BINARY_DIR}/save-state-test-config"
+    "${CMAKE_CURRENT_LIST_DIR}/include" "${CMAKE_CURRENT_LIST_DIR}/src")
+target_compile_features(mkw_save_states_tests PRIVATE cxx_std_20)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64)$")
+    target_compile_options(mkw_save_states_tests PRIVATE ${MKW_BASELINE_ARCH_FLAG})
+endif()
+if(TARGET mkw::libco)
+    target_link_libraries(mkw_save_states_tests PRIVATE mkw::libco)
+endif()
+if(TARGET libzstd_static)
+    target_link_libraries(mkw_save_states_tests PRIVATE libzstd_static)
+    target_compile_definitions(mkw_save_states_tests PRIVATE SAVE_STATES_ZSTD)
+endif()
+add_test(NAME mkw_save_states_tests COMMAND mkw_save_states_tests)
+set_tests_properties(mkw_save_states_tests PROPERTIES TIMEOUT 30)
+
+if(MKW_TARGET_ARM64)
+    add_executable(mkw_aarch64_context_abi_tests
+        "${CMAKE_CURRENT_LIST_DIR}/tests/aarch64_context_abi_tests.cpp"
+        ${MKW_CONTEXT_ASM})
+    target_compile_features(mkw_aarch64_context_abi_tests PRIVATE cxx_std_17)
+    add_test(NAME mkw_aarch64_context_abi_tests COMMAND mkw_aarch64_context_abi_tests)
+endif()
+
+if(UNIX)
+    foreach(target IN ITEMS mkw_memory_fault_report_tests mkw_mod_fault_report_tests)
+        add_executable(${target} "${CMAKE_CURRENT_LIST_DIR}/tests/fault_report_tests.cpp")
+        target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+        target_compile_features(${target} PRIVATE cxx_std_20)
+        target_compile_definitions(${target} PRIVATE MKW_FLAT_MEMORY=1)
+        target_link_libraries(${target} PRIVATE Threads::Threads)
+        add_test(NAME ${target} COMMAND ${target})
+        set_tests_properties(${target} PROPERTIES TIMEOUT 15)
+    endforeach()
+    target_compile_definitions(mkw_mod_fault_report_tests PRIVATE TEST_MOD_FAULT_REPORT=1)
+    target_link_libraries(mkw_mod_fault_report_tests PRIVATE mkw::toml11)
+
+    add_executable(mkw_host_fault_context_tests "${CMAKE_CURRENT_LIST_DIR}/tests/host_fault_context_tests.cpp")
+    target_include_directories(mkw_host_fault_context_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+    target_compile_features(mkw_host_fault_context_tests PRIVATE cxx_std_20)
+    add_test(NAME mkw_host_fault_context_tests COMMAND mkw_host_fault_context_tests)
+    set_tests_properties(mkw_host_fault_context_tests PROPERTIES TIMEOUT 30)
+
+    add_executable(mkw_executable_range_tests "${CMAKE_CURRENT_LIST_DIR}/tests/executable_range_tests.cpp")
+    target_include_directories(mkw_executable_range_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+    target_compile_features(mkw_executable_range_tests PRIVATE cxx_std_20)
+    target_link_libraries(mkw_executable_range_tests PRIVATE Threads::Threads mkw::toml11)
+    add_test(NAME mkw_executable_range_tests COMMAND mkw_executable_range_tests)
+    set_tests_properties(mkw_executable_range_tests PROPERTIES TIMEOUT 30)
+
+    add_executable(mkw_guest_flat_memory_tests
+        "${CMAKE_CURRENT_LIST_DIR}/tests/guest_flat_memory_tests.cpp")
+    target_include_directories(mkw_guest_flat_memory_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+    target_compile_features(mkw_guest_flat_memory_tests PRIVATE cxx_std_20)
+    target_compile_definitions(mkw_guest_flat_memory_tests PRIVATE MKW_FLAT_MEMORY=1)
+    target_link_libraries(mkw_guest_flat_memory_tests PRIVATE Threads::Threads)
+    add_test(NAME mkw_guest_flat_memory_tests COMMAND mkw_guest_flat_memory_tests)
+    set_tests_properties(mkw_guest_flat_memory_tests PROPERTIES TIMEOUT 30)
 endif()
 
 if(MKW_PLATFORM_MACOS)
-    # Exercise the public host-memory contracts separately from translated products.
-    if(MKW_PLATFORM_MACOS_ARM64)
-        # Apple Silicon's context ABI is implemented by the local assembly backend.
-        enable_language(ASM)
-        add_executable(mkw_macos_context_abi_tests
-            "${CMAKE_CURRENT_LIST_DIR}/tests/macos_context_abi_tests.cpp"
-            "${CMAKE_CURRENT_LIST_DIR}/src/platform/macos/co_switch.S")
-        target_compile_features(mkw_macos_context_abi_tests PRIVATE cxx_std_17)
-        add_test(NAME mkw_macos_context_abi_tests COMMAND mkw_macos_context_abi_tests)
-
-        add_executable(mkw_macos_host_context_tests
-            "${CMAKE_CURRENT_LIST_DIR}/tests/host_context_tests.cpp"
-            "${CMAKE_CURRENT_LIST_DIR}/src/host_context.cpp"
-            "${CMAKE_CURRENT_LIST_DIR}/src/platform/macos/co_switch.S")
-        target_include_directories(mkw_macos_host_context_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
-    else()
-        # Intel macOS follows the same System V AMD64 libco path as Linux.
-        add_executable(mkw_macos_host_context_tests
-            "${CMAKE_CURRENT_LIST_DIR}/tests/host_context_tests.cpp"
-            "${CMAKE_CURRENT_LIST_DIR}/src/host_context.cpp")
-        target_include_directories(mkw_macos_host_context_tests PRIVATE
-            "${CMAKE_CURRENT_LIST_DIR}/include"
-            "${CMAKE_CURRENT_LIST_DIR}/third_party/libco")
-        target_link_libraries(mkw_macos_host_context_tests PRIVATE mkw::libco)
-    endif()
-    target_compile_features(mkw_macos_host_context_tests PRIVATE cxx_std_17)
-    add_test(NAME mkw_macos_host_context_tests COMMAND mkw_macos_host_context_tests)
-
-    add_executable(mkw_macos_guest_flat_memory_tests
-        "${CMAKE_CURRENT_LIST_DIR}/tests/macos_guest_flat_memory_tests.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/src/guest_flat_memory_macos.cpp")
-    target_include_directories(mkw_macos_guest_flat_memory_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
-    target_compile_features(mkw_macos_guest_flat_memory_tests PRIVATE cxx_std_17)
-    add_test(NAME mkw_macos_guest_flat_memory_tests COMMAND mkw_macos_guest_flat_memory_tests)
-
     add_executable(mkw_macos_external_audio_tests
         "${CMAKE_CURRENT_LIST_DIR}/tests/macos_external_audio_tests.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/src/external_audio_macos.cpp")
@@ -503,7 +533,7 @@ endif()
 
 # The translator emits the complete, content-addressed source graph. Consuming
 # this one manifest keeps configure independent of the 28k generated function
-# files and of optional Retro Rewind artifacts such as code.map.
+# files and of per-function source files.
 if(MKW_BUILD_PRODUCTS)
     set(MKW_TRANSLATED_SHARD_MANIFEST
         "${CMAKE_CURRENT_LIST_DIR}/../generated/build_shards/shards.cmake"
@@ -520,11 +550,8 @@ if(MKW_BUILD_PRODUCTS)
             "Run Translator.Cli emit-build-shards first; see translator/README.md.")
     endif()
     include("${MKW_TRANSLATED_SHARD_MANIFEST}")
-    set(MKW_HAVE_RETRO_REWIND ${MKW_HAVE_RETRO_REWIND_SHARDS})
     message(STATUS
-        "Translator graph: ${MKW_SHARED_BASE_FUNCTION_COUNT}/${MKW_BASE_FUNCTION_COUNT} base functions shared; "
-        "${MKW_PROFILE_SENSITIVE_CALLER_COUNT} profile-sensitive callers; "
-        "${MKW_RETRO_REWIND_FUNCTION_COUNT} Retro Rewind functions")
+        "Translator graph: ${MKW_SHARED_BASE_FUNCTION_COUNT}/${MKW_BASE_FUNCTION_COUNT} translated functions")
 
     set(MKW_RUNTIME_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}")
     include("${CMAKE_CURRENT_LIST_DIR}/cmake/PublicProducts.cmake")
@@ -550,10 +577,8 @@ else()
             mkw::pugixml mkw::toml11 mkw::cryptopp mkw::mbedtls)
         if(MKW_PLATFORM_MACOS_X86_64)
             target_link_libraries(mkw_macos_native_compile PRIVATE mkw::libco)
-            # Keep this compile-only audit on the same Haswell-era x86-64-v3
-            # baseline as the translated product. PPC paired FMA helpers use
-            # FMA intrinsics and intentionally cannot compile for plain x86-64.
-            target_compile_options(mkw_macos_native_compile PRIVATE -march=x86-64-v3)
+            # Exercise the same ISA and FMA implementation as the product.
+            target_compile_options(mkw_macos_native_compile PRIVATE ${MKW_BASELINE_ARCH_FLAG})
         endif()
         set_target_properties(mkw_macos_native_compile PROPERTIES UNITY_BUILD OFF)
     endif()

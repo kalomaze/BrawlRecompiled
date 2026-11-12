@@ -50,15 +50,14 @@ constexpr uint32_t kAxRequestCallback = 0x80200D8Cu; // __AXDSPRequestCallback (
 extern uint32_t g_axTaskPtr;
 
 // The mix worker must resolve guest addresses only via the MEM1/MEM2 region bases below, never
-// via MemoryInline::GetPointerFast or the flat guest view: GX deferred (EFB) reads rewrite the
-// page table and flip protections from the guest thread behind its back, but the MEM1/MEM2 host
-// alias is never reprotected.
+// via MemoryInline::GetPointerFast or the flat guest view: the guest view can have executable-write protections,
+// but the MEM1/MEM2 host alias is never reprotected.
 extern std::atomic<uint8_t*> g_mixMem1;
 extern std::atomic<uint8_t*> g_mixMem2;
 
 // True only on the mix worker thread. Guest-thread callers keep the exact
-// fallback behaviour they had before (Memory::Read*/Write*, which materializes
-// deferred reads and reports access violations); the worker instead fails safe.
+// fallback behaviour they had before (Memory::Read*/Write*, which reports
+// access violations); the worker instead fails safe.
 extern thread_local bool t_onMixWorker;
 
 void ReportMixAddressOutOfRange(uint32_t addr, size_t bytes);

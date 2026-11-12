@@ -178,9 +178,9 @@ public static class GuestMemoryRangeLowering
                     (long)candidate.Access.Address.Offset + candidate.Access.SizeBytes);
                 var range = $"guest_range_{nextRange++}";
                 var plan = new Plan(range, (int)min, (int)(max - min),
-                    NeedsRead: !group.Key.IsStore, NeedsWrite: group.Key.IsStore);
+                    NeedsWrite: group.Key.IsStore);
                 var resolve = new IrResolveGuestMemoryRange(range, IrValue.Register(group.Key.Base),
-                    plan.MinOffset, plan.Length, plan.NeedsRead, plan.NeedsWrite);
+                    plan.MinOffset, plan.Length, plan.NeedsWrite);
                 if (!resolves.TryGetValue(bestAnchor.BlockIndex, out var placed))
                     resolves[bestAnchor.BlockIndex] = placed = new List<PlacedResolve>();
                 // Placement is immediately before an access that executes on
@@ -523,7 +523,7 @@ public static class GuestMemoryRangeLowering
 
             var range = $"guest_range_{nextRange++}";
             var plan = new Plan(range, (int)min, (int)length,
-                grouped.Any(static access => !access.IsStore), grouped.Any(static access => access.IsStore));
+                grouped.Any(static access => access.IsStore));
             foreach (var access in grouped) plans[access.Index] = plan;
         }
 
@@ -545,7 +545,7 @@ public static class GuestMemoryRangeLowering
                 output.Add(new IrResolveGuestMemoryRange(
                     plan.Range, IrValue.Register(access.OriginalBase ?? access.Address.Base),
                     checked(plan.MinOffset - access.BaseDelta),
-                    plan.Length, plan.NeedsRead, plan.NeedsWrite));
+                    plan.Length, plan.NeedsWrite));
             }
 
             output.Add(ToResolved(segment[index], access, plan));
@@ -776,7 +776,7 @@ public static class GuestMemoryRangeLowering
         return true;
     }
 
-    private sealed record Plan(string Range, int MinOffset, int Length, bool NeedsRead, bool NeedsWrite);
+    private sealed record Plan(string Range, int MinOffset, int Length, bool NeedsWrite);
     private sealed record FunctionAccess(int BlockIndex, Access Access)
     {
         public string AccessBlockLabel(IrFunction function) => function.Blocks[BlockIndex].Label;

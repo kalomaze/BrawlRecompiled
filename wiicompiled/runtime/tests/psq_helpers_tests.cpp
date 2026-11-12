@@ -128,6 +128,10 @@ int main(int argc, char** argv) {
             CpuContextScope scope(&ctx);
 #if defined(__x86_64__)
             MkwSetHostFpControl((MkwGetHostFpControl() & ~(3u << 13)) | (rounding << 13));
+#elif defined(__aarch64__)
+            // FPCR encodes upward/downward in the opposite order to MXCSR.
+            constexpr uint32_t armRounding[] = {0, 2, 1, 3};
+            MkwSetHostFpControl((MkwGetHostFpControl() & ~(3u << 22)) | (armRounding[rounding] << 22));
 #endif
             Check<0, 0>(); Check<1, 0>(); Check<0, 7>(); Check<1, 7>();
         }
