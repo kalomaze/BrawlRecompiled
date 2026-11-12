@@ -156,10 +156,11 @@ executable wrapper that receives the test binary as its argument, for CPU emulat
 
 ### Release packaging
 
-Packaging has not moved to `build.cmake` yet; it still builds through `tools\build-brawl.ps1`.
-The release (`Brawl Recompiled.exe` plus a hidden `engine\` folder) is made by `tools\build-launcher.ps1` (the
-launcher, Windows and Linux, with a portable .NET SDK) and `tools\package-brawl.ps1 -Zip`; `tools\build-linux.sh`
-and `tools\package-linux.sh` make the Linux download in WSL from the same translation.
+`tools\build-brawl.ps1 <disc image>` runs the same `build.cmake` with the release's pinned llvm-mingw, the engine
+as a DLL behind a small loader, and the media-session headers, and copies the result to `Play\` (`-OldCpu` adds the
+x86-64-v2 engine). The release (`Brawl Recompiled.exe` plus a hidden `engine\` folder) is made by
+`tools\build-launcher.ps1` (the launcher, Windows and Linux, with a portable .NET SDK) and
+`tools\package-brawl.ps1 -Zip`; `tools/package-linux.sh` makes the Linux download from a Linux `build.cmake` build.
 
 | Folder | What it is |
 |---|---|

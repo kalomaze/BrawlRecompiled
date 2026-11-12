@@ -24,6 +24,9 @@ endif()
 if(DEFINED JOBS)
     list(APPEND args --jobs "${JOBS}")
 endif()
+foreach(arg IN LISTS NATIVE_ARGS)  # extra native configure arguments, e.g. -DNATIVE_ARGS="-DA=1;-DB=2"
+    list(APPEND args "--native-arg=${arg}")
+endforeach()
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tools/build.py" ${args}
     RESULT_VARIABLE result)
 if(NOT result EQUAL 0)

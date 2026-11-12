@@ -71,6 +71,8 @@ def main():
                         choices=('Debug', 'Release', 'RelWithDebInfo', 'MinSizeRel'))
     parser.add_argument('--host-isa', choices=('v1', 'v2', 'v3'))
     parser.add_argument('--flat-memory', choices=('ON', 'OFF'))
+    parser.add_argument('--native-arg', action='append', default=[],
+                        help='extra argument for the native CMake configure; repeatable')
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error('--jobs must be positive')
@@ -205,7 +207,7 @@ def build_game(args, disc, build):
         native_options.append(f'-DMKW_FLAT_MEMORY={args.flat_memory}')
     run(args.cmake, '-S', wc / 'runtime', '-B', build / 'native', '-G', 'Ninja',
         f'-DCMAKE_BUILD_TYPE={args.build_type}', f'-DCMAKE_C_COMPILER={shutil.which("clang")}',
-        f'-DCMAKE_CXX_COMPILER={shutil.which("clang++")}', f'-DMKW_TRANSLATED_COMPILE_JOBS={args.jobs}', *native_options)
+        f'-DCMAKE_CXX_COMPILER={shutil.which("clang++")}', f'-DMKW_TRANSLATED_COMPILE_JOBS={args.jobs}', *native_options, *args.native_arg)
     run(args.cmake, '--build', build / 'native', '--target', 'WiiCompiled', '--parallel', args.jobs)
     print(f'Built: {build / "native/WiiCompiled"}\nExtracted game data: {data}', flush=True)
 
