@@ -63,15 +63,12 @@ def translation_fingerprint(sources):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--game', type=Path, required=True, help='extracted disc: built from, and played')
+    parser.add_argument('--game', type=Path, default=ROOT / 'Disc/DATA',  # where the launchers extract too
+                        help='extracted disc: built from, and played')
     parser.add_argument('--extract', type=Path, help='disc image to extract to --game, instead of building')
-    parser.add_argument('--build-dir', type=Path, required=True)
+    parser.add_argument('--build-dir', type=Path, default=ROOT / 'build')
     parser.add_argument('--cmake', required=True)
     parser.add_argument('--jobs', type=int, default=4)
-    parser.add_argument('--build-type', default='Release',
-                        choices=('Debug', 'Release', 'RelWithDebInfo', 'MinSizeRel'))
-    parser.add_argument('--host-isa', choices=('v1', 'v2', 'v3'))
-    parser.add_argument('--flat-memory', choices=('ON', 'OFF'))
     parser.add_argument('--native-arg', action='append', default=[],
                         help='extra argument for the native CMake configure; repeatable')
     args = parser.parse_args()
@@ -196,9 +193,6 @@ def build_game(args, game, build):
             '--base-metadata', 'generated/base_translation_output.json', '--base-functions-dir', 'generated/functions',
             '--native-source-dir', 'runtime/src', '--out', 'generated/build_shards', '--base-shards', '600', cwd=wc)
         translated_stamp.write_text(translation_key)
-    native_options = [f'-DMKW_HOST_ISA={args.host_isa}'] if args.host_isa else []
-    if args.flat_memory is not None:
-        native_options.append(f'-DMKW_FLAT_MEMORY={args.flat_memory}')
     compilers = f'{shutil.which("clang")}\n{shutil.which("clang++")}'
     compilers_stamp = build / 'native-compilers.txt'
     if compilers_stamp.exists() and compilers_stamp.read_text() != compilers:
@@ -206,8 +200,8 @@ def build_game(args, game, build):
         (build / 'native/CMakeCache.txt').unlink(missing_ok=True)
     compilers_stamp.write_text(compilers)
     run(args.cmake, '-S', wc / 'runtime', '-B', build / 'native', '-G', 'Ninja',
-        f'-DCMAKE_BUILD_TYPE={args.build_type}', f'-DCMAKE_C_COMPILER={shutil.which("clang")}',
-        f'-DCMAKE_CXX_COMPILER={shutil.which("clang++")}', f'-DMKW_TRANSLATED_COMPILE_JOBS={args.jobs}', *native_options, *args.native_arg)
+        '-DCMAKE_BUILD_TYPE=Release', f'-DCMAKE_C_COMPILER={shutil.which("clang")}',
+        f'-DCMAKE_CXX_COMPILER={shutil.which("clang++")}', f'-DMKW_TRANSLATED_COMPILE_JOBS={args.jobs}', *args.native_arg)
     run(args.cmake, '--build', build / 'native', '--target', 'WiiCompiled', '--parallel', args.jobs)
     # Portable like Play\: settings, saves and logs go to native/UserData, whose config points the game at the disc.
     (build / 'native/portable.txt').write_text('Settings, saves and logs stay in the UserData folder next to this file.\n')
