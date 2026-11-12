@@ -94,6 +94,7 @@ static std::atomic_bool g_initialized{false};
 //   notex      every texture samples as grey (is it geometry or texturing?)
 //   uvvis      texture samples show their coordinates instead
 //   dumpwgsl   write every generated shader to <cache>/wgsl
+//   immediate require immediate presentation (diagnose swapchain contention)
 //   +name      enable the Dawn toggle `name`; -name disables it
 static std::vector<std::string> g_gfxFlags;
 static std::atomic_bool g_logValidationErrors{false};
@@ -231,6 +232,11 @@ wgpu::PresentMode best_present_mode() {
     }
     return false;
   };
+  if (gfx_flag("immediate")) {
+    ASSERT(!g_vsyncEnabled.load(std::memory_order_acquire), "Immediate presentation requires V-Sync off");
+    ASSERT(supports(wgpu::PresentMode::Immediate), "Surface does not support requested Immediate presentation");
+    return wgpu::PresentMode::Immediate;
+  }
   if (g_vsyncEnabled.load(std::memory_order_acquire) && supports(wgpu::PresentMode::Fifo)) {
     return wgpu::PresentMode::Fifo;
   }

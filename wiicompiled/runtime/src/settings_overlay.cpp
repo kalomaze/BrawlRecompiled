@@ -207,8 +207,8 @@ constexpr uint32_t kBootShaderNoticeThreshold = 100;
 constexpr auto kBootShaderWaitLimit = std::chrono::minutes(3);
 
 // Render heights: 1x is 480 lines in every aspect (DisplaySettings), the width follows the aspect.
-constexpr std::array<ResolutionItem, 12> kResolutions = {{
-    {"Auto (screen size)", 0.0f}, {"0.5x (240p)", 0.5f}, {"0.75x (360p)", 0.75f}, {"1x (480p)", 1.0f},
+constexpr std::array<ResolutionItem, 13> kResolutions = {{
+    {"Auto (screen size)", 0.0f}, {"0.25x (120p)", 0.25f}, {"0.5x (240p)", 0.5f}, {"0.75x (360p)", 0.75f}, {"1x (480p)", 1.0f},
     {"1.5x (720p)", 1.5f}, {"2x (960p)", 2.0f}, {"2.25x (1080p)", 2.25f}, {"3x (1440p)", 3.0f},
     {"4x (1920p)", 4.0f}, {"4.5x (4K)", 4.5f}, {"6x (2880p)", 6.0f}, {"8x (3840p)", 8.0f},
 }};

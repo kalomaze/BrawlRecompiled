@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 // guest_code_patch.cpp - routes translated functions whose guest code a mod changed at run time to the interpreter.
 // See include/guest_code_patch.h.
 
@@ -124,6 +125,20 @@ void MarkInliningCallers(uint32_t leaf) {
         g_mkwGuestCodePatched[caller] = 1;
         RT_LOGF(RT_TAG_MOD, "[mods] function 0x%08X inlined 0x%08X: it now runs in the interpreter too\n",
                 g_mkwGuardedFunctionStarts[caller], g_mkwGuardedFunctionStarts[leaf]);
+    }
+}
+
+// A relinked range drops its interpreter marks, including those it carried only because it inlined a
+// leaf patched elsewhere. That leaf is still patched, so its inlining callers in the range go back.
+void RemarkInliningCallersIn(uint32_t start, uint32_t end) {
+    const auto* pairs = reinterpret_cast<const std::array<uint32_t, 2>*>(g_mkwInlinedLeaves);
+    for (uint32_t i = 0; i < g_mkwInlinedLeafCount; ++i) {
+        const uint32_t leaf = pairs[i][0], caller = pairs[i][1];
+        const uint32_t function = g_mkwGuardedFunctionStarts[caller];
+        if (function < start || function >= end || !g_mkwGuestCodePatched[leaf] || g_mkwGuestCodePatched[caller]) continue;
+        g_mkwGuestCodePatched[caller] = 1;
+        RT_LOGF(RT_TAG_MOD, "[mods] function 0x%08X inlined patched 0x%08X: it runs in the interpreter again after a relink\n",
+                function, g_mkwGuardedFunctionStarts[leaf]);
     }
 }
 
@@ -283,6 +298,7 @@ void ResetPristine(uint32_t start, uint32_t end) {
             const uint32_t function = g_mkwGuardedFunctionStarts[index];
             if (function >= start && function < end) g_mkwGuestCodePatched[index] = 1;
         }
+        RemarkInliningCallersIn(start, end);
         for (uint32_t page = start & ~(kPage - 1); page < end; page += kPage) {
             g_dirty.erase(page);
             const uint32_t index = page / kPage;
@@ -312,6 +328,7 @@ void Reapply(uint32_t start, uint32_t end) {
         }    }
     if (writes.empty()) return;
     for (const auto& [address, value] : writes) {  // through the write trap, as the code handler's own stores go
+        BrawlDirtyMemory::Mark(address, 4);
         std::memcpy(Memory::GetPointer(address, 4), &value, 4);
         NoteWrite(address);
     }
@@ -364,6 +381,7 @@ void ClearRedirect(uint32_t homeStart) {
             const uint32_t function = g_mkwGuardedFunctionStarts[index];
             if (function >= homeStart && function < end) g_mkwGuestCodePatched[index] = 1;
         }
+        RemarkInliningCallersIn(homeStart, end);
     }
 }
 

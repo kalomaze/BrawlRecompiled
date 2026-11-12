@@ -176,25 +176,9 @@ public sealed partial class CxxLinearCodeGenerator
             }
         }
 
-        {
-            foreach (var block in function.Blocks)
-            {
-                for (var index = 0; index + 1 < block.Instructions.Count; ++index)
-                {
-                    if (block.Instructions[index] is not IrAssign { Value.Kind: "const" } assign ||
-                        !GetRegisterBaseName(assign.Destination).Equals("lr", StringComparison.OrdinalIgnoreCase) ||
-                        block.Instructions[index + 1] is not IrCall call ||
-                        !CalleeIgnoresLinkRegister(
-                            call, guestAbiContracts, modOverridableCallTargets,
-                            nonReturningCallTargets, lrContinuationCallTargets))
-                    {
-                        continue;
-                    }
-
-                    suppressed.Add((block.Label, index));
-                }
-            }
-        }
+        // Keep architectural LR writes at direct calls. Runtime Gecko patches can read
+        // the caller's return address even when the original callee's ABI contract
+        // does not. Project+'s wind collision hook uses LR to distinguish callers.
 
         if (suppressed.Count == 0 && fused.Count == 0)
         {
@@ -237,36 +221,6 @@ public sealed partial class CxxLinearCodeGenerator
     private static bool IsXerDestination(string? destination) =>
         !string.IsNullOrWhiteSpace(destination) &&
         GetRegisterBaseName(destination!).Equals("xer", StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// A call whose return address never becomes observable state: translated functions return via the C++
-    /// stack, not by branching to ctx-&gt;lr, so the LR store is skipped unless the callee reads LR, the call site
-    /// dispatches on ctx-&gt;lr, or the callee escapes the contract model entirely.
-    /// </summary>
-    private static bool CalleeIgnoresLinkRegister(
-        IrCall call,
-        IReadOnlyDictionary<uint, GuestAbiContract> guestAbiContracts,
-        IReadOnlySet<uint> modOverridableCallTargets,
-        IReadOnlySet<uint> nonReturningCallTargets,
-        IReadOnlySet<uint> lrContinuationCallTargets)
-    {
-        if (!TryParseAddress(call.Target, out var target) ||
-            modOverridableCallTargets.Contains(target) ||
-            nonReturningCallTargets.Contains(target) ||
-            lrContinuationCallTargets.Contains(target) ||
-            !guestAbiContracts.TryGetValue(target, out var contract))
-        {
-            return false;
-        }
-
-        const GuestCallBoundaryFlags escaping =
-            GuestCallBoundaryFlags.RequiresCompleteContext |
-            GuestCallBoundaryFlags.CanSuspend |
-            GuestCallBoundaryFlags.CanSwitchThreads |
-            GuestCallBoundaryFlags.InvokesGuestCode;
-
-        return !contract.ReadsLrBeforeWrite && (contract.BoundaryFlags & escaping) == 0;
-    }
 
     /// <summary>
     /// How many basic blocks back the compare feeding a branch is searched. Compare/branch pairs are adjacent

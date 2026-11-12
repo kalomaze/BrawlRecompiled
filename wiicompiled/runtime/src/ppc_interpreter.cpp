@@ -10,6 +10,15 @@
 // one per use, and here each register remembers which form its last write left and is converted at a use of the
 // other form, the same PPC_PsFromScalarInline / PPC_PsToScalarInline conversions translated code makes.
 #include "ppc_interpreter.h"
+#include "brawl_rollback.h"
+#include "brawl_online_ipc.h"
+
+// Guest comparisons must preserve unordered results. P+ disables Dreamland's
+// wind with infinite timer bounds: their subtraction produces a NaN, which
+// must not compare equal to zero and start the hazard.
+#if defined(__FAST_MATH__) || (defined(__FINITE_MATH_ONLY__) && __FINITE_MATH_ONLY__ > 0)
+#error "The PowerPC interpreter requires strict floating-point semantics"
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -196,16 +205,12 @@ bool BranchTaken(CpuContext* c, uint32_t bo, uint32_t bi) {
     return ctrOk && condOk;
 }
 
-// Translated callees leave the volatile FPRs in the forms their own code wrote, which the interpreter cannot see, so
-// those are read in the form their consumer expects. f14-f31 are callee-saved: every callee (translated, or
-// interpreted with its stfd/psq_st save and lfd/psq_l restore) hands back the caller's exact bits, so their forms
-// still hold. Forgetting them made a paired value kept across a call (a vector in f31) read as a double by the next
-// scalar op: horizontal speeds blew up when a mod's sora_melee ran in the interpreter.
-// f1 is the exception: it comes back as the scalar return value, the form translated callers take it in (and Run
-// hands back). Read as a pair, a returned 0.99 and 1.0 scaled a mod's TransN motion by 1.87 * 1.875: dash attacks
-// and rolls went 3.5 times as far.
-void ForgetVolatileForms(Frame& f) {
-    for (int r = 0; r < 14; ++r) f.form[r] = Form::Unknown;
+// Match translated callers: f1 is the scalar floating-point return; retain the
+// other registers' representation tags across calls. ABI volatility alone does
+// not change their representation. P+ keeps a scalar multiplier in f3 across a
+// posture-scale call, then consumes it with ps_muls0. Forgetting its scalar tag
+// interprets double 1.0 as packed float 1.875 and changes jump velocity.
+void NormalizeCallFloatReturn(Frame& f) {
     f.form[1] = Form::Scalar;
 }
 
@@ -215,8 +220,15 @@ void ForgetVolatileForms(Frame& f) {
 bool Call(Frame& f, uint32_t target, uint32_t returnTo) {
     f.ctx->lr = returnTo;
     if (TranslatedFunctionRegistry::FindByAddressPtr(target) == nullptr && CanRun(target)) return false;
-    InvokeIndirectCpu(target, f.ctx);
-    ForgetVolatileForms(f);
+    if (target == 0x80017618u)
+        BrawlRollback::Run(f.ctx, [](CpuContext* ctx) { InvokeIndirectCpu(0x80017618u, ctx); });
+    else if (target == 0x8002A210u)
+        BrawlRollback::UpdateSystem(f.ctx, [](CpuContext* ctx) { InvokeIndirectCpu(0x8002A210u, ctx); });
+    else {
+        InvokeIndirectCpu(target, f.ctx);
+        if (target == 0x80029438u) BrawlRollback::AnchorPads();
+    }
+    NormalizeCallFloatReturn(f);
     return true;
 }
 
@@ -227,7 +239,7 @@ bool Call(Frame& f, uint32_t target, uint32_t returnTo) {
 bool TailCall(Frame& f, uint32_t target, uint32_t returnAddress) {
     const uint32_t back = f.ctx->lr & ~3u;
     InvokeIndirectCpu(target, f.ctx);
-    ForgetVolatileForms(f);
+    NormalizeCallFloatReturn(f);
     f.ctx->lr = back;
     return back == (returnAddress & ~3u);
 }
@@ -272,8 +284,32 @@ void Run(CpuContext* ctx, uint32_t entry) {
     const uint32_t returnAddress = ctx->lr;
     uint64_t executed = 0;
     const auto& tracePcs = TracePcs();
+    static thread_local unsigned rollbackLoopDepth=0;
+    static const bool rollbackEnabled=std::getenv("BRAWL_ROLLBACK_INPUT")!=nullptr || std::getenv("BRAWL_ONLINE_IPC")!=nullptr;
     for (;;) {
         const uint32_t pc = f.pc;
+        if(pc==0x80949BC0u) BrawlOnline::Stage();
+        if(pc==0x809435F0u) BrawlRollback::SeedCrossplayStage();
+        // Brawl Online's complete main-loop boundary, including pad bookkeeping,
+        // render-side game writes and the application frame counter.
+        if(rollbackEnabled && pc==0x800171B4u && !rollbackLoopDepth) {
+            BrawlRollback::RunLoop(ctx,[](CpuContext* c) {
+                ++rollbackLoopDepth;Run(c,0x800171B4u);--rollbackLoopDepth;
+            });
+            for(auto& form:f.form) form=Form::Scalar;
+            continue;
+        }
+        if(rollbackLoopDepth && pc==0x80017508u) {
+            for(unsigned i=0;i<32;++i) SetScalar(f,i,Scalar(f,i));
+            g_instructions.fetch_add(executed,std::memory_order_relaxed);return;
+        }
+        if(rollbackLoopDepth && BrawlRollback::DrivesLoop()) {
+            if(pc==0x800172D0u) ctx->gpr[20]=1;
+            if(pc==0x8001730Cu) {
+                ctx->gpr[20]=1;
+                Memory::Write32(ctx->gpr[23]+0xFC,Memory::Read16(ctx->gpr[23]+0xF8));
+            }
+        }
         const uint32_t w = MemoryInline::FlatRead32(pc);
         ctx->pc = pc;
         ++executed;

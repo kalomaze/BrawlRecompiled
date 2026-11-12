@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 #include "abi_bridge.h"
 #include "isa/big_endian.h"
 #include "hle_stubs.h"
@@ -98,6 +99,7 @@ inline float LoadFloat(const uint8_t* host) {
 }
 
 inline void StoreFloat(uint8_t* host, float value) {
+    BrawlDirtyMemory::MarkHost(host,4);
     BigEndian::WriteFloat32(host, value);
 }
 
@@ -106,6 +108,7 @@ inline int32_t LoadS32(const uint8_t* host) {
 }
 
 inline void StoreS32(uint8_t* host, int32_t value) {
+    BrawlDirtyMemory::MarkHost(host,4);
     BigEndian::Write32(host, static_cast<uint32_t>(value));
 }
 

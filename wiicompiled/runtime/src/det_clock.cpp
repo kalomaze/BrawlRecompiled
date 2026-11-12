@@ -37,6 +37,9 @@ std::atomic<uint64_t> g_now{0};
 bool g_anchored = false;
 Clock::time_point g_anchorReal{};
 uint64_t g_anchorTicks = 0;
+bool g_resimulating = false;
+uint64_t g_resimStartTicks = 0;
+uint64_t g_pacingNanoseconds = 0;
 
 void SleepUntil(Clock::time_point deadline) {
 #if defined(_WIN32)
@@ -100,6 +103,7 @@ void AdvanceTo(uint64_t ticks) noexcept {
 }
 
 void PaceTo(uint64_t ticks) {
+    if (g_resimulating) return;
     const auto now = Clock::now();
     if (!g_anchored || ticks < g_anchorTicks) {
         g_anchored = true;
@@ -115,7 +119,18 @@ void PaceTo(uint64_t ticks) {
         }
         return;
     }
+    const auto sleepStart = Clock::now();
     SleepUntil(target);
+    g_pacingNanoseconds += std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - sleepStart).count();
+}
+
+uint64_t PacingNanoseconds() noexcept { return g_pacingNanoseconds; }
+
+void SetRollbackResimulating(bool active) noexcept {
+    if (active == g_resimulating) return;
+    if (active) g_resimStartTicks = Now();
+    else if (g_anchored) g_anchorTicks += Now() - g_resimStartTicks;
+    g_resimulating = active;
 }
 
 void ResetPacing() noexcept {

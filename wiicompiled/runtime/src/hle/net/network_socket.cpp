@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 #include "network_internal.h"
 
 namespace NetworkHle {
@@ -494,6 +495,7 @@ int32_t HandleIpTopIoctlv(uint32_t cmd, const std::vector<IoVector>& in, const s
         sockaddr* fromPtr = out.size() > 1 && out[1].address && out[1].size >= 8 ? reinterpret_cast<sockaddr*>(&from) : nullptr;
         int ret = 0;
 
+        BrawlDirtyMemory::Mark(out[0].address,out[0].size);
         ret = recvfrom(s->native, data, static_cast<int>(out[0].size), static_cast<int>(flags), fromPtr,
                        fromPtr ? &fromLen : nullptr);
         int nativeErr = ret < 0 ? NativeLastError() : 0;

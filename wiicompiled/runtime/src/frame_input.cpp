@@ -1,4 +1,5 @@
 #include "frame_input.h"
+#include "brawl_online_ipc.h"
 
 #include "det_clock.h"
 #include "input_bindings.h"
@@ -29,6 +30,7 @@ Frame SampleLocal() {
     const bool blocked = InputBindings::InputBlocked();
     GcPad pads[4]{};
     PAD_HLE_SampleLocalPads(pads);
+    BrawlOnline::SamplePads(pads);
     for (uint32_t chan = 0; chan < frame.size(); ++chan) {
         frame[chan].pad = pads[chan];
         if (blocked) frame[chan].pad = {frame[chan].pad.connected};  // the overlay owns input: at rest

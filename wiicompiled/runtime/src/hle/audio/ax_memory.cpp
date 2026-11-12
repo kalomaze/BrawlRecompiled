@@ -1,3 +1,4 @@
+#include "brawl_dirty_memory.h"
 #include "ax_internal.h"
 
 #include "abi_bridge.h"
@@ -190,6 +191,7 @@ void WriteGuestS32Buffer(uint32_t addr, const int* src, size_t count) {
     // AX mix buffers are contiguous guest ranges; resolve the range once instead
     // of paying a per-word address translation.
     if (uint8_t* host = MixResolveRange(addr, count * sizeof(uint32_t))) {
+        BrawlDirtyMemory::Mark(addr,count*sizeof(uint32_t));
         AxMixKernels::StoreBigEndian32(host, src, count);
         return;
     }

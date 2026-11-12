@@ -2,6 +2,8 @@
 
 #include "guest_flat_memory.h"
 #include "memory.h"
+#include "isa/ppc_isa_float.h"
+#include "brawl_dirty_memory.h"
 #include "recomp_mod_loader.h"
 
 #include <cstddef>
@@ -313,6 +315,7 @@ template <typename Packed>
 MKW_MEMORY_FORCE_INLINE bool WriteResolvedPairFast(
     uint8_t* host, uint32_t rangeOffset, Packed packed) {
     if (!host) return false;
+    BrawlDirtyMemory::MarkHost(host + rangeOffset,sizeof(Packed));
     const Packed swapped = MaybeByteSwap(packed);
     std::memcpy(host + rangeOffset, &swapped, sizeof(swapped));
     return true;
@@ -331,6 +334,7 @@ MKW_MEMORY_FORCE_INLINE bool WriteResolvedPair32(
 template <typename T>
 MKW_MEMORY_FORCE_INLINE bool WriteResolvedScalar(uint8_t* host, uint32_t rangeOffset, T value) {
     if (!host) return false;
+    BrawlDirtyMemory::MarkHost(host + rangeOffset,sizeof(T));
     if constexpr (sizeof(T) == 1) {
         host[rangeOffset] = static_cast<uint8_t>(value);
     } else {
@@ -392,7 +396,8 @@ MKW_MEMORY_FORCE_INLINE bool TryWriteGuestScalar(uint32_t address, T value) {
     } else if (!TryGetWritablePointerFast(address, sizeof(T), ptr)) [[unlikely]] {
         return false;
     }
-    if constexpr (sizeof(T) == 1) {
+    BrawlDirtyMemory::Mark(address,sizeof(T));
+        if constexpr (sizeof(T) == 1) {
         *ptr = static_cast<uint8_t>(value);
     } else {
         const T swapped = MaybeByteSwap(value);
@@ -405,6 +410,7 @@ template <typename T>
 inline bool WriteStackScalarFast(uint32_t address, T value) {
     uint8_t* ptr = nullptr;
     if (TryGetPointerFast(address, sizeof(T), ptr)) {
+        BrawlDirtyMemory::Mark(address,sizeof(T));
         if constexpr (sizeof(T) == 1) {
             *ptr = static_cast<uint8_t>(value);
         } else {
@@ -493,10 +499,11 @@ MKW_MEMORY_FORCE_INLINE uint32_t ReadResolved32(uint8_t* r, uint32_t o, uint32_t
 // Live via isa/ppc_isa_quantized.h (the psq resolved tier packs two lanes into
 // one 64-bit access); generated code never names it directly.
 MKW_MEMORY_FORCE_INLINE uint64_t ReadResolved64(uint8_t* r, uint32_t o, uint32_t a) { return ReadResolved<uint64_t>(r, o, a, ReadResolvedFallback<uint64_t>); }
-MKW_MEMORY_FORCE_INLINE float ReadResolvedFloat32(uint8_t* r, uint32_t o, uint32_t a) {
-    uint32_t bits = 0;
-    if (!ReadResolvedScalar(r, o, bits)) [[unlikely]] return ReadResolvedFallbackFloat32(a);
-    float value; std::memcpy(&value, &bits, sizeof(value)); return value;
+// lfs widens the stored single to an FPR double without flushing subnormals,
+// even when FPSCR[NI] enables host DAZ/FZ for arithmetic. A C++ float->double
+// conversion would silently turn those loads into zero on such hosts.
+MKW_MEMORY_FORCE_INLINE double ReadResolvedFloat32(uint8_t* r, uint32_t o, uint32_t a) {
+    return PpcBitCastToDoubleInline(PpcConvertToDoubleBitsInline(ReadResolved32(r, o, a)));
 }
 MKW_MEMORY_FORCE_INLINE double ReadResolvedFloat64(uint8_t* r, uint32_t o, uint32_t a) {
     uint64_t bits = 0;
@@ -554,6 +561,7 @@ MKW_MEMORY_FORCE_INLINE T FlatLoad(uint32_t address) {
 template <typename T>
 MKW_MEMORY_FORCE_INLINE void FlatStore(uint32_t address, T value) {
 #if MKW_FLAT_MEMORY
+    BrawlDirtyMemory::Mark(address,sizeof(T));
     const T swapped = MaybeByteSwap(value);
     std::memcpy(MKW_FLAT_GUEST_BASE + address, &swapped, sizeof(T));
 #else
@@ -574,11 +582,8 @@ MKW_MEMORY_FORCE_INLINE uint32_t FlatRead32(uint32_t address) {
     return FlatLoad<uint32_t>(address);
 }
 
-MKW_MEMORY_FORCE_INLINE float FlatReadFloat32(uint32_t address) {
-    const uint32_t bits = FlatRead32(address);
-    float value = 0.0f;
-    std::memcpy(&value, &bits, sizeof(value));
-    return value;
+MKW_MEMORY_FORCE_INLINE double FlatReadFloat32(uint32_t address) {
+    return PpcBitCastToDoubleInline(PpcConvertToDoubleBitsInline(FlatRead32(address)));
 }
 
 MKW_MEMORY_FORCE_INLINE double FlatReadFloat64(uint32_t address) {

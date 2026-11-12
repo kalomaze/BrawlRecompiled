@@ -403,6 +403,29 @@ target_include_directories(mkw_cr_logical_tests PRIVATE "${CMAKE_CURRENT_LIST_DI
 target_compile_features(mkw_cr_logical_tests PRIVATE cxx_std_17)
 add_test(NAME mkw_cr_logical_tests COMMAND mkw_cr_logical_tests)
 
+option(MKW_BUILD_INTERPRETER_TESTS "Build CPU-only interpreter regression tests" OFF)
+if(MKW_BUILD_INTERPRETER_TESTS)
+    add_executable(mkw_interpreter_call_forms_tests
+        tests/interpreter_call_forms_tests.cpp tests/interpreter_test_support.cpp
+        src/abi_bridge.cpp src/fpu_helpers.cpp src/memory.cpp src/guest_flat_memory.cpp
+        src/ppc_helpers.cpp src/ppc_quantized.cpp src/ppc_interpreter.cpp src/det_clock.cpp)
+    target_include_directories(mkw_interpreter_call_forms_tests PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/include" "${CMAKE_CURRENT_LIST_DIR}/..")
+    target_compile_features(mkw_interpreter_call_forms_tests PRIVATE cxx_std_17)
+    target_compile_options(mkw_interpreter_call_forms_tests PRIVATE
+        -UNDEBUG ${MKW_TRANSLATED_PPC_FP_OPTIONS} -ffunction-sections -fdata-sections)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64)$")
+        target_compile_options(mkw_interpreter_call_forms_tests PRIVATE -march=x86-64-v3)
+    endif()
+    if(APPLE)
+        target_link_options(mkw_interpreter_call_forms_tests PRIVATE -Wl,-dead_strip)
+    else()
+        target_link_options(mkw_interpreter_call_forms_tests PRIVATE -Wl,--gc-sections)
+    endif()
+    set_target_properties(mkw_interpreter_call_forms_tests PROPERTIES UNITY_BUILD OFF)
+    add_test(NAME mkw_interpreter_call_forms_tests COMMAND mkw_interpreter_call_forms_tests)
+endif()
+
 add_executable(mkw_platform_paths_tests "${CMAKE_CURRENT_LIST_DIR}/tests/platform_paths_tests.cpp")
 target_link_libraries(mkw_platform_paths_tests PRIVATE mkw_platform)
 target_compile_features(mkw_platform_paths_tests PRIVATE cxx_std_17)
