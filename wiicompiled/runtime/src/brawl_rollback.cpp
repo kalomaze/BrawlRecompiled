@@ -489,11 +489,11 @@ void AnchorPads() {
     if (Memory::Contains(pad+0x34)) Memory::Write8(pad+0x34,Memory::Read8(pad+0x34)&~8u);
 }
 
-void WriteMatchSeeds(const char* seed,const char* when) {
+void WriteMatchSeeds(const char* seed,const char* when,bool serial=true) {
     std::seed_seq seq{uint32_t(std::strtoul(seed,nullptr,0)),session.matchIndex,0x50502b31u};
     uint32_t out[3];seq.generate(out,out+3);out[0]&=0x7fffffff;out[1]&=0x7fffffff;
     Memory::Write32(0x805A00BC,out[0]);Memory::Write32(0x805A0424,out[1]);Memory::Write32(0x8059FF58,out[2]);
-    Memory::Write32(0x8059C668,0x10000);
+    if(serial) Memory::Write32(0x8059C668,0x10000);
     std::fprintf(stderr,"[crossplay] seeded %08x %08x %08x%s\n",out[0],out[1],out[2],when);
 }
 
@@ -540,7 +540,10 @@ void SeedCrossplayStage() {
     const char* seed=std::getenv("BRAWL_PROTOCOL_SEED");
     if(!seed) seed=std::getenv("BRAWL_CROSSPLAY_SEED");if(!seed) return;
     crossplayStageSeen=true;
-    if(matchSeeded) return;  // seeded at the loop top already, as Brawl Online does
+    // Seeded at the loop top already: Brawl Online seeds the RNGs again here, so the stage and
+    // everything built after it start from the same RNG state on both machines. Objects made
+    // since the loop top keep their serials.
+    if(matchSeeded) {WriteMatchSeeds(seed," again at the stage's construction",false);return;}
     WriteMatchSeeds(seed,"");
 }
 void CrossplaySetup() {
