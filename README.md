@@ -108,7 +108,10 @@ You need your own disc image (USA, RSBE01), and CMake 3.25+, Python 3.12+, Git, 
 Windows, the Clang must be llvm-mingw. On Ubuntu:
 
 ```sh
-sudo apt install cmake python3 git clang lld ninja-build build-essential pkg-config libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libasound2-dev libwayland-dev libxkbcommon-dev
+sudo apt install cmake python3 git clang lld ninja-build build-essential pkg-config libicu-dev \
+  libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev libxtst-dev libxfixes-dev libxrender-dev \
+  libxinerama-dev libwayland-dev wayland-protocols libdecor-0-dev libxkbcommon-dev libgl-dev libegl-dev libgbm-dev \
+  libdrm-dev libasound2-dev libpulse-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev libusb-1.0-0-dev libibus-1.0-dev
 ```
 
 Then, on Linux or Windows:
