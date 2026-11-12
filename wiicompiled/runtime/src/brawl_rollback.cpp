@@ -68,6 +68,7 @@ struct Session {
 };
 Session session;
 bool crossplayStageSeen=false;
+bool matchSeeded=false;  // Brawl Online's did_frame0: this match's RNGs are seeded
 std::array<uint8_t,64> latestLocalPad{};
 uint32_t Read(uint32_t p) { return Memory::Contains(p,4) ? Memory::Read32(p) : 0; }
 unsigned Env(const char* key, unsigned fallback) {
@@ -430,7 +431,7 @@ void BeginOnlineMatch(unsigned index,unsigned pad,unsigned mailbox,unsigned mail
     if(session.gekko) gekko_destroy(&session.gekko);
     CloseUdp();session=Session{};session.live=true;session.matchIndex=index;
     session.localPad=pad;session.mailbox=mailbox;session.mailboxSize=mailboxSize;
-    crossplayStageSeen=false;latestLocalPad={};latestLocalPad[0x38]=0xff;
+    crossplayStageSeen=false;matchSeeded=false;latestLocalPad={};latestLocalPad[0x38]=0xff;
     session.current[2*64+0x38]=0xff;
     session.current[3*64+0x38]=0xff;
 }
@@ -488,17 +489,59 @@ void AnchorPads() {
     if (Memory::Contains(pad+0x34)) Memory::Write8(pad+0x34,Memory::Read8(pad+0x34)&~8u);
 }
 
+void WriteMatchSeeds(const char* seed,const char* when) {
+    std::seed_seq seq{uint32_t(std::strtoul(seed,nullptr,0)),session.matchIndex,0x50502b31u};
+    uint32_t out[3];seq.generate(out,out+3);out[0]&=0x7fffffff;out[1]&=0x7fffffff;
+    Memory::Write32(0x805A00BC,out[0]);Memory::Write32(0x805A0424,out[1]);Memory::Write32(0x8059FF58,out[2]);
+    Memory::Write32(0x8059C668,0x10000);
+    std::fprintf(stderr,"[crossplay] seeded %08x %08x %08x%s\n",out[0],out[1],out[2],when);
+}
+
+// Brawl Online's IsWaitingRoom: the online waiting room is an scMelee on the training stage with
+// fewer than two players; it is not a match.
+bool IsWaitingRoom() {
+    const uint32_t gg=Read(0x805A00E0);
+    if(!Memory::Contains(gg+8,4)) return false;
+    const uint32_t mm=Read(gg+8);
+    if(!Memory::Contains(mm,0x98+4*0x5C)) return false;
+    if(Memory::Read16(mm+0x1A)!=0x37) return false;
+    int players=0;
+    for(unsigned i=0;i<4;++i) if(Memory::Read8(mm+0x98+i*0x5C+0x01)<=1) ++players;
+    return players<2;
+}
+
+// Brawl Online's IsNextSceneMelee: gfSceneManager +0x8 is the scene a pending change switches to.
+bool NextSceneIsMelee() {
+    const uint32_t manager=Read(0x805A0060);
+    if(!Memory::Contains(manager+8,4)) return false;
+    const uint32_t next=Read(manager+8);
+    if(!Memory::Contains(next,4)) return false;
+    const uint32_t name=Read(next);
+    if(!Memory::Contains(name,8)) return false;
+    return std::strncmp(reinterpret_cast<const char*>(Memory::GetPointer(name,8)),"scMelee",8)==0 && !IsWaitingRoom();
+}
+
+// Brawl Online seeds the match's RNGs once, at the first loop top that sees the scene change to
+// scMelee pending, or else the first one in scMelee: before the match scene loads anything. A
+// dual-load stage (Lylat Cruise) draws its second stage file from g_mtRand while loading, before
+// the stage's constructor.
+void SeedMatchAtLoopTop() {
+    const char* seed=std::getenv("BRAWL_PROTOCOL_SEED");
+    if(!seed || matchSeeded || !session.live) return;
+    const bool melee=SaveStates::SceneName()=="scMelee" && !IsWaitingRoom();
+    if(!melee && !NextSceneIsMelee()) return;
+    matchSeeded=true;
+    WriteMatchSeeds(seed,melee?" in scMelee":" before the scene change");
+}
+
 // Controlled setup for the cross-engine harness; ordinary prototype runs are unchanged.
 void SeedCrossplayStage() {
     BrawlOnline::Stage();
     const char* seed=std::getenv("BRAWL_PROTOCOL_SEED");
     if(!seed) seed=std::getenv("BRAWL_CROSSPLAY_SEED");if(!seed) return;
     crossplayStageSeen=true;
-    std::seed_seq seq{uint32_t(std::strtoul(seed,nullptr,0)),session.matchIndex,0x50502b31u};
-    uint32_t out[3];seq.generate(out,out+3);out[0]&=0x7fffffff;out[1]&=0x7fffffff;
-    Memory::Write32(0x805A00BC,out[0]);Memory::Write32(0x805A0424,out[1]);Memory::Write32(0x8059FF58,out[2]);
-    Memory::Write32(0x8059C668,0x10000);
-    std::fprintf(stderr,"[crossplay] seeded %08x %08x %08x\n",out[0],out[1],out[2]);
+    if(matchSeeded) return;  // seeded at the loop top already, as Brawl Online does
+    WriteMatchSeeds(seed,"");
 }
 void CrossplaySetup() {
     if(!std::getenv("BRAWL_CROSSPLAY_SEED")) return;
@@ -552,6 +595,7 @@ public:
 bool DrivesLoop() {return session.active;}
 void Run(CpuContext* ctx,GuestFunction gameProc) {gameProc(ctx);}
 void RunLoop(CpuContext* ctx,GuestFunction gameProc) {
+    SeedMatchAtLoopTop();
     BrawlOnline::Loop(crossplayStageSeen);
     CrossplaySetup();
     if (!session.configured) Configure();
