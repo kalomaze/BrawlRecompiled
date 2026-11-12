@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native Ubuntu build driver. All mutable state belongs to the build directory."""
+"""Build driver for Linux and Windows. All mutable state belongs to the build directory."""
 import argparse
 import hashlib
 import json
@@ -9,14 +9,17 @@ import platform
 import re
 import shutil
 import subprocess
-import tarfile
+import sys
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 SDK = '8.0.425'
+# Keyed by .NET runtime identifier; Windows ships the SDK as a .zip, Linux as a .tar.gz.
 SDK_HASHES = {
-    'x86_64': ('x64', '934b8060a7190e5909ad1fd0785db542f487b3bbf6cdd14826b02095fdd0d0394298b1634085eff302928fccc33f7c1a7253e9b87df555fc36fce819bcd2e798'),
-    'aarch64': ('arm64', '84a4d017d74d7aa842e981679d1b044e6be1f35b9b2b214021e30bc40871d016d29611cca373d8502ad5c890e3ad360ee698f9cf2d7a4d5a9fba102d88ba310f'),
+    'linux-x64': '934b8060a7190e5909ad1fd0785db542f487b3bbf6cdd14826b02095fdd0d0394298b1634085eff302928fccc33f7c1a7253e9b87df555fc36fce819bcd2e798',
+    'linux-arm64': '84a4d017d74d7aa842e981679d1b044e6be1f35b9b2b214021e30bc40871d016d29611cca373d8502ad5c890e3ad360ee698f9cf2d7a4d5a9fba102d88ba310f',
+    'win-x64': 'f0b6f15bf6f1a0507205c0cb102ab99e1dee875c4682c8ed94665be1d580186a06b21455e83b3a01a0ff7f4cd887b67420f2e2fe09ed985534a4cea488ae1af9',
+    'win-arm64': '2a75864daac54fe8360498d0a7260e3f8d851c3d811d864d7229f00ae51eac9e534998b7c3d221fc423319b9c8147dd43fa80690c969e43b2045cc2f1f93e537',
 }
 DECOMP = '70744045f8ceba62d5a77c052c8f7bcb76fc21d1'
 
@@ -41,9 +44,10 @@ def download(url, path, digest=None, algorithm='sha256'):
 
 
 def unpack(archive, destination):
-    destination.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(archive) as tar:
-        tar.extractall(destination, filter='data')
+    if archive.suffix == '.zip':
+        shutil.unpack_archive(archive, destination)  # zipfile drops absolute and .. members itself
+    else:
+        shutil.unpack_archive(archive, destination, filter='data')
 
 
 def translation_fingerprint(sources):
@@ -53,7 +57,7 @@ def translation_fingerprint(sources):
               if name.startswith(('wiicompiled/translator/src/',
                                   'wiicompiled/projects/brawl/',
                                   'wiicompiled/runtime/src/')) or
-              name == 'tools/build_ubuntu.py'}
+              name == 'tools/build.py'}
     return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
 
 
@@ -75,25 +79,30 @@ def main():
         parser.error('build directory must not contain the source checkout')
     build.mkdir(parents=True, exist_ok=True)
     # A second build must not overwrite extracted inputs while the first uses them.
-    import fcntl
     with (build / 'build.lock').open('w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if os.name == 'nt':
+            import msvcrt
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         build_game(args, disc, build)
 
 
 def build_game(args, disc, build):
     for tool in ('git', 'clang', 'clang++', 'ninja'):
         if not shutil.which(tool):
-            raise RuntimeError(f'Missing {tool}. Install the Ubuntu build prerequisites: sudo apt install git clang lld ninja-build build-essential pkg-config')
+            raise RuntimeError(f'Missing {tool} on PATH. See "Building from source" in README.md for the prerequisites.')
     downloads = build / 'downloads'
     downloads.mkdir(exist_ok=True)
-    arch, checksum = SDK_HASHES[platform.machine()]
+    arch = {'x86_64': 'x64', 'amd64': 'x64', 'aarch64': 'arm64', 'arm64': 'arm64'}[platform.machine().lower()]
+    rid = f'{"win" if os.name == "nt" else "linux"}-{arch}'
     dotnet_dir = build / 'dotnet'
-    dotnet = dotnet_dir / 'dotnet'
     sdk_stamp = dotnet_dir / '.sdk-ready'
     if not sdk_stamp.exists():
-        archive = downloads / f'dotnet-sdk-{SDK}-{arch}.tar.gz'
-        download(f'https://builds.dotnet.microsoft.com/dotnet/Sdk/{SDK}/dotnet-sdk-{SDK}-linux-{arch}.tar.gz', archive, checksum, 'sha512')
+        name = f'dotnet-sdk-{SDK}-{rid}.{"zip" if os.name == "nt" else "tar.gz"}'
+        archive = downloads / name
+        download(f'https://builds.dotnet.microsoft.com/dotnet/Sdk/{SDK}/{name}', archive, SDK_HASHES[rid], 'sha512')
         staging = build / 'dotnet.partial'
         if staging.exists():
             shutil.rmtree(staging)
@@ -102,6 +111,7 @@ def build_game(args, disc, build):
         if dotnet_dir.exists():
             shutil.rmtree(dotnet_dir)
         staging.rename(dotnet_dir)
+    dotnet = shutil.which('dotnet', path=dotnet_dir)  # dotnet.exe on Windows
     os.environ.update(DOTNET_ROOT=str(dotnet_dir), DOTNET_CLI_HOME=str(build / 'dotnet-home'),
                       NUGET_PACKAGES=str(build / 'nuget'), DOTNET_CLI_TELEMETRY_OPTOUT='1',
                       DOTNET_SKIP_FIRST_TIME_EXPERIENCE='1', DOTNET_NOLOGO='1')
@@ -111,7 +121,7 @@ def build_game(args, disc, build):
     source_files = [os.fsdecode(raw) for raw in source_files if raw and
                     not (ROOT / os.fsdecode(raw)).is_relative_to(build) and
                     (raw.startswith((b'wiicompiled/', b'tools/disc-extract/')) or
-                     raw in (b'launcher/WiiDisc.cs', b'tools/build_ubuntu.py'))]
+                     raw in (b'launcher/WiiDisc.cs', b'tools/build.py'))]
     work = build / 'source'
     source_stamp = build / 'sources.json'
     previous = json.loads(source_stamp.read_text()) if source_stamp.exists() else {}
@@ -169,7 +179,7 @@ def build_game(args, disc, build):
         game = work / 'game'
         game.mkdir(exist_ok=True)
         shutil.copy2(data / 'sys/main.dol', game / 'main.dol')
-        run('python3', wc / 'projects/brawl/tools/build_modules.py', data / 'files/module',
+        run(sys.executable, wc / 'projects/brawl/tools/build_modules.py', data / 'files/module',
             decomp / 'config/RSBE01_02', game / 'brawl_modules.rel', wc, game / 'main.dol')
         project = 'projects/brawl/recomp.yml'
         # Rev 2 matches doldecomp's 127 input hashes and the checked-in runtime module

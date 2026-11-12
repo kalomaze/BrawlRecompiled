@@ -104,16 +104,15 @@ connection adds input delay (2 to 8 frames, picked from the ping when the room s
 
 ## Building from source
 
-### Ubuntu (local portability fork)
-
-From a fresh clone on Ubuntu 24.04:
+From a fresh clone, on Linux or Windows:
 
 ```sh
 cmake -DDISC=/absolute/path/to/brawl.iso -P build.cmake
 ```
 
 This builds the host tools, extracts only the disc's compilation inputs, prelinks its modules,
-translates the game, fetches native dependencies, and compiles `build/native/WiiCompiled`.
+translates the game, fetches native dependencies, and compiles `build/native/WiiCompiled`
+(`WiiCompiled.exe` on Windows), with the libraries and data files it loads beside it.
 ISO, CISO, and split WBFS are accepted; keep `.wbf1`, `.wbf2`, etc. beside the `.wbfs`.
 The USA revision-1 translation hash and the verified revision-2 executable are supported.
 All generated files, downloaded tools, and extracted data stay in ignored `build/`.
@@ -136,12 +135,15 @@ Fixed-address guest mapping is enabled by default on supported targets. Add
 and explicit memory-access checks, without reserving a fixed 4 GiB host address
 range. Use `ON` to re-enable the optimization; the choice persists in the build directory.
 
-The current entry point requires CMake 3.25+, Python 3.12+, Git, Clang, Ninja, and the
-Ubuntu C/C++ development environment. It downloads its pinned .NET SDK locally and does not
-install system packages. On a machine without development tools:
+The build needs CMake 3.25+, Python 3.12+, Git, Clang and Ninja on `PATH`. On Windows the Clang
+must be llvm-mingw. It downloads its pinned .NET SDK locally and does not install system packages.
+On a machine without development tools:
 
 ```sh
+# Ubuntu
 sudo apt install cmake python3 git clang lld ninja-build build-essential pkg-config libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libasound2-dev libwayland-dev libxkbcommon-dev
+# Windows (open a new terminal afterwards so PATH updates)
+winget install Kitware.CMake Python.Python.3.12 Git.Git Ninja-build.Ninja MartinStorsjo.LLVM-MinGW.UCRT
 ```
 
 ### Translator and arithmetic tests
@@ -152,24 +154,9 @@ or `v3` to select their x86 instruction baseline. Native tests use allocated gue
 by default; set `MKW_FLAT_MEMORY=1` to exercise fixed mapping. `BRAWL_NATIVE_RUNNER` may name an
 executable wrapper that receives the test binary as its argument, for CPU emulation.
 
-### Upstream Windows build
+### Release packaging
 
-You need Windows, Python 3, 16 GB of RAM and your own disc image (USA, RSBE01).
-Build tools are stored in this checkout's `toolchain\` folder.
-
-```powershell
-# Extract your disc image to Disc\DATA, then:
-copy Disc\DATA\sys\main.dol game\main.dol
-# Every module pre-linked at its home, plus main_translate.dol (main.dol with the resident modules and the
-# Gecko code handler) for the translation:
-python wiicompiled\projects\brawl\tools\build_modules.py Disc\DATA\files\module extras\brawl-decomp\config\RSBE01_02 game\brawl_modules.rel wiicompiled game\main.dol
-powershell -ExecutionPolicy Bypass -File tools\build-brawl.ps1 -SkipTools
-```
-
-`build-brawl.ps1` translates the game and compiles it into `Play\SuperSmashBrosBrawl.exe` and
-`Play\engine_usa.dll` (`-SkipTranslate` recompiles only the runtime). The function map comes from the
-[Brawl decompilation](https://github.com/doldecomp/brawl), cloned into `extras\brawl-decomp`.
-
+Packaging has not moved to `build.cmake` yet; it still builds through `tools\build-brawl.ps1`.
 The release (`Brawl Recompiled.exe` plus a hidden `engine\` folder) is made by `tools\build-launcher.ps1` (the
 launcher, Windows and Linux, with a portable .NET SDK) and `tools\package-brawl.ps1 -Zip`; `tools\build-linux.sh`
 and `tools\package-linux.sh` make the Linux download in WSL from the same translation.
